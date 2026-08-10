@@ -1,0 +1,7 @@
+# Build binary
+/mediabridge
+*.exe
+
+# IDE
+.idea/
+.vscode/

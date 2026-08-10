@@ -1,0 +1,35 @@
+# Optional TLS reverse proxy using Caddy.
+#
+# Layer this on top of docker-compose.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+#
+# Caddy modes:
+#   1. Automatic Let's Encrypt: set DOMAIN=phone.example.com
+#   2. Custom certificate: set DOMAIN, TLS_CERT, TLS_KEY
+#
+# WebRTC (port 10443) is NOT proxied — it uses DTLS encryption directly.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN:-localhost}
+      TLS_CERT: ${TLS_CERT:-}
+      TLS_KEY: ${TLS_KEY:-}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+      - ${CERTS_DIR:-./certs}:/certs:ro
+    depends_on:
+      - server
+    restart: unless-stopped
+    networks:
+      - media
+
+volumes:
+  caddy_data:
+  caddy_config:

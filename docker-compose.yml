@@ -1,0 +1,72 @@
+# Svarla — Development
+#
+# Builds from source. All defaults are set for local development — no .env file needed.
+#
+# Usage:
+#   docker compose up -d
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: svarla
+      POSTGRES_USER: svarla
+      POSTGRES_PASSWORD: devpass
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U svarla"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      tags:
+        - "svarla-server:dev"
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      DATABASE_URL: postgresql://svarla:devpass@db:5432/svarla
+      LOG_LEVEL: debug
+      INITIAL_PASSWORD: dev
+      BASE_URL: ""
+      CORS_ORIGIN: ""
+      MEDIA_BRIDGE_URL: http://mediabridge:9090
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - ./server-config.yaml:/app/server-config.yaml:ro
+
+  mediabridge:
+    build:
+      context: ./mediabridge
+      tags:
+        - "svarla-mediabridge:dev"
+    ports:
+      - "10443:10443"     # WebRTC (ICE/DTLS/SRTP over TCP)
+      - "10443:10443/udp" # WebRTC (ICE/DTLS/SRTP over UDP)
+      - "5060:5060/udp" # SIP (UDP)
+      - "5060:5060/tcp" # SIP (TCP)
+      - "5061:5061/tcp" # SIP TLS (SIPS)
+      - "5062:5062/udp" # RTP media (SIP audio)
+      - "9091:9091"     # Audio WebSocket
+    environment:
+      LOG_LEVEL: debug
+      PUBLIC_IP: "127.0.0.1"
+    volumes:
+      - ./mediabridge/mediabridge-config.yaml:/mediabridge-config.yaml:ro
+    depends_on:
+      server:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  pgdata:

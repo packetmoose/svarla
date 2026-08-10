@@ -1,0 +1,7 @@
+node_modules
+dist
+android
+.kiro
+.git
+*.md
+.env

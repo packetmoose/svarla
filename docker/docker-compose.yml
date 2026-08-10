@@ -1,0 +1,79 @@
+# Svarla — Production
+#
+# Uses pre-built images from GitHub Container Registry.
+# No source checkout needed — just copy this file and adjust environment variables.
+#
+# Usage:
+#   1. Copy this file to your server
+#   2. Create a .env file (see .env.example) or set variables inline
+#   3. Copy server-config.yaml and mediabridge-config.yaml to the same directory
+#   4. docker compose up -d
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: svarla
+      POSTGRES_USER: svarla
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U svarla"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - backend
+
+  server:
+    image: ghcr.io/packetmoose/svarla-server:latest
+    ports:
+      - "${SERVER_PORT:-3000}:3000"
+    environment:
+      DATABASE_URL: postgresql://svarla:${POSTGRES_PASSWORD:?}@db:5432/svarla
+      INITIAL_PASSWORD: ${INITIAL_PASSWORD:?INITIAL_PASSWORD must be set for first run}
+      BASE_URL: ${BASE_URL:-}
+      CORS_ORIGIN: ${CORS_ORIGIN:-}
+      CONFIG_ENCRYPTION_KEY: ${CONFIG_ENCRYPTION_KEY:-}
+      PUBLIC_IP: ${PUBLIC_IP:?PUBLIC_IP must be set for WebRTC ICE candidates}
+      MEDIA_BRIDGE_URL: http://mediabridge:9090
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    volumes:
+      - ./server-config.yaml:/app/server-config.yaml:ro
+    networks:
+      - backend
+      - media
+
+  mediabridge:
+    image: ghcr.io/packetmoose/svarla-mediabridge:latest
+    ports:
+      - "10443:10443"       # WebRTC (ICE/DTLS/SRTP over TCP)
+      - "10443:10443/udp"   # WebRTC (ICE/DTLS/SRTP over UDP)
+      - "5060:5060/udp"     # SIP (UDP)
+      - "5060:5060/tcp"     # SIP (TCP)
+      - "5061:5061/tcp"     # SIP TLS (SIPS)
+      - "5062:5062/udp"     # RTP media (SIP audio)
+      - "9091:9091"         # Audio WebSocket
+    environment:
+      PUBLIC_IP: ${PUBLIC_IP:?PUBLIC_IP must be set for WebRTC ICE candidates}
+    volumes:
+      - ./mediabridge-config.yaml:/mediabridge-config.yaml:ro
+    depends_on:
+      server:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - media
+
+volumes:
+  pgdata:
+
+networks:
+  backend:
+  media:

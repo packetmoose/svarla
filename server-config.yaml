@@ -1,0 +1,50 @@
+# Svarla Server Configuration
+#
+# Environment variables that override config values:
+#   PORT                             → server.port
+#   HOST                             → server.host
+#   BASE_URL                         → server.baseUrl
+#   DATABASE_URL                     → database.url
+#   LOG_LEVEL                        → log.level
+#   CORS_ORIGIN                      → allowed origins (comma-separated)
+#   CONFIG_ENCRYPTION_KEY            → encrypts provider secrets at rest
+#   MEDIA_BRIDGE_URL                 → mediabridge.url
+#   MEDIA_BRIDGE_HEALTH_CHECK_INTERVAL → mediabridge.healthCheckInterval
+#   INITIAL_PASSWORD                 → seeds login password on first run
+#   CONFIG_PATH                      → path to this file (default: ./server-config.yaml)
+#
+# Values support ${VAR_NAME} placeholder syntax for env var substitution.
+
+server:
+  port: 3000
+  host: "0.0.0.0"
+  sessionExpiryDays: 30
+  web:
+    enabled: true
+  # baseUrl: "https://your-public-domain.com"  # Public URL where providers can reach this server
+
+log:
+  level: "info"
+  json: false
+
+database:
+  url: "${DATABASE_URL}"
+  maxConnections: 10
+
+# UnifiedPush delivery settings.
+# The server POSTs wake signals to whatever URL the client registered.
+push:
+  # Allow push endpoint URLs on private/LAN networks (HTTP, private IPs).
+  # Enable this if your UnifiedPush server (e.g. ntfy) is on the same LAN.
+  # When false (default), only HTTPS URLs resolving to public IPs are accepted.
+  allowPrivateEndpoints: false
+
+# MediaBridge sidecar configuration.
+# The MediaBridge (Pion/Go) handles WebRTC termination and audio bridging.
+mediabridge:
+  url: "http://localhost:9090"               # MediaBridge URL (event WebSocket is at /events)
+  healthCheckInterval: 5000                  # Health check polling interval in ms
+
+# TLS termination:
+# The server itself runs plain HTTP. For production, place it behind a TLS reverse proxy.
+# See docker/docker-compose.caddy.yml for a Caddy-based setup with automatic certificates.

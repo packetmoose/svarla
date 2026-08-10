@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Logs
+*.log
+pino-pretty.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# TypeScript
+*.tsbuildinfo
+
+# Test coverage
+coverage/
+
+# Docker
+.docker/
+
+# Local build output
+build-output/
+
+# Vonage private key (security-sensitive)
+private.key
+*.pem
+
+# Android (handled by android/.gitignore for deeper paths)
+android/.gradle/
+android/.kotlin/
+android/app/build/
+android/build/
+android/local.properties
+android/.idea/

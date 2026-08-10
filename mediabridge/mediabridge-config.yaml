@@ -1,0 +1,52 @@
+# MediaBridge Configuration
+# Adjust values for your environment. All values shown are the defaults.
+#
+# Environment variables that override config values:
+#   LOG_LEVEL    → log.level
+#   PUBLIC_IP    → network.publicIp
+#   CONFIG_PATH  → path to this file (default: ./mediabridge-config.yaml)
+
+# TCP port for WebRTC connections (ICE/DTLS/SRTP).
+# Must be reachable from the public internet by Android clients.
+webrtc:
+  port: 10443
+
+# HTTP port for the ControlAPI (session management, health check).
+# Binds to 127.0.0.1 only — never expose externally.
+server:
+  controlPort: 9090
+
+# Public IP address advertised in ICE candidates and SDP answers.
+# Set this to the server's public-facing IP. Required for production.
+network:
+  publicIp: "127.0.0.1"
+
+# SIP settings for provider audio connections.
+# Ports must be reachable by telephony providers (Vonage, 46elks).
+sip:
+  port: 5060              # SIP signaling (UDP + TCP)
+  mediaPort: 5062         # RTP media
+  tls:
+    port: 5061            # SIP-over-TLS (SIPS)
+    certPath: ""          # Path to cert PEM (empty = auto-generate self-signed)
+    keyPath: ""           # Path to key PEM (empty = auto-generate self-signed)
+
+# WebSocket port for provider audio streams (e.g., modem/Raspberry Pi, 46elks).
+# Must be reachable by devices streaming audio to the MediaBridge.
+audioWs:
+  port: 9091
+
+# Audio pipeline settings.
+audio:
+  # Ringback tone cadence played to the caller while waiting for the user to answer.
+  # Options: "eu" (425Hz, 1s on / 4s off) or "us" (440+480Hz, 2s on / 4s off).
+  ringbackCadence: "eu"
+
+  # Codec used on the SIP leg toward telephony providers.
+  # Options: "g711_ulaw" (standard PSTN, 8kHz) or "opus" (if provider supports it).
+  sipCodec: "g711_ulaw"
+
+# Logging settings.
+log:
+  level: "info"           # debug, info, warn, error
+  json: false             # true for structured JSON (production), false for human-readable

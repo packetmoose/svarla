@@ -1,0 +1,27 @@
+# Caddyfile for TLS termination (production example)
+#
+# Modes:
+# 1. Automatic Let's Encrypt: just set DOMAIN env var
+# 2. Custom certificate: set DOMAIN, TLS_CERT, and TLS_KEY env vars
+# 3. No TLS (dev): set DOMAIN=:80 to serve plain HTTP
+
+{$DOMAIN:localhost} {
+	tls {$TLS_CERT:internal} {$TLS_KEY:}
+
+	# Audio WebSocket proxy (provider devices connect here for encrypted audio streaming)
+	handle /audio/* {
+		reverse_proxy mediabridge:9091
+	}
+
+	# All other traffic goes to the Node server
+	handle {
+		reverse_proxy server:3000
+	}
+
+	header {
+		Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+	}
+}
