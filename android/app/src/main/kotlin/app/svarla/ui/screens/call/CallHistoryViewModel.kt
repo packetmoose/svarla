@@ -66,6 +66,9 @@ class CallHistoryViewModel @Inject constructor(
     private val _isLoading = MutableStateFlow(false)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
 
+    private val _hasLoadedFromCache = MutableStateFlow(false)
+    val hasLoadedFromCache: StateFlow<Boolean> = _hasLoadedFromCache.asStateFlow()
+
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
 
@@ -143,16 +146,33 @@ class CallHistoryViewModel @Inject constructor(
     private fun observeLocalCallHistory() {
         viewModelScope.launch {
             callHistoryDao.getAll().collect { entries ->
-                // Resolve contact names on IO dispatcher to avoid blocking UI
-                val uiEntries = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    // Mark the top N missed/blocked entries as unseen
+                // Emit a fast first pass immediately so cached data renders
+                // without waiting for contact name / provider label resolution.
+                val fastEntries = entries.map { entry ->
+                    var remainingUnseen = unseenCount
+                    val isUnseen = remainingUnseen > 0 &&
+                        (entry.callType == CallType.MISSED || entry.callType == CallType.BLOCKED)
+                    if (isUnseen) remainingUnseen--
+                    CallHistoryUiEntry(
+                        entry = entry,
+                        contactName = null,
+                        isUnseen = isUnseen,
+                        providerNumberLabel = entry.providerNumber,
+                        providerNumberColor = "#6750A4"
+                    )
+                }
+                _callHistory.value = fastEntries
+                _isLoading.value = false
+                _hasLoadedFromCache.value = true
+
+                // Enrich with contact names and provider labels on IO thread
+                val enrichedEntries = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     var remainingUnseen = unseenCount
                     entries.map { entry ->
                         val isUnseen = remainingUnseen > 0 &&
                             (entry.callType == CallType.MISSED || entry.callType == CallType.BLOCKED)
                         if (isUnseen) remainingUnseen--
 
-                        // Resolve provider number label/color
                         val providerNum = entry.providerNumber
                         val providerInfo = if (providerNum != null) {
                             providerNumberDao.getByNumber(providerNum)
@@ -167,7 +187,7 @@ class CallHistoryViewModel @Inject constructor(
                         )
                     }
                 }
-                _callHistory.value = uiEntries
+                _callHistory.value = enrichedEntries
             }
         }
     }

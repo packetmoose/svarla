@@ -32,6 +32,7 @@ class SvarlaApplication : Application() {
     @Inject lateinit var sharedPreferences: SharedPreferences
     @Inject lateinit var badgeManager: app.svarla.domain.badge.BadgeManager
     @Inject lateinit var deliveryPreferences: NotificationDeliveryPreferences
+    @Inject lateinit var appDataPreloader: app.svarla.domain.AppDataPreloader
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -55,6 +56,7 @@ class SvarlaApplication : Application() {
                     pushEndpointManager.initialize()
                     deviceLoginEventObserver.startObserving()
                     badgeManager.initialize()
+                    appDataPreloader.preload()
                 } else {
                     syncManager.disconnect()
                     pushEndpointManager.teardown()

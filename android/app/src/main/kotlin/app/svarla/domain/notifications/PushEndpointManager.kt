@@ -112,7 +112,7 @@ class PushEndpointManager @Inject constructor(
     fun activateMode(mode: NotificationDeliveryMode) {
         Log.d(TAG, "Activating delivery mode: $mode")
 
-        if (mode == currentActiveMode && _pushState.value == PushState.REGISTERED) {
+        if (mode == currentActiveMode && (_pushState.value == PushState.REGISTERED || _pushState.value == PushState.REGISTERING)) {
             Log.d(TAG, "Mode $mode already active, ensuring service is running")
             // For WebSocket mode, just ensure the service is started (no-op if already running)
             if (mode == NotificationDeliveryMode.WEBSOCKET) {
@@ -141,7 +141,19 @@ class PushEndpointManager @Inject constructor(
      */
     fun teardown() {
         Log.d(TAG, "Tearing down notification delivery")
-        teardownCurrentMode(keepWebSocket = false)
+        // On logout, always unregister UnifiedPush regardless of current mode
+        try {
+            UnifiedPush.unregisterApp(context)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to unregister from UnifiedPush on teardown", e)
+        }
+        try {
+            PushWebSocketService.stop(context)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to stop WebSocket service on teardown", e)
+        }
+        currentActiveMode = NotificationDeliveryMode.NONE
+        _pushState.value = PushState.UNREGISTERED
     }
 
     /**
@@ -164,6 +176,16 @@ class PushEndpointManager @Inject constructor(
 
     private fun initializeUnifiedPush() {
         try {
+            // Check if already registered with a distributor — avoids the full
+            // register round-trip on every cold start, which adds ~2s latency to
+            // notification display when woken by a push signal.
+            val ackDistributor = UnifiedPush.getAckDistributor(context)
+            if (ackDistributor != null) {
+                Log.d(TAG, "Already registered with UnifiedPush distributor: $ackDistributor, skipping re-registration")
+                _pushState.value = PushState.REGISTERED
+                return
+            }
+
             val distributors = UnifiedPush.getDistributors(context)
             Log.d(TAG, "Available UnifiedPush distributors: ${distributors.size}")
 
@@ -192,11 +214,13 @@ class PushEndpointManager @Inject constructor(
     }
 
     private fun teardownCurrentMode(keepWebSocket: Boolean = false) {
-        // Teardown UnifiedPush
-        try {
-            UnifiedPush.unregisterApp(context)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to unregister from UnifiedPush (may not have been registered)", e)
+        // Only unregister from UnifiedPush if that was the active mode
+        if (currentActiveMode == NotificationDeliveryMode.UNIFIED_PUSH) {
+            try {
+                UnifiedPush.unregisterApp(context)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to unregister from UnifiedPush (may not have been registered)", e)
+            }
         }
 
         // Stop WebSocket service (unless we're about to restart it)

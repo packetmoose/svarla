@@ -27,6 +27,7 @@ import androidx.compose.material.icons.filled.PhoneMissed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -73,6 +74,7 @@ fun CallHistoryScreen(
 ) {
     val callHistory by viewModel.callHistory.collectAsState()
     val isLoading by viewModel.isLoading.collectAsState()
+    val hasLoadedFromCache by viewModel.hasLoadedFromCache.collectAsState()
     val error by viewModel.error.collectAsState()
     val context = LocalContext.current
 
@@ -93,15 +95,7 @@ fun CallHistoryScreen(
 
     Box(modifier = modifier.fillMaxSize()) {
         when {
-            isLoading && callHistory.isEmpty() -> {
-                CircularProgressIndicator(
-                    modifier = Modifier.align(Alignment.Center)
-                )
-            }
-            callHistory.isEmpty() -> {
-                CallHistoryEmptyState(onMakeCall = onMakeCall)
-            }
-            else -> {
+            callHistory.isNotEmpty() -> {
                 LazyColumn(
                     modifier = Modifier.fillMaxSize()
                 ) {
@@ -117,6 +111,21 @@ fun CallHistoryScreen(
                     }
                 }
             }
+            hasLoadedFromCache && !isLoading -> {
+                CallHistoryEmptyState(onMakeCall = onMakeCall)
+            }
+        }
+
+        if (isLoading && callHistory.isEmpty()) {
+            CircularProgressIndicator(
+                modifier = Modifier.align(Alignment.Center)
+            )
+        } else if (isLoading) {
+            LinearProgressIndicator(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .align(Alignment.TopCenter)
+            )
         }
 
         // Show error as a subtle message at the bottom if we have cached data

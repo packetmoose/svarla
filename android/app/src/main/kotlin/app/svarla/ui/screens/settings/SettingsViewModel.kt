@@ -63,13 +63,20 @@ class SettingsViewModel @Inject constructor(
         return batteryOptimizationHelper.isIgnoringBatteryOptimizations()
     }
 
-    init {
-        loadNumbers()
-    }
-
     private fun loadNumbers() {
+        // Observe local DB immediately — shows cached data without waiting for network
         viewModelScope.launch {
-            // Sync from server
+            providerNumberDao.getAll().collect { numbers ->
+                _numbers.value = numbers
+                // Derive default from cached data
+                if (_defaultNumber.value == null) {
+                    _defaultNumber.value = numbers.firstOrNull { it.isDefault }?.number
+                }
+            }
+        }
+
+        // Sync from server in the background
+        viewModelScope.launch {
             try {
                 val response = numbersApi.getNumbers()
                 _defaultNumber.value = response.defaultNumber
@@ -89,11 +96,6 @@ class SettingsViewModel @Inject constructor(
                 }
             } catch (e: Exception) {
                 Log.w("SettingsVM", "Failed to sync numbers", e)
-            }
-
-            // Observe local DB
-            providerNumberDao.getAll().collect { numbers ->
-                _numbers.value = numbers
             }
         }
     }
