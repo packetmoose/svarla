@@ -75,6 +75,19 @@ class ConversationRepository @Inject constructor(
     }
 
     /**
+     * Observe messages for a specific conversation thread identified by both the
+     * provider number and the remote phone number.
+     * This ensures messages from different provider numbers are shown in separate threads.
+     */
+    fun observeMessages(providerNumber: String, phoneNumber: String, limit: Int = DEFAULT_MESSAGE_LIMIT): Flow<List<Message>> {
+        return if (providerNumber.isNotEmpty()) {
+            messageDao.getByConversationAndProvider(phoneNumber, providerNumber, limit)
+        } else {
+            messageDao.getByConversation(phoneNumber, limit)
+        }
+    }
+
+    /**
      * Sync conversation threads from the server and update local cache.
      * Each conversation from the server includes its providerNumber to identify
      * the from+to pair.
@@ -152,6 +165,23 @@ class ConversationRepository @Inject constructor(
     }
 
     /**
+     * Load messages for a specific conversation thread (identified by both provider and phone number)
+     * from the server and cache them locally.
+     */
+    suspend fun syncMessages(providerNumber: String, phoneNumber: String) {
+        try {
+            val response = smsApi.getMessages(phoneNumber, DEFAULT_MESSAGE_LIMIT, providerNumber.ifEmpty { null })
+            response.messages.forEach { dto ->
+                val message = dto.toEntity()
+                messageDao.insert(message)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Failed to sync messages for $providerNumber -> $phoneNumber", e)
+            throw e
+        }
+    }
+
+    /**
      * Get the provider number label for a given provider number.
      */
     suspend fun getProviderNumberLabel(providerNumber: String?): String {
@@ -194,6 +224,23 @@ class ConversationRepository @Inject constructor(
             readStateApi.markThreadAsRead(phoneNumber)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to sync read state to server for $phoneNumber", e)
+        }
+    }
+
+    /**
+     * Mark a specific conversation thread (provider + phone) as read locally and on the server.
+     */
+    suspend fun markThreadAsRead(providerNumber: String, phoneNumber: String) {
+        val now = System.currentTimeMillis()
+        if (providerNumber.isNotEmpty()) {
+            conversationDao.markAsRead(providerNumber, phoneNumber, now)
+        } else {
+            conversationDao.markAsReadByPhone(phoneNumber, now)
+        }
+        try {
+            readStateApi.markThreadAsRead(phoneNumber)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to sync read state to server for $providerNumber -> $phoneNumber", e)
         }
     }
 

@@ -208,7 +208,7 @@ class ConversationDetailViewModel @Inject constructor(
         kotlinx.coroutines.GlobalScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             // Mark as read when leaving the conversation
             try {
-                conversationRepository.markThreadAsRead(phoneNumber)
+                conversationRepository.markThreadAsRead(providerNumber, phoneNumber)
             } catch (_: Exception) {}
             // Now delete locally any messages that were removed and not undone.
             // The server was already notified in removeMessage(), so only local cleanup needed.
@@ -232,7 +232,7 @@ class ConversationDetailViewModel @Inject constructor(
     private fun observeMessages() {
         viewModelScope.launch {
             combine(
-                conversationRepository.observeMessages(phoneNumber, 100),
+                conversationRepository.observeMessages(providerNumber, phoneNumber, 100),
                 callHistoryDao.getByPhoneNumber(phoneNumber)
             ) { messages, callHistory ->
                 Pair(messages, callHistory)
@@ -282,7 +282,7 @@ class ConversationDetailViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isLoading = true) }
             try {
-                conversationRepository.syncMessages(phoneNumber)
+                conversationRepository.syncMessages(providerNumber, phoneNumber)
             } catch (e: Exception) {
                 _uiState.update { it.copy(error = e.message, isLoading = false) }
             }
@@ -292,14 +292,14 @@ class ConversationDetailViewModel @Inject constructor(
         viewModelScope.launch {
             kotlinx.coroutines.delay(1500)
             try {
-                conversationRepository.syncMessages(phoneNumber)
+                conversationRepository.syncMessages(providerNumber, phoneNumber)
             } catch (_: Exception) {}
         }
     }
 
     private fun markAsRead() {
         viewModelScope.launch {
-            conversationRepository.markThreadAsRead(phoneNumber)
+            conversationRepository.markThreadAsRead(providerNumber, phoneNumber)
         }
     }
 
@@ -315,7 +315,7 @@ class ConversationDetailViewModel @Inject constructor(
                 when (event.type) {
                     "connected" -> {
                         try {
-                            conversationRepository.syncMessages(phoneNumber)
+                            conversationRepository.syncMessages(providerNumber, phoneNumber)
                         } catch (_: Exception) {}
                     }
                     "new_message" -> {
@@ -324,7 +324,7 @@ class ConversationDetailViewModel @Inject constructor(
                             val conversationNumber = data?.get("conversationNumber")
                                 ?.jsonPrimitive?.content
                             if (conversationNumber == phoneNumber) {
-                                conversationRepository.syncMessages(phoneNumber)
+                                conversationRepository.syncMessages(providerNumber, phoneNumber)
                             }
                         } catch (_: Exception) {}
                     }

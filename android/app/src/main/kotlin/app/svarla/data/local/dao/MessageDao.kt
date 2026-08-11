@@ -14,6 +14,9 @@ interface MessageDao {
     @Query("SELECT * FROM messages WHERE conversationNumber = :number ORDER BY timestamp DESC LIMIT :limit")
     fun getByConversation(number: String, limit: Int = 100): Flow<List<Message>>
 
+    @Query("SELECT * FROM messages WHERE conversationNumber = :number AND providerNumber = :providerNumber ORDER BY timestamp DESC LIMIT :limit")
+    fun getByConversationAndProvider(number: String, providerNumber: String, limit: Int = 100): Flow<List<Message>>
+
     @Query("SELECT providerNumber FROM messages WHERE conversationNumber = :number AND providerNumber IS NOT NULL ORDER BY timestamp DESC LIMIT 1")
     suspend fun getLastProviderNumberForConversation(number: String): String?
 
