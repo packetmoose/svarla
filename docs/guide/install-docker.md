@@ -55,6 +55,8 @@ services:
       - "10443:10443/udp"   # WebRTC (UDP)
       - "5060:5060/udp"     # SIP (UDP)
       - "5060:5060/tcp"     # SIP (TCP)
+      - "5061:5061/tcp"     # SIP TLS (SIPS)
+      - "5062:5062/udp"     # RTP media (SIP audio)
       - "9091:9091"         # Audio WebSocket
     environment:
       PUBLIC_IP: ${PUBLIC_IP}
@@ -129,8 +131,10 @@ These ports need to be accessible from the internet for Svarla to work:
 |------|----------|-----|
 | 3000 (or 443) | TCP | Server API — clients connect here, providers send webhooks here |
 | 10443 | TCP + UDP | WebRTC audio — the Android app connects here for call audio |
-| 5060 | TCP + UDP | SIP — Vonage connects here to deliver call audio |
-| 9091 | TCP | Audio WebSocket — 46elks connects here to deliver call audio |
+| 5060 | TCP + UDP | SIP — Vonage connects here for call signaling |
+| 5061 | TCP | SIP TLS — Vonage secure SIP |
+| 5062 | UDP | RTP media — SIP call audio |
+| 9091 | TCP | Audio WebSocket — 46elks connects here for call audio (should be proxied through Caddy or similar for TLS) |
 
 These ports can stay **closed** to the internet:
 
