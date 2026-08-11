@@ -329,6 +329,23 @@ class ConversationRepository @Inject constructor(
         try {
             val data = event.data?.jsonObject ?: return
             val conversationNumber = data["conversationNumber"]?.jsonPrimitive?.content ?: return
+            val providerNumber = data["providerNumber"]?.jsonPrimitive?.content ?: ""
+            val direction = data["direction"]?.jsonPrimitive?.content
+
+            // Optimistically update lastReceivedAt for incoming messages so the
+            // unread indicator in the conversation list shows immediately without
+            // waiting for the server sync round-trip.
+            if (direction == null || direction.uppercase() == "RECEIVED") {
+                val now = System.currentTimeMillis()
+                val conversation = if (providerNumber.isNotEmpty()) {
+                    conversationDao.getByProviderAndPhone(providerNumber, conversationNumber)
+                } else {
+                    conversationDao.getByNumber(conversationNumber)
+                }
+                if (conversation != null) {
+                    conversationDao.update(conversation.copy(lastReceivedAt = now, lastMessageTimestamp = now))
+                }
+            }
 
             syncMessages(conversationNumber)
             syncConversations()

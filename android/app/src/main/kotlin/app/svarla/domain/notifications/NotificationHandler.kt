@@ -1149,12 +1149,42 @@ class NotificationHandler @Inject constructor(
      */
     fun dismissConversationNotifications(phoneNumber: String) {
         val normalizedNumber = normalizePhoneNumber(phoneNumber)
+
+        // Find SMS notifications matching this phone number by checking the cached payload
+        val toRemove = mutableListOf<String>()
+        for ((serverNotificationId, cachedEvent) in serverNotificationPayloadCache) {
+            // Only dismiss SMS notifications
+            val type = serverNotificationTypeMap[serverNotificationId]
+            if (type != TYPE_INCOMING_SMS) continue
+
+            val senderNumber = extractPayloadField(cachedEvent, "senderNumber") ?: continue
+            val normalizedSender = normalizePhoneNumber(senderNumber)
+            if (normalizedSender == normalizedNumber) {
+                toRemove.add(serverNotificationId)
+            }
+        }
+
+        for (serverNotificationId in toRemove) {
+            val androidId = serverNotificationIdMap[serverNotificationId] ?: continue
+            notificationManager.cancel(androidId)
+            untrackServerNotification(serverNotificationId)
+            // Mark as read on the server so it doesn't reappear on next fetch
+            val intent = Intent(context, NotificationDismissReceiver::class.java).apply {
+                action = NotificationDismissReceiver.ACTION_DISMISS
+                putExtra(NotificationDismissReceiver.EXTRA_SERVER_NOTIFICATION_ID, serverNotificationId)
+            }
+            context.sendBroadcast(intent)
+        }
+
+        // Fallback: also cancel any notifications in the SMS range that match by key content
         val iterator = serverNotificationIdMap.entries.iterator()
         while (iterator.hasNext()) {
             val entry = iterator.next()
             if (entry.key.contains(normalizedNumber)) {
                 notificationManager.cancel(entry.value)
                 iterator.remove()
+                serverNotificationTypeMap.remove(entry.key)
+                serverNotificationPayloadCache.remove(entry.key)
             }
         }
     }
