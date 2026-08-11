@@ -22,8 +22,9 @@ interface SmsApi {
 
     /**
      * GET /api/conversations/{number} — Get messages in a thread (last 100).
+     * When providerNumber is specified, only messages for that specific thread are returned.
      */
-    suspend fun getMessages(phoneNumber: String, limit: Int = 100): MessageListResponse
+    suspend fun getMessages(phoneNumber: String, limit: Int = 100, providerNumber: String? = null): MessageListResponse
 
     /**
      * DELETE /api/conversations/{number} — Mark a conversation as removed.

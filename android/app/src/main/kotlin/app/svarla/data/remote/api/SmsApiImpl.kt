@@ -23,10 +23,14 @@ class SmsApiImpl @Inject constructor(
         )
     }
 
-    override suspend fun getMessages(phoneNumber: String, limit: Int): MessageListResponse {
+    override suspend fun getMessages(phoneNumber: String, limit: Int, providerNumber: String?): MessageListResponse {
+        val params = mutableMapOf<String, Any>("limit" to limit)
+        if (providerNumber != null) {
+            params["from"] = providerNumber
+        }
         return apiClient.get(
             "/api/conversations/$phoneNumber",
-            mapOf("limit" to limit)
+            params
         )
     }
 
