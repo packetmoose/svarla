@@ -161,11 +161,24 @@ class IncomingCallRinger @Inject constructor(
                         VIBRATION_PATTERN,
                         0 // repeat from index 0
                     )
-                    v.vibrate(effect)
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        val vibrationAttributes = android.os.VibrationAttributes.Builder()
+                            .setUsage(android.os.VibrationAttributes.USAGE_RINGTONE)
+                            .build()
+                        v.vibrate(effect, vibrationAttributes)
+                    } else {
+                        val audioAttributes = AudioAttributes.Builder()
+                            .setUsage(AudioAttributes.USAGE_NOTIFICATION_RINGTONE)
+                            .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                            .build()
+                        @Suppress("DEPRECATION")
+                        v.vibrate(effect, audioAttributes)
+                    }
                 } else {
                     @Suppress("DEPRECATION")
                     v.vibrate(VIBRATION_PATTERN, 0)
                 }
+                Log.d(TAG, "Vibration started")
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to start vibration", e)
@@ -175,6 +188,7 @@ class IncomingCallRinger @Inject constructor(
     private fun stopVibration() {
         try {
             vibrator?.cancel()
+            Log.d(TAG, "Vibration cancelled")
         } catch (e: Exception) {
             Log.e(TAG, "Error stopping vibration", e)
         }
