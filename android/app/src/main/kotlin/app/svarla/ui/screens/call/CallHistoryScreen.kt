@@ -267,7 +267,7 @@ private fun CallHistoryItem(uiEntry: CallHistoryUiEntry, onClick: (() -> Unit)?)
             Row(
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                // Show which provider number this call belonged to, before the type label
+                // Always reserve space for the provider number badge to prevent layout shift
                 if (uiEntry.providerNumberLabel != null) {
                     NumberBadge(
                         label = uiEntry.providerNumberLabel,

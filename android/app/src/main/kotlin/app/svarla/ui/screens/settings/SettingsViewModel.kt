@@ -36,6 +36,9 @@ class SettingsViewModel @Inject constructor(
     private val _defaultNumber = MutableStateFlow<String?>(null)
     val defaultNumber: StateFlow<String?> = _defaultNumber.asStateFlow()
 
+    private val _hasLoadedNumbers = MutableStateFlow(false)
+    val hasLoadedNumbers: StateFlow<Boolean> = _hasLoadedNumbers.asStateFlow()
+
     private val _isLoggingOut = MutableStateFlow(false)
     val isLoggingOut: StateFlow<Boolean> = _isLoggingOut.asStateFlow()
 
@@ -46,6 +49,7 @@ class SettingsViewModel @Inject constructor(
     val isUnifiedPushAvailable: StateFlow<Boolean> = _isUnifiedPushAvailable.asStateFlow()
 
     init {
+        Log.d("SettingsVM", "init: ViewModel created")
         loadNumbers()
         checkUnifiedPushAvailability()
     }
@@ -65,9 +69,12 @@ class SettingsViewModel @Inject constructor(
 
     private fun loadNumbers() {
         // Observe local DB immediately — shows cached data without waiting for network
+        Log.d("SettingsVM", "loadNumbers: starting Room observation")
         viewModelScope.launch {
             providerNumberDao.getAll().collect { numbers ->
+                Log.d("SettingsVM", "loadNumbers: Room emitted ${numbers.size} numbers")
                 _numbers.value = numbers
+                _hasLoadedNumbers.value = true
                 // Derive default from cached data
                 if (_defaultNumber.value == null) {
                     _defaultNumber.value = numbers.firstOrNull { it.isDefault }?.number
@@ -77,12 +84,15 @@ class SettingsViewModel @Inject constructor(
 
         // Sync from server in the background
         viewModelScope.launch {
+            Log.d("SettingsVM", "loadNumbers: starting server sync")
             try {
                 val response = numbersApi.getNumbers()
+                Log.d("SettingsVM", "loadNumbers: server returned ${response.numbers.size} numbers")
                 _defaultNumber.value = response.defaultNumber
-                response.numbers.forEach { dto ->
-                    val isDefault = dto.number == response.defaultNumber
-                    providerNumberDao.insert(
+                // Batch insert all numbers to minimize Room Flow re-emissions
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val entities = response.numbers.map { dto ->
+                        val isDefault = dto.number == response.defaultNumber
                         ProviderNumber(
                             number = dto.number,
                             label = dto.label,
@@ -92,8 +102,10 @@ class SettingsViewModel @Inject constructor(
                             blockInboundCalls = dto.blockInboundCalls,
                             isDefault = isDefault
                         )
-                    )
+                    }
+                    providerNumberDao.insertAll(entities)
                 }
+                Log.d("SettingsVM", "loadNumbers: server sync complete")
             } catch (e: Exception) {
                 Log.w("SettingsVM", "Failed to sync numbers", e)
             }

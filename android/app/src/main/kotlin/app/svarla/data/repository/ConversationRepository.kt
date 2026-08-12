@@ -61,9 +61,10 @@ class ConversationRepository @Inject constructor(
     /**
      * Observe all conversation threads sorted by most recent message first.
      * Returns a Flow that updates whenever the local cache changes.
+     * Limited to [limit] most recent conversations for performance.
      */
-    fun observeConversations(): Flow<List<Conversation>> {
-        return conversationDao.getAll()
+    fun observeConversations(limit: Int = 100): Flow<List<Conversation>> {
+        return conversationDao.getRecent(limit)
     }
 
     /**
@@ -197,6 +198,15 @@ class ConversationRepository @Inject constructor(
         if (providerNumber == null) return "#6750A4"
         val number = providerNumberDao.getByNumber(providerNumber)
         return number?.color ?: "#6750A4"
+    }
+
+    /**
+     * Batch get provider numbers by their number strings.
+     * Single DB query instead of N individual lookups.
+     */
+    suspend fun getProviderNumbersByNumbers(numbers: List<String>): List<app.svarla.data.local.entity.ProviderNumber> {
+        if (numbers.isEmpty()) return emptyList()
+        return providerNumberDao.getByNumbers(numbers)
     }
 
     /**

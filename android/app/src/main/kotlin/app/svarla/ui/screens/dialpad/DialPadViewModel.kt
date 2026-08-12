@@ -77,6 +77,7 @@ class DialPadViewModel @Inject constructor(
     val selectedProviderNumber: StateFlow<ProviderNumber?> = _selectedProviderNumber.asStateFlow()
 
     init {
+        Log.d("DialPadVM", "init: ViewModel created")
         observeInputForSuggestions()
         loadProviderNumbers()
     }
@@ -286,45 +287,51 @@ class DialPadViewModel @Inject constructor(
     }
 
     private fun loadProviderNumbers() {
-        // First, fetch numbers from server and populate Room
+        // Observe Room immediately — cached numbers render on the first frame
+        Log.d("DialPadVM", "loadProviderNumbers: starting Room observation")
         viewModelScope.launch {
+            providerNumberDao.getActive().collect { numbers ->
+                Log.d("DialPadVM", "loadProviderNumbers: Room emitted ${numbers.size} numbers")
+                _availableNumbers.value = numbers
+                if (_selectedProviderNumber.value == null ||
+                    numbers.none { it.number == _selectedProviderNumber.value?.number }
+                ) {
+                    _selectedProviderNumber.value = selectDefaultNumber(numbers)
+                    Log.d("DialPadVM", "loadProviderNumbers: selected default = ${_selectedProviderNumber.value?.number}")
+                }
+            }
+        }
+        // Sync from server in the background — Room observation picks up changes automatically
+        viewModelScope.launch {
+            Log.d("DialPadVM", "loadProviderNumbers: starting server sync")
             try {
                 val response = numbersApi.getNumbers()
+                Log.d("DialPadVM", "loadProviderNumbers: server returned ${response.numbers.size} numbers")
                 val activeNumbers = mutableListOf<String>()
                 response.numbers.forEach { dto ->
                     activeNumbers.add(dto.number)
-                    val entity = ProviderNumber(
-                        number = dto.number,
-                        label = dto.label,
-                        color = dto.color,
-                        isActive = dto.isActive,
-                        lastUsedAt = dto.lastUsedAt?.toLongOrNull(),
-                        blockInboundCalls = dto.blockInboundCalls,
-                        isDefault = dto.number == response.defaultNumber
-                    )
-                    providerNumberDao.insert(entity)
                 }
-                if (activeNumbers.isNotEmpty()) {
-                    providerNumberDao.deactivateExcept(activeNumbers)
+                // Batch insert all numbers, then deactivate — minimizes Room Flow re-emissions
+                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    val entities = response.numbers.map { dto ->
+                        ProviderNumber(
+                            number = dto.number,
+                            label = dto.label,
+                            color = dto.color,
+                            isActive = dto.isActive,
+                            lastUsedAt = dto.lastUsedAt?.toLongOrNull(),
+                            blockInboundCalls = dto.blockInboundCalls,
+                            isDefault = dto.number == response.defaultNumber
+                        )
+                    }
+                    providerNumberDao.insertAll(entities)
+                    if (activeNumbers.isNotEmpty()) {
+                        providerNumberDao.deactivateExcept(activeNumbers)
+                    }
                 }
+                Log.d("DialPadVM", "loadProviderNumbers: server sync complete")
             } catch (e: Exception) {
                 Log.w("DialPadVM", "Failed to sync numbers from server", e)
-            }
-
-            // After server sync, re-read from Room and re-select default
-            try {
-                val numbers = providerNumberDao.getActive().first()
-                _availableNumbers.value = numbers
-                _selectedProviderNumber.value = selectDefaultNumber(numbers)
-            } catch (_: Exception) {}
-        }
-        // Also observe Room for reactive updates (e.g. changes from other screens)
-        viewModelScope.launch {
-            providerNumberDao.getActive().collect { numbers ->
-                _availableNumbers.value = numbers
-                if (_selectedProviderNumber.value == null) {
-                    _selectedProviderNumber.value = selectDefaultNumber(numbers)
-                }
             }
         }
     }

@@ -60,6 +60,7 @@ fun SettingsScreen(
 ) {
     val numbers by viewModel.numbers.collectAsState()
     val defaultNumber by viewModel.defaultNumber.collectAsState()
+    val hasLoadedNumbers by viewModel.hasLoadedNumbers.collectAsState()
     val isLoggingOut by viewModel.isLoggingOut.collectAsState()
     var editingNumber by remember { mutableStateOf<ProviderNumber?>(null) }
     var editLabel by remember { mutableStateOf("") }
@@ -83,12 +84,14 @@ fun SettingsScreen(
 
             if (numbers.isEmpty()) {
                 item {
-                    Text(
-                        text = "No numbers configured",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
-                    )
+                    if (hasLoadedNumbers) {
+                        Text(
+                            text = "No numbers configured",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp)
+                        )
+                    }
                 }
             } else {
                 items(numbers, key = { it.number }) { number ->

@@ -223,6 +223,9 @@ private fun ConversationListItemRow(
                     label = item.providerNumberLabel,
                     color = item.providerNumberColor
                 )
+            } else {
+                // Reserve space for the badge so layout doesn't jump when it appears
+                Spacer(modifier = Modifier.height(2.dp + 18.dp))
             }
         }
     }
