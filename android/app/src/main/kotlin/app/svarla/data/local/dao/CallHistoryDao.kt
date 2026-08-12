@@ -13,6 +13,9 @@ interface CallHistoryDao {
     @Query("SELECT * FROM call_history ORDER BY timestamp DESC")
     fun getAll(): Flow<List<CallHistoryEntry>>
 
+    @Query("SELECT * FROM call_history ORDER BY timestamp DESC")
+    suspend fun getAllOnce(): List<CallHistoryEntry>
+
     @Query("SELECT * FROM call_history ORDER BY timestamp DESC LIMIT :limit")
     fun getRecent(limit: Int): Flow<List<CallHistoryEntry>>
 

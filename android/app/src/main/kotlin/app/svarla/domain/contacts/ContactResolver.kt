@@ -18,9 +18,11 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
 import java.util.concurrent.ConcurrentHashMap
 import javax.inject.Inject
 import javax.inject.Singleton
@@ -65,6 +67,10 @@ class ContactResolver @Inject constructor(
 
     /** Mutex for thread-safe cache rebuilding */
     private val cacheMutex = Mutex()
+
+    /** Signals when the initial cache build is complete */
+    private val _cacheReady = MutableStateFlow(false)
+    val cacheReady: StateFlow<Boolean> = _cacheReady.asStateFlow()
 
     private var contactObserver: ContentObserver? = null
 
@@ -154,6 +160,59 @@ class ContactResolver @Inject constructor(
         if (_hasPermission.value) {
             scope.launch { rebuildCache() }
         }
+    }
+
+    /**
+     * Suspends until the contact cache has been built at least once.
+     * Returns immediately if the cache is already ready.
+     * Times out after 3 seconds to avoid blocking indefinitely.
+     */
+    suspend fun awaitCacheReady() {
+        if (_cacheReady.value) return
+        try {
+            kotlinx.coroutines.withTimeout(3000) {
+                _cacheReady.first { it }
+            }
+        } catch (_: Exception) {
+            // Timeout — proceed without cache, will fall back to direct queries
+        }
+    }
+
+    /**
+     * Resolves contact names for a batch of phone numbers efficiently.
+     * Uses the in-memory cache and only queries the content provider for
+     * numbers not already cached. Each unique number is looked up at most once.
+     *
+     * @param phoneNumbers The set of phone numbers to resolve
+     * @return Map of phoneNumber → displayName (only contains matches)
+     */
+    fun resolveContactNames(phoneNumbers: Set<String>): Map<String, String> {
+        if (!_hasPermission.value || phoneNumbers.isEmpty()) return emptyMap()
+
+        val results = mutableMapOf<String, String>()
+        val toQuery = mutableSetOf<String>()
+
+        for (number in phoneNumbers) {
+            val normalized = normalizeNumber(number)
+            if (normalized.isEmpty()) continue
+
+            val cached = contactCache[normalized]
+            if (cached != null) {
+                results[number] = cached
+            } else {
+                toQuery.add(number)
+            }
+        }
+
+        // Batch resolve any remaining numbers not in cache
+        for (number in toQuery) {
+            val name = queryContactNameByNumber(number)
+            if (name != null) {
+                results[number] = name
+            }
+        }
+
+        return results
     }
 
     // ========================================================================
@@ -258,6 +317,7 @@ class ContactResolver @Inject constructor(
 
                 contactCache.clear()
                 contactCache.putAll(newCache)
+                _cacheReady.value = true
                 Log.d(TAG, "Contact cache rebuilt: ${contactCache.size} entries")
             } catch (e: Exception) {
                 Log.e(TAG, "Error rebuilding contact cache", e)

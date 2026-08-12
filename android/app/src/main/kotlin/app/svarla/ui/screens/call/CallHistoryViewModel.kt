@@ -58,13 +58,17 @@ class CallHistoryViewModel @Inject constructor(
 
     companion object {
         private const val TAG = "CallHistoryVM"
+        private const val PAGE_SIZE = 100
     }
 
     private val _callHistory = MutableStateFlow<List<CallHistoryUiEntry>>(emptyList())
     val callHistory: StateFlow<List<CallHistoryUiEntry>> = _callHistory.asStateFlow()
 
-    private val _isLoading = MutableStateFlow(false)
+    private val _isLoading = MutableStateFlow(true)
     val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    private val _hasLoadedFromCache = MutableStateFlow(false)
+    val hasLoadedFromCache: StateFlow<Boolean> = _hasLoadedFromCache.asStateFlow()
 
     private val _error = MutableStateFlow<String?>(null)
     val error: StateFlow<String?> = _error.asStateFlow()
@@ -73,6 +77,7 @@ class CallHistoryViewModel @Inject constructor(
     private var unseenCount: Int = 0
 
     init {
+        Log.d(TAG, "init: ViewModel created")
         observeLocalCallHistory()
         observeWebSocketEvents()
         syncFromServer()
@@ -139,35 +144,55 @@ class CallHistoryViewModel @Inject constructor(
 
     /**
      * Observe local Room call history for real-time updates.
+     * Limited to 100 most recent entries to keep the list performant.
      */
     private fun observeLocalCallHistory() {
         viewModelScope.launch {
-            callHistoryDao.getAll().collect { entries ->
-                // Resolve contact names on IO dispatcher to avoid blocking UI
-                val uiEntries = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-                    // Mark the top N missed/blocked entries as unseen
+            Log.d(TAG, "observeLocalCallHistory: starting Room observation")
+            callHistoryDao.getRecent(PAGE_SIZE).collect { entries ->
+                Log.d(TAG, "observeLocalCallHistory: Room emitted ${entries.size} entries, starting enrichment")
+                val startTime = System.currentTimeMillis()
+                // Enrich entries with contact names and provider labels on IO thread.
+                // We do NOT emit a separate "fast pass" with null/partial data because
+                // that causes visible layout shifts when the enriched data replaces it.
+                // Room data is already cached locally, so the enrichment is fast.
+                val enrichedEntries = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    // Batch resolve all contact names in one pass (one lookup per unique number)
+                    val phoneNumbers = entries.map { it.phoneNumber }.toSet()
+                    val contactResolveStart = System.currentTimeMillis()
+                    val contactNames = contactResolver.resolveContactNames(phoneNumbers)
+                    Log.d(TAG, "observeLocalCallHistory: contact resolve took ${System.currentTimeMillis() - contactResolveStart}ms for ${phoneNumbers.size} numbers (${contactNames.size} resolved)")
+
+                    // Batch resolve all provider numbers in one pass (single DB query instead of per-entry)
+                    val providerResolveStart = System.currentTimeMillis()
+                    val uniqueProviderNumbers = entries.mapNotNull { it.providerNumber }.toSet()
+                    val providerInfoList = if (uniqueProviderNumbers.isNotEmpty()) {
+                        providerNumberDao.getByNumbers(uniqueProviderNumbers.toList())
+                    } else emptyList()
+                    val providerInfoMap = providerInfoList.associateBy { it.number }
+                    Log.d(TAG, "observeLocalCallHistory: provider resolve took ${System.currentTimeMillis() - providerResolveStart}ms for ${uniqueProviderNumbers.size} unique numbers")
+
                     var remainingUnseen = unseenCount
                     entries.map { entry ->
                         val isUnseen = remainingUnseen > 0 &&
                             (entry.callType == CallType.MISSED || entry.callType == CallType.BLOCKED)
                         if (isUnseen) remainingUnseen--
 
-                        // Resolve provider number label/color
-                        val providerNum = entry.providerNumber
-                        val providerInfo = if (providerNum != null) {
-                            providerNumberDao.getByNumber(providerNum)
-                        } else null
+                        val providerInfo = entry.providerNumber?.let { providerInfoMap[it] }
 
                         CallHistoryUiEntry(
                             entry = entry,
-                            contactName = contactResolver.resolveContactName(entry.phoneNumber),
+                            contactName = contactNames[entry.phoneNumber],
                             isUnseen = isUnseen,
-                            providerNumberLabel = providerInfo?.label ?: providerNum,
+                            providerNumberLabel = providerInfo?.label ?: entry.providerNumber,
                             providerNumberColor = providerInfo?.color ?: "#6750A4"
                         )
                     }
                 }
-                _callHistory.value = uiEntries
+                Log.d(TAG, "observeLocalCallHistory: total enrichment took ${System.currentTimeMillis() - startTime}ms, emitting ${enrichedEntries.size} entries")
+                _callHistory.value = enrichedEntries
+                _isLoading.value = false
+                _hasLoadedFromCache.value = true
             }
         }
     }

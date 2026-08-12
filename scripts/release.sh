@@ -231,9 +231,10 @@ info "Creating GitHub release"
 
 RELEASE_BODY="## Docker
 
-Pull the server image:
+Pull the container images:
 \`\`\`
-docker pull ${CONTAINER_IMAGE}:${VERSION}
+docker pull ${REGISTRY}/${GH_REPO%/*}/svarla-server:${VERSION}
+docker pull ${REGISTRY}/${GH_REPO%/*}/svarla-mediabridge:${VERSION}
 \`\`\`
 
 ## Android

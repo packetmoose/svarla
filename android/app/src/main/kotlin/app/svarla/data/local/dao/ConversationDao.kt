@@ -14,6 +14,12 @@ interface ConversationDao {
     @Query("SELECT * FROM conversations ORDER BY lastMessageTimestamp DESC")
     fun getAll(): Flow<List<Conversation>>
 
+    @Query("SELECT * FROM conversations ORDER BY lastMessageTimestamp DESC")
+    suspend fun getAllOnce(): List<Conversation>
+
+    @Query("SELECT * FROM conversations ORDER BY lastMessageTimestamp DESC LIMIT :limit")
+    fun getRecent(limit: Int): Flow<List<Conversation>>
+
     @Query("SELECT * FROM conversations WHERE phoneNumber = :number")
     suspend fun getByNumber(number: String): Conversation?
 

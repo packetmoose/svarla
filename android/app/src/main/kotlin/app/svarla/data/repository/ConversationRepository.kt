@@ -61,9 +61,10 @@ class ConversationRepository @Inject constructor(
     /**
      * Observe all conversation threads sorted by most recent message first.
      * Returns a Flow that updates whenever the local cache changes.
+     * Limited to [limit] most recent conversations for performance.
      */
-    fun observeConversations(): Flow<List<Conversation>> {
-        return conversationDao.getAll()
+    fun observeConversations(limit: Int = 100): Flow<List<Conversation>> {
+        return conversationDao.getRecent(limit)
     }
 
     /**
@@ -200,6 +201,15 @@ class ConversationRepository @Inject constructor(
     }
 
     /**
+     * Batch get provider numbers by their number strings.
+     * Single DB query instead of N individual lookups.
+     */
+    suspend fun getProviderNumbersByNumbers(numbers: List<String>): List<app.svarla.data.local.entity.ProviderNumber> {
+        if (numbers.isEmpty()) return emptyList()
+        return providerNumberDao.getByNumbers(numbers)
+    }
+
+    /**
      * Get the provider number label for a conversation by looking at the most recent message.
      */
     suspend fun getProviderNumberLabelForConversation(phoneNumber: String): String {
@@ -329,6 +339,23 @@ class ConversationRepository @Inject constructor(
         try {
             val data = event.data?.jsonObject ?: return
             val conversationNumber = data["conversationNumber"]?.jsonPrimitive?.content ?: return
+            val providerNumber = data["providerNumber"]?.jsonPrimitive?.content ?: ""
+            val direction = data["direction"]?.jsonPrimitive?.content
+
+            // Optimistically update lastReceivedAt for incoming messages so the
+            // unread indicator in the conversation list shows immediately without
+            // waiting for the server sync round-trip.
+            if (direction == null || direction.uppercase() == "RECEIVED") {
+                val now = System.currentTimeMillis()
+                val conversation = if (providerNumber.isNotEmpty()) {
+                    conversationDao.getByProviderAndPhone(providerNumber, conversationNumber)
+                } else {
+                    conversationDao.getByNumber(conversationNumber)
+                }
+                if (conversation != null) {
+                    conversationDao.update(conversation.copy(lastReceivedAt = now, lastMessageTimestamp = now))
+                }
+            }
 
             syncMessages(conversationNumber)
             syncConversations()

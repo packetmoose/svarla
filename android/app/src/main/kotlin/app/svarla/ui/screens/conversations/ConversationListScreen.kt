@@ -78,18 +78,18 @@ fun ConversationListScreen(
                 .padding(paddingValues)
         ) {
             when {
-                uiState.error != null && uiState.conversations.isEmpty() -> {
+                uiState.error != null && uiState.conversations.isEmpty() && uiState.hasLoadedFromCache -> {
                     ErrorState(
                         message = uiState.error ?: "Unknown error",
                         onRetry = { viewModel.syncFromServer() }
                     )
                 }
 
-                uiState.conversations.isEmpty() && !uiState.isLoading -> {
+                uiState.conversations.isEmpty() && uiState.hasLoadedFromCache && !uiState.isLoading -> {
                     EmptyState()
                 }
 
-                else -> {
+                uiState.conversations.isNotEmpty() -> {
                     ConversationList(
                         conversations = uiState.conversations,
                         onConversationClick = onConversationClick
@@ -97,11 +97,27 @@ fun ConversationListScreen(
                 }
             }
 
-            if (uiState.isLoading) {
+            if (uiState.isLoading && uiState.conversations.isEmpty()) {
+                CircularProgressIndicator(
+                    modifier = Modifier.align(Alignment.Center)
+                )
+            } else if (uiState.isLoading) {
                 LinearProgressIndicator(
                     modifier = Modifier
                         .fillMaxWidth()
                         .align(Alignment.TopCenter)
+                )
+            }
+
+            // Show error as a subtle message at the bottom if we have cached data
+            if (uiState.error != null && uiState.conversations.isNotEmpty()) {
+                Text(
+                    text = uiState.error ?: "",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .padding(16.dp)
                 )
             }
         }
@@ -207,6 +223,9 @@ private fun ConversationListItemRow(
                     label = item.providerNumberLabel,
                     color = item.providerNumberColor
                 )
+            } else {
+                // Reserve space for the badge so layout doesn't jump when it appears
+                Spacer(modifier = Modifier.height(2.dp + 18.dp))
             }
         }
     }

@@ -196,50 +196,54 @@ private fun ProviderNumberIndicator(
     availableNumbers: List<ProviderNumber>,
     onNumberSelected: (ProviderNumber) -> Unit
 ) {
-    if (selectedNumber == null && availableNumbers.isEmpty()) return
 
     var showDropdown by remember { mutableStateOf(false) }
     val canSwitch = availableNumbers.size > 1
 
+    // Fixed height box reserves space even before numbers load, preventing layout jumps
     Box(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(44.dp),
         contentAlignment = Alignment.Center
     ) {
-        Row(
-            modifier = Modifier
-                .then(
-                    if (canSwitch) Modifier.clickable { showDropdown = true }
-                    else Modifier
-                )
-                .background(
-                    color = if (selectedNumber != null) {
-                        app.svarla.ui.components.parseNumberColor(selectedNumber.color).copy(alpha = 0.25f)
-                    } else {
-                        MaterialTheme.colorScheme.surfaceVariant
-                    },
-                    shape = RoundedCornerShape(8.dp)
-                )
-                .padding(vertical = 10.dp, horizontal = 20.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
-        ) {
-            if (selectedNumber != null) {
-                val display = selectedNumber.label ?: selectedNumber.number
-                val badgeColor = app.svarla.ui.components.parseNumberColor(selectedNumber.color)
-                Text(
-                    text = display,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                    color = badgeColor
-                )
-            }
-            if (canSwitch) {
-                Spacer(modifier = Modifier.width(6.dp))
-                Text(
-                    text = "▾",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
+        if (selectedNumber != null || availableNumbers.isNotEmpty()) {
+            Row(
+                modifier = Modifier
+                    .then(
+                        if (canSwitch) Modifier.clickable { showDropdown = true }
+                        else Modifier
+                    )
+                    .background(
+                        color = if (selectedNumber != null) {
+                            app.svarla.ui.components.parseNumberColor(selectedNumber.color).copy(alpha = 0.25f)
+                        } else {
+                            MaterialTheme.colorScheme.surfaceVariant
+                        },
+                        shape = RoundedCornerShape(8.dp)
+                    )
+                    .padding(vertical = 10.dp, horizontal = 20.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                if (selectedNumber != null) {
+                    val display = selectedNumber.label ?: selectedNumber.number
+                    val badgeColor = app.svarla.ui.components.parseNumberColor(selectedNumber.color)
+                    Text(
+                        text = display,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
+                        color = badgeColor
+                    )
+                }
+                if (canSwitch) {
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text(
+                        text = "▾",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
             }
         }
 

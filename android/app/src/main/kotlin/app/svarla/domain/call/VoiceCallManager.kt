@@ -310,14 +310,19 @@ class VoiceCallManager @Inject constructor(
             recentlyDeclinedCalls.add(DeclinedCallRecord(callerNumber, System.currentTimeMillis()))
         }
 
+        // Transition to ENDED immediately (synchronously) so that if a new incoming
+        // call arrives before the server responds, handleIncomingCall sees ENDED (not
+        // RINGING) and correctly starts the ringer for the new call.
+        endCallInternal(CallEndReason.DECLINED)
+
+        // Notify the server asynchronously — this is best-effort and must not delay
+        // the local state transition.
         scope.launch {
             try {
-                // Tell the server to hang up the call
                 callsApi.declineCall(callId)
             } catch (e: Exception) {
                 Log.e(TAG, "Error declining call via server (proceeding anyway)", e)
             }
-            endCallInternal(CallEndReason.DECLINED)
         }
     }
 
@@ -887,8 +892,13 @@ class VoiceCallManager @Inject constructor(
         stopDurationTimer()
         stopNetworkMonitoring()
 
-        // Stop ringing/vibration if still active
-        incomingCallRinger.stop()
+        // Only stop ringing if no new incoming call has already taken over.
+        // This prevents a race where: decline call A → new call B arrives and starts
+        // ringing → async endCallInternal for A runs and kills B's ringer.
+        val currentStatus = _callState.value.status
+        if (currentStatus != CallStatus.RINGING) {
+            incomingCallRinger.stop()
+        }
 
         // Play a short disconnect tone so the user knows the call ended
         // (audible through earpiece when phone is held to ear).

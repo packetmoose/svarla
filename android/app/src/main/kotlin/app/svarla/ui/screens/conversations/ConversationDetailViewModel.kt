@@ -97,7 +97,8 @@ class ConversationDetailViewModel @Inject constructor(
     private val callHistoryDao: CallHistoryDao,
     private val contactResolver: ContactResolver,
     private val voiceCallManager: VoiceCallManager,
-    private val syncManager: app.svarla.data.remote.sync.SyncManager
+    private val syncManager: app.svarla.data.remote.sync.SyncManager,
+    private val notificationHandler: app.svarla.domain.notifications.NotificationHandler
 ) : ViewModel() {
 
     private val phoneNumber: String = savedStateHandle.get<String>("phoneNumber") ?: ""
@@ -301,6 +302,8 @@ class ConversationDetailViewModel @Inject constructor(
         viewModelScope.launch {
             conversationRepository.markThreadAsRead(providerNumber, phoneNumber)
         }
+        // Dismiss any pending SMS notifications for this conversation
+        notificationHandler.dismissConversationNotifications(phoneNumber)
     }
 
     /**

@@ -1,22 +1,26 @@
 package app.svarla.ui.screens.conversations
 
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import app.svarla.data.remote.api.ReadStateApi
 import app.svarla.data.repository.ConversationRepository
 import app.svarla.domain.contacts.ContactResolver
 import dagger.hilt.android.lifecycle.HiltViewModel
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import javax.inject.Inject
 
 data class ConversationListUiState(
     val conversations: List<ConversationListItem> = emptyList(),
-    val isLoading: Boolean = false,
+    val isLoading: Boolean = true,
+    val hasLoadedFromCache: Boolean = false,
     val error: String? = null
 )
 
@@ -38,47 +42,74 @@ class ConversationListViewModel @Inject constructor(
     private val readStateApi: ReadStateApi
 ) : ViewModel() {
 
+    companion object {
+        private const val TAG = "ConversationListVM"
+    }
+
     private val _uiState = MutableStateFlow(ConversationListUiState())
     val uiState: StateFlow<ConversationListUiState> = _uiState.asStateFlow()
 
     init {
+        Log.d(TAG, "init: ViewModel created")
         observeConversations()
         syncFromServer()
     }
 
     private fun observeConversations() {
         viewModelScope.launch {
+            Log.d(TAG, "observeConversations: starting Room observation")
             conversationRepository.observeConversations()
                 .catch { e ->
-                    _uiState.update { it.copy(error = e.message, isLoading = false) }
+                    Log.e(TAG, "observeConversations: error", e)
+                    _uiState.update { it.copy(error = e.message, isLoading = false, hasLoadedFromCache = true) }
                 }
                 .collect { conversations ->
-                    val items = conversations.map { conv ->
-                        val providerLabel = if (conv.providerNumber.isNotEmpty()) {
-                            conversationRepository.getProviderNumberLabel(conv.providerNumber)
-                        } else {
-                            conversationRepository.getProviderNumberLabelForConversation(conv.phoneNumber)
+                    Log.d(TAG, "observeConversations: Room emitted ${conversations.size} conversations, starting enrichment")
+                    val startTime = System.currentTimeMillis()
+                    // Enrich with contact names and provider labels in a single pass.
+                    // We avoid a two-phase emit (raw then enriched) because that causes
+                    // visible layout shifts when provider labels appear/disappear.
+                    // Room queries and the contact cache are local, so this is fast.
+                    val enrichedItems = withContext(Dispatchers.IO) {
+                        // Batch resolve all contact names in one pass (one lookup per unique number)
+                        val phoneNumbers = conversations.map { it.phoneNumber }.toSet()
+                        val contactResolveStart = System.currentTimeMillis()
+                        val contactNames = contactResolver.resolveContactNames(phoneNumbers)
+                        Log.d(TAG, "observeConversations: contact resolve took ${System.currentTimeMillis() - contactResolveStart}ms for ${phoneNumbers.size} numbers (${contactNames.size} resolved)")
+
+                        // Batch resolve all provider numbers in a single query
+                        val providerResolveStart = System.currentTimeMillis()
+                        val uniqueProviderNumbers = conversations.map { it.providerNumber }.filter { it.isNotEmpty() }.toSet()
+                        val providerInfoList = if (uniqueProviderNumbers.isNotEmpty()) {
+                            conversationRepository.getProviderNumbersByNumbers(uniqueProviderNumbers.toList())
+                        } else emptyList()
+                        val providerInfoMap = providerInfoList.associateBy { it.number }
+
+                        val result = conversations.map { conv ->
+                            val providerInfo = if (conv.providerNumber.isNotEmpty()) {
+                                providerInfoMap[conv.providerNumber]
+                            } else null
+                            val providerLabel = providerInfo?.label ?: conv.providerNumber.ifEmpty { "" }
+                            val providerColor = providerInfo?.color ?: "#6750A4"
+                            val isUnread = conv.lastReceivedAt != null &&
+                                (conv.lastReadAt == null || conv.lastReceivedAt > conv.lastReadAt)
+                            ConversationListItem(
+                                phoneNumber = conv.phoneNumber,
+                                providerNumber = conv.providerNumber,
+                                displayName = contactNames[conv.phoneNumber] ?: conv.phoneNumber,
+                                preview = conv.lastMessagePreview?.take(50) ?: "",
+                                timestamp = conv.lastMessageTimestamp,
+                                providerNumberLabel = providerLabel,
+                                providerNumberColor = providerColor,
+                                unreadCount = if (isUnread) 1 else 0
+                            )
                         }
-                        val providerColor = if (conv.providerNumber.isNotEmpty()) {
-                            conversationRepository.getProviderNumberColor(conv.providerNumber)
-                        } else {
-                            "#6750A4"
-                        }
-                        val isUnread = conv.lastReceivedAt != null &&
-                            (conv.lastReadAt == null || conv.lastReceivedAt > conv.lastReadAt)
-                        ConversationListItem(
-                            phoneNumber = conv.phoneNumber,
-                            providerNumber = conv.providerNumber,
-                            displayName = contactResolver.resolveContactName(conv.phoneNumber) ?: conv.phoneNumber,
-                            preview = conv.lastMessagePreview?.take(50) ?: "",
-                            timestamp = conv.lastMessageTimestamp,
-                            providerNumberLabel = providerLabel,
-                            providerNumberColor = providerColor,
-                            unreadCount = if (isUnread) 1 else 0
-                        )
+                        Log.d(TAG, "observeConversations: provider resolve took ${System.currentTimeMillis() - providerResolveStart}ms")
+                        result
                     }
+                    Log.d(TAG, "observeConversations: total enrichment took ${System.currentTimeMillis() - startTime}ms, emitting ${enrichedItems.size} items")
                     _uiState.update {
-                        it.copy(conversations = items, isLoading = false, error = null)
+                        it.copy(conversations = enrichedItems, isLoading = false, error = null, hasLoadedFromCache = true)
                     }
                 }
         }
@@ -90,7 +121,9 @@ class ConversationListViewModel @Inject constructor(
             try {
                 conversationRepository.syncConversations()
             } catch (e: Exception) {
-                _uiState.update { it.copy(error = e.message, isLoading = false) }
+                _uiState.update { it.copy(error = e.message) }
+            } finally {
+                _uiState.update { it.copy(isLoading = false) }
             }
         }
     }
