@@ -658,18 +658,17 @@ export class CallOrchestrator {
       : null;
 
     if (activeCall.direction === 'inbound' && !activeCall.answered) {
-      // Inbound call that was never answered → mark as MISSED
-      this.callHistory
-        .updateCallTypeByProviderCallId(activeCall.providerCallId, 'MISSED')
-        .catch((err) => {
-          this.logger.error(
-            { err, callId } as Record<string, unknown>,
-            'Failed to update call history to MISSED',
-          );
-        });
-
       if (trigger === 'declined') {
-        // User explicitly declined → mark notification as resolved (read)
+        // User explicitly declined → mark as DECLINED in history and resolve notification
+        this.callHistory
+          .updateCallTypeByProviderCallId(activeCall.providerCallId, 'DECLINED')
+          .catch((err) => {
+            this.logger.error(
+              { err, callId } as Record<string, unknown>,
+              'Failed to update call history to DECLINED',
+            );
+          });
+
         this.notificationService.markCallResolved(callId).catch((err) => {
           this.logger.error(
             { err, callId } as Record<string, unknown>,
@@ -677,7 +676,16 @@ export class CallOrchestrator {
           );
         });
       } else {
-        // Caller hung up or timeout → transition notification to missed_call
+        // Caller hung up or timeout → mark as MISSED and transition notification
+        this.callHistory
+          .updateCallTypeByProviderCallId(activeCall.providerCallId, 'MISSED')
+          .catch((err) => {
+            this.logger.error(
+              { err, callId } as Record<string, unknown>,
+              'Failed to update call history to MISSED',
+            );
+          });
+
         this.notificationService.transitionToMissed(callId).catch((err) => {
           this.logger.error(
             { err, callId } as Record<string, unknown>,

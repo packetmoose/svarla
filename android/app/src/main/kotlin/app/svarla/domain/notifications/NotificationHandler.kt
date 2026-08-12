@@ -591,6 +591,24 @@ class NotificationHandler @Inject constructor(
         val newType = payload.notificationType
         val previousType = serverNotificationTypeMap[payload.id]
         if (newType != null && newType != previousType) {
+            // If the incoming_call is transitioning to missed_call but the user declined it,
+            // dismiss the notification entirely instead of updating it.
+            if (newType == TYPE_MISSED_CALL) {
+                val cachedPayload = serverNotificationPayloadCache[payload.id]
+                val callId = cachedPayload?.sourceEntityId
+                val fromNumber = cachedPayload?.payload?.let { p ->
+                    try { p.jsonObject["callerNumber"]?.jsonPrimitive?.contentOrNull } catch (_: Exception) { null }
+                }
+                if ((callId != null && voiceCallManager.wasCallDeclined(callId)) ||
+                    (fromNumber != null && voiceCallManager.wasRecentCallDeclinedFrom(fromNumber))
+                ) {
+                    Log.d(TAG, "Suppressing missed_call type change for declined call: id=${payload.id}, callId=$callId")
+                    notificationManager.cancel(androidNotificationId)
+                    untrackServerNotification(payload.id)
+                    return
+                }
+            }
+
             Log.d(TAG, "Type changed for server id=${payload.id}: $previousType → $newType")
             updateNotificationForTypeChange(payload.id, androidNotificationId, newType)
             // Update the cached type
@@ -966,6 +984,19 @@ class NotificationHandler @Inject constructor(
     private fun handleMissedCallNotification(payload: PushNotificationPayload) {
         val fromNumber = payload.from ?: "Unknown"
         val callId = payload.callId
+
+        // If the user explicitly declined this call, suppress the missed call notification.
+        // A declined call is not a missed call — the user intentionally rejected it.
+        // NOTE: The server should mark the notification as read when processing the decline,
+        // but this guard handles race conditions where the missed_call event arrives first.
+        if (callId != null && voiceCallManager.wasCallDeclined(callId)) {
+            Log.d(TAG, "Suppressing missed call notification for declined call: $callId")
+            return
+        }
+        if (callId == null && fromNumber != "Unknown" && voiceCallManager.wasRecentCallDeclinedFrom(fromNumber)) {
+            Log.d(TAG, "Suppressing missed call notification for recently declined number: $fromNumber")
+            return
+        }
 
         // If this call is still actively ringing, cancel it immediately.
         // This handles the case where the WebSocket wasn't connected when the caller hung up,

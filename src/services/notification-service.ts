@@ -372,6 +372,9 @@ export class NotificationService {
 
   /**
    * Mark the notification for a call as read (answered or declined).
+   * Matches both incoming_call and missed_call types — a declined call
+   * may have already transitioned to missed_call if the provider hung up
+   * or timed out before the decline was processed.
    * No-op if not found or already resolved.
    */
   async markCallResolved(sourceEntityId: string): Promise<boolean> {
@@ -382,7 +385,7 @@ export class NotificationService {
         updated_at: new Date(),
       })
       .where('source_entity_id', '=', sourceEntityId)
-      .where('type', '=', 'incoming_call')
+      .where('type', 'in', ['incoming_call', 'missed_call'])
       .where('status', '=', 'pending')
       .returning(['id', 'type', 'status', 'updated_at'])
       .executeTakeFirst();
