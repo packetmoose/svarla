@@ -28,7 +28,7 @@ export interface Elks46ProviderConfig {
 /**
  * 46elks call status values received from webhooks.
  */
-type Elks46CallStatus = 'ongoing' | 'success' | 'failed';
+type Elks46CallStatus = 'ongoing' | 'success' | 'failed' | 'busy' | 'no-answer';
 
 /**
  * Maps 46elks webhook call status strings to internal CallState values.
@@ -40,6 +40,10 @@ function mapElks46StatusToCallState(status: Elks46CallStatus): CallState | null 
     case 'success':
       return 'COMPLETED';
     case 'failed':
+      return 'FAILED';
+    case 'busy':
+      return 'BUSY';
+    case 'no-answer':
       return 'FAILED';
     default:
       return null;
@@ -94,11 +98,13 @@ export class Elks46TelephonyProvider implements TelephonyProvider {
   async makeCall(from: string, to: string, sipUri?: string): Promise<CallInitResult> {
     const webhookProviderId = this.config.registryId ?? this.providerId;
     const voiceStartUrl = `${this.config.webhookBaseUrl}/webhooks/${webhookProviderId}/voice_start`;
+    const voiceEventUrl = `${this.config.webhookBaseUrl}/webhooks/${webhookProviderId}/voice_event`;
 
     const body = new URLSearchParams({
       from,
       to,
       voice_start: voiceStartUrl,
+      whenhangup: voiceEventUrl,
     });
 
     const response = await fetch('https://api.46elks.com/a1/calls', {
@@ -375,7 +381,11 @@ export class Elks46TelephonyProvider implements TelephonyProvider {
   /**
    * Handle voice_event webhook — call status updates from 46elks.
    *
-   * Status values: ongoing (call answered), success (call completed), failed
+   * Status values: ongoing (call answered), success (call completed), failed,
+   * busy (remote declined/busy), no-answer (remote didn't pick up)
+   *
+   * Note: 46elks uses both "status" and "state" field names depending on the
+   * event type (whenhangup uses "state", voice_start events use "status").
    *
    * Requirements: 7.10
    */
@@ -383,7 +393,7 @@ export class Elks46TelephonyProvider implements TelephonyProvider {
     const callId = body.callid as string ?? body.id as string ?? '';
     if (!callId) return;
 
-    const status = body.status as Elks46CallStatus | undefined;
+    const status = (body.status ?? body.state) as Elks46CallStatus | undefined;
     if (!status) return;
 
     const duration = body.duration as number | undefined;
