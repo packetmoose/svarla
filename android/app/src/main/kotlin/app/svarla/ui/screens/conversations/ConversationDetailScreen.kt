@@ -1,5 +1,9 @@
 package app.svarla.ui.screens.conversations
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
@@ -57,6 +61,7 @@ import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.interaction.collectIsDraggedAsState
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.core.content.ContextCompat
 import app.svarla.data.local.entity.CallType
 import app.svarla.data.local.entity.MessageDirection
 import app.svarla.ui.components.NumberBadge
@@ -80,6 +85,18 @@ fun ConversationDetailScreen(
     val keyboardController = LocalSoftwareKeyboardController.current
     val focusManager = LocalFocusManager.current
     var showRemoveConfirmation by remember { mutableStateOf(false) }
+    val context = LocalContext.current
+
+    // Mic permission gating for the call button
+    var pendingCall by remember { mutableStateOf(false) }
+    val micPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (granted && pendingCall) {
+            viewModel.makeCall()
+        }
+        pendingCall = false
+    }
 
     // Auto-scroll to the bottom when new messages arrive
     LaunchedEffect(uiState.timelineItems.size) {
@@ -130,7 +147,16 @@ fun ConversationDetailScreen(
                     }
                 },
                 actions = {
-                    IconButton(onClick = { viewModel.makeCall() }) {
+                    IconButton(onClick = {
+                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
+                            == PackageManager.PERMISSION_GRANTED
+                        ) {
+                            viewModel.makeCall()
+                        } else {
+                            pendingCall = true
+                            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                        }
+                    }) {
                         Icon(
                             imageVector = Icons.Filled.Phone,
                             contentDescription = "Call"

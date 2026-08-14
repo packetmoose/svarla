@@ -1,6 +1,7 @@
 package app.svarla.ui.navigation
 
 import android.Manifest
+import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
@@ -18,6 +19,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.ContextCompat
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.NavHostController
 import androidx.navigation.NavType
@@ -257,18 +260,52 @@ private fun HomeScreen(
         }
     }
 
-    // Request microphone permission for voice calls
+    // Microphone permission gating for calls.
+    // Stores the pending call action so we can execute it once permission is granted.
+    var pendingCallAction by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val context = LocalContext.current
+
     val micPermissionLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission()
-    ) { /* granted or not — WebRTC handles gracefully */ }
+    ) { granted ->
+        if (granted) {
+            // Permission granted — execute the pending call if any
+            pendingCallAction?.invoke()
+        }
+        pendingCallAction = null
+    }
+
+    /**
+     * Wraps a call action with mic permission check.
+     * If permission is already granted, executes immediately.
+     * If not, requests permission and executes on grant.
+     */
+    fun requireMicPermission(action: () -> Unit) {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
+            action()
+        } else {
+            pendingCallAction = action
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }
 
     val hasContactsPermission by contactResolver.hasPermission.collectAsState()
     LaunchedEffect(Unit) {
         if (!hasContactsPermission) {
             permissionLauncher.launch(Manifest.permission.READ_CONTACTS)
         }
-        // Always request mic permission upfront for call readiness
-        micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+    }
+
+    // Request mic permission upfront (after a short delay to avoid competing with contacts dialog)
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(1500)
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+        }
     }
 
     if (showComposeMessage) {
@@ -306,7 +343,7 @@ private fun HomeScreen(
                     val dialPadViewModel: DialPadViewModel = hiltViewModel()
                     DialPadScreen(
                         viewModel = dialPadViewModel,
-                        onCallPressed = { number -> dialPadViewModel.makeCall(number) },
+                        onCallPressed = { number -> requireMicPermission { dialPadViewModel.makeCall(number) } },
                         onSmsPressed = { /* TODO: navigate to compose with number pre-filled */ }
                     )
                 }
@@ -314,7 +351,7 @@ private fun HomeScreen(
                     val dialPadViewModel: DialPadViewModel = hiltViewModel()
                     CallHistoryScreen(
                         onMakeCall = { selectedTabIndex = BottomNavDestination.entries.indexOf(BottomNavDestination.DIAL_PAD) },
-                        onCallNumber = { number -> dialPadViewModel.makeCall(number) },
+                        onCallNumber = { number -> requireMicPermission { dialPadViewModel.makeCall(number) } },
                         onSendMessage = { providerNumber, phoneNumber ->
                             showComposeMessage = false
                             onConversationClick(providerNumber, phoneNumber)

@@ -1,19 +1,23 @@
 package app.svarla
 
 import android.app.KeyguardManager
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat
 import app.svarla.domain.call.CallStatus
 import app.svarla.domain.call.VoiceCallManager
 import app.svarla.domain.contacts.ContactResolver
@@ -60,6 +64,20 @@ class IncomingCallActivity : ComponentActivity() {
      */
     private var idleGraceJob: Job? = null
     private val activityScope = CoroutineScope(Dispatchers.Main + Job())
+
+    /** Stores the call ID to answer once mic permission is granted. */
+    private var pendingAnswerCallId: String? = null
+
+    private val micPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val callId = pendingAnswerCallId
+        pendingAnswerCallId = null
+        if (granted && callId != null) {
+            answerAndNavigate(callId)
+        }
+        // If denied, stay on the incoming call screen — user can try again or decline
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -132,13 +150,15 @@ class IncomingCallActivity : ComponentActivity() {
                         onAnswer = {
                             val id = activeInfo?.callId.takeIf { !it.isNullOrEmpty() } ?: callId
                             notificationHandler.dismissCallNotification(id)
-                            voiceCallManager.answerCall(id)
-                            // Launch MainActivity for the active call screen
-                            val mainIntent = Intent(this@IncomingCallActivity, MainActivity::class.java).apply {
-                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            // Check mic permission before answering
+                            if (ContextCompat.checkSelfPermission(this@IncomingCallActivity, Manifest.permission.RECORD_AUDIO)
+                                == PackageManager.PERMISSION_GRANTED
+                            ) {
+                                answerAndNavigate(id)
+                            } else {
+                                pendingAnswerCallId = id
+                                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                             }
-                            startActivity(mainIntent)
-                            finish()
                         },
                         onDecline = {
                             val id = activeInfo?.callId.takeIf { !it.isNullOrEmpty() } ?: callId
@@ -155,6 +175,19 @@ class IncomingCallActivity : ComponentActivity() {
     override fun onDestroy() {
         super.onDestroy()
         idleGraceJob?.cancel()
+    }
+
+    /**
+     * Answers the call and navigates to the main activity.
+     * Called directly when mic permission is already granted, or after permission is granted.
+     */
+    private fun answerAndNavigate(callId: String) {
+        voiceCallManager.answerCall(callId)
+        val mainIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        startActivity(mainIntent)
+        finish()
     }
 
     /**
