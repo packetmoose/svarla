@@ -21,6 +21,11 @@ import app.svarla.domain.notifications.NotificationHandler
 import app.svarla.ui.screens.call.IncomingCallScreen
 import app.svarla.ui.theme.SvarlaTheme
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
@@ -48,6 +53,14 @@ class IncomingCallActivity : ComponentActivity() {
     @Inject
     lateinit var notificationHandler: NotificationHandler
 
+    /**
+     * Grace period job: if VoiceCallManager stays in IDLE after this activity launches,
+     * it means the call already ended (no actual incoming call). We give a short grace
+     * period for the state to transition to RINGING on cold start, then finish.
+     */
+    private var idleGraceJob: Job? = null
+    private val activityScope = CoroutineScope(Dispatchers.Main + Job())
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -55,6 +68,19 @@ class IncomingCallActivity : ComponentActivity() {
 
         val callId = intent?.getStringExtra(EXTRA_CALL_ID) ?: ""
         val callerNumber = intent?.getStringExtra(EXTRA_CALLER_NUMBER) ?: ""
+
+        // If the VoiceCallManager is already IDLE at launch, the call may have already
+        // ended. Start a grace period — if state doesn't transition to RINGING within
+        // 2 seconds, this is a stale notification launch and we should finish.
+        if (voiceCallManager.callState.value.status == CallStatus.IDLE) {
+            idleGraceJob = activityScope.launch {
+                delay(2000)
+                // If still IDLE after grace period, no active incoming call exists
+                if (voiceCallManager.callState.value.status == CallStatus.IDLE) {
+                    finish()
+                }
+            }
+        }
 
         setContent {
             SvarlaTheme {
@@ -81,8 +107,16 @@ class IncomingCallActivity : ComponentActivity() {
                             finish()
                             return@Surface
                         }
-                        CallStatus.IDLE, CallStatus.RINGING -> {
-                            // Show the incoming call UI
+                        CallStatus.IDLE -> {
+                            // State hasn't transitioned yet on cold start.
+                            // The idleGraceJob will finish this activity if it stays IDLE.
+                            // Show a blank surface while waiting.
+                            return@Surface
+                        }
+                        CallStatus.RINGING -> {
+                            // Cancel the grace period — call is active
+                            idleGraceJob?.cancel()
+                            idleGraceJob = null
                         }
                     }
 
@@ -116,6 +150,11 @@ class IncomingCallActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        idleGraceJob?.cancel()
     }
 
     /**

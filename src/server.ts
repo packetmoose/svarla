@@ -336,6 +336,36 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
             server.log.error(err, 'Failed to process incoming SMS event');
           });
       } else if (event.type === 'call_state_changed') {
+        // If this call is managed by the orchestrator, route the event through it
+        // instead of broadcasting raw provider callIds (which don't match the
+        // internal callId the clients are tracking).
+        const internalCallId = callOrchestrator.getCallIdByProviderCallId(event.callId);
+        if (internalCallId) {
+          const isCallEnded =
+            event.state === 'COMPLETED' || event.state === 'FAILED' || event.state === 'BUSY';
+          if (isCallEnded) {
+            // Trigger endCall through the orchestrator — this will broadcast the
+            // correct internal callId to clients and handle cleanup properly.
+            callOrchestrator.endCall(internalCallId, 'provider_call_state_changed').catch((err) => {
+              server.log.error(err, `Failed to end orchestrator call ${internalCallId} via call_state_changed`);
+            });
+          } else if (event.state === 'ANSWERED') {
+            // Provider reports answered — the orchestrator handles this via
+            // provider_connected media event, but broadcast with correct ID as backup.
+            const wsEvent = {
+              type: 'call_event' as const,
+              data: {
+                callId: internalCallId,
+                status: 'connected',
+              },
+            };
+            wsBroadcaster.broadcast(wsEvent);
+          }
+          // Skip the legacy handler for orchestrator-managed calls
+          return;
+        }
+
+        // Legacy path: call not managed by orchestrator — broadcast with provider callId
         // Broadcast call state changes to all connected devices via WebSocket
         let status: string;
         switch (event.state) {
