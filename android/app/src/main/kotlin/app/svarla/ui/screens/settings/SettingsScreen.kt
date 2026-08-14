@@ -619,6 +619,29 @@ private fun NotificationDeliverySection(
                     .padding(vertical = 8.dp)
             )
         }
+
+        // OEM auto-start restriction warning
+        if (deliveryMode == NotificationDeliveryMode.WEBSOCKET &&
+            viewModel.autoStartHelper.shouldShowAutoStartPrompt()
+        ) {
+            val autoStartIntent = viewModel.autoStartHelper.getAutoStartSettingsIntent()
+            if (autoStartIntent != null) {
+                Spacer(modifier = Modifier.height(12.dp))
+                Text(
+                    text = "⚠️ ${viewModel.autoStartHelper.getManufacturerDisplayName()} devices may block auto-start. " +
+                        "Tap to allow Svarla to start automatically after reboot.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            viewModel.autoStartHelper.markPromptShown()
+                            context.startActivity(autoStartIntent)
+                        }
+                        .padding(vertical = 8.dp)
+                )
+            }
+        }
     }
 
     // Battery optimization dialog

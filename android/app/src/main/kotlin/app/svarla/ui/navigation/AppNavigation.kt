@@ -30,6 +30,7 @@ import app.svarla.domain.audio.AudioRouter
 import app.svarla.domain.call.CallStatus
 import app.svarla.domain.call.VoiceCallManager
 import app.svarla.domain.contacts.ContactResolver
+import app.svarla.domain.notifications.AutoStartHelper
 import app.svarla.domain.notifications.NotificationDeliveryMode
 import app.svarla.domain.notifications.NotificationDeliveryPreferences
 import app.svarla.domain.notifications.PushEndpointManager
@@ -72,6 +73,7 @@ fun AppNavigation(
     audioRouter: AudioRouter,
     deliveryPreferences: NotificationDeliveryPreferences,
     pushEndpointManager: PushEndpointManager,
+    autoStartHelper: AutoStartHelper? = null,
     initialRoute: String? = null,
     navController: NavHostController = rememberNavController()
 ) {
@@ -96,6 +98,7 @@ fun AppNavigation(
     // Show the notification setup dialog
     if (showNotificationSetup) {
         NotificationSetupDialog(
+            autoStartHelper = autoStartHelper,
             onModeSelected = { mode ->
                 deliveryPreferences.setMode(mode)
                 deliveryPreferences.markSetupCompleted()

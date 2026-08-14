@@ -28,6 +28,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
+import app.svarla.domain.notifications.AutoStartHelper
 import app.svarla.domain.notifications.NotificationDeliveryMode
 
 /**
@@ -38,6 +39,7 @@ import app.svarla.domain.notifications.NotificationDeliveryMode
  */
 @Composable
 fun NotificationSetupDialog(
+    autoStartHelper: AutoStartHelper? = null,
     onModeSelected: (NotificationDeliveryMode) -> Unit,
     onDismiss: () -> Unit
 ) {
@@ -132,6 +134,14 @@ fun NotificationSetupDialog(
                                 data = Uri.parse("package:${context.packageName}")
                             }
                             context.startActivity(intent)
+                        }
+                        // Open OEM auto-start settings if needed
+                        if (autoStartHelper != null && autoStartHelper.shouldShowAutoStartPrompt()) {
+                            val autoStartIntent = autoStartHelper.getAutoStartSettingsIntent()
+                            if (autoStartIntent != null) {
+                                autoStartHelper.markPromptShown()
+                                context.startActivity(autoStartIntent)
+                            }
                         }
                     }
                     onModeSelected(selectedMode)
