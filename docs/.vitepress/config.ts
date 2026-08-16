@@ -3,6 +3,7 @@ import { defineConfig } from 'vitepress'
 export default defineConfig({
   title: 'Svarla',
   description: 'A self-hosted softphone for calls and SMS over a data connection',
+  srcExclude: ['releases/TEMPLATE.md'],
   ignoreDeadLinks: [
     /localhost/
   ],
@@ -15,6 +16,7 @@ export default defineConfig({
     nav: [
       { text: 'Guide', link: '/guide/what-is-svarla' },
       { text: 'Configuration', link: '/config/server' },
+      { text: 'Releases', link: '/releases/' },
       { text: 'GitHub', link: 'https://github.com/packetmoose/svarla' }
     ],
 
