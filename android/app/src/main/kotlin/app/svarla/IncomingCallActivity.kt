@@ -1,19 +1,23 @@
 package app.svarla
 
 import android.app.KeyguardManager
+import android.Manifest
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.core.content.ContextCompat
 import app.svarla.domain.call.CallStatus
 import app.svarla.domain.call.VoiceCallManager
 import app.svarla.domain.contacts.ContactResolver
@@ -21,6 +25,11 @@ import app.svarla.domain.notifications.NotificationHandler
 import app.svarla.ui.screens.call.IncomingCallScreen
 import app.svarla.ui.theme.SvarlaTheme
 import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import javax.inject.Inject
 
 /**
@@ -48,6 +57,28 @@ class IncomingCallActivity : ComponentActivity() {
     @Inject
     lateinit var notificationHandler: NotificationHandler
 
+    /**
+     * Grace period job: if VoiceCallManager stays in IDLE after this activity launches,
+     * it means the call already ended (no actual incoming call). We give a short grace
+     * period for the state to transition to RINGING on cold start, then finish.
+     */
+    private var idleGraceJob: Job? = null
+    private val activityScope = CoroutineScope(Dispatchers.Main + Job())
+
+    /** Stores the call ID to answer once mic permission is granted. */
+    private var pendingAnswerCallId: String? = null
+
+    private val micPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        val callId = pendingAnswerCallId
+        pendingAnswerCallId = null
+        if (granted && callId != null) {
+            answerAndNavigate(callId)
+        }
+        // If denied, stay on the incoming call screen — user can try again or decline
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -55,6 +86,19 @@ class IncomingCallActivity : ComponentActivity() {
 
         val callId = intent?.getStringExtra(EXTRA_CALL_ID) ?: ""
         val callerNumber = intent?.getStringExtra(EXTRA_CALLER_NUMBER) ?: ""
+
+        // If the VoiceCallManager is already IDLE at launch, the call may have already
+        // ended. Start a grace period — if state doesn't transition to RINGING within
+        // 2 seconds, this is a stale notification launch and we should finish.
+        if (voiceCallManager.callState.value.status == CallStatus.IDLE) {
+            idleGraceJob = activityScope.launch {
+                delay(2000)
+                // If still IDLE after grace period, no active incoming call exists
+                if (voiceCallManager.callState.value.status == CallStatus.IDLE) {
+                    finish()
+                }
+            }
+        }
 
         setContent {
             SvarlaTheme {
@@ -81,8 +125,16 @@ class IncomingCallActivity : ComponentActivity() {
                             finish()
                             return@Surface
                         }
-                        CallStatus.IDLE, CallStatus.RINGING -> {
-                            // Show the incoming call UI
+                        CallStatus.IDLE -> {
+                            // State hasn't transitioned yet on cold start.
+                            // The idleGraceJob will finish this activity if it stays IDLE.
+                            // Show a blank surface while waiting.
+                            return@Surface
+                        }
+                        CallStatus.RINGING -> {
+                            // Cancel the grace period — call is active
+                            idleGraceJob?.cancel()
+                            idleGraceJob = null
                         }
                     }
 
@@ -98,13 +150,15 @@ class IncomingCallActivity : ComponentActivity() {
                         onAnswer = {
                             val id = activeInfo?.callId.takeIf { !it.isNullOrEmpty() } ?: callId
                             notificationHandler.dismissCallNotification(id)
-                            voiceCallManager.answerCall(id)
-                            // Launch MainActivity for the active call screen
-                            val mainIntent = Intent(this@IncomingCallActivity, MainActivity::class.java).apply {
-                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            // Check mic permission before answering
+                            if (ContextCompat.checkSelfPermission(this@IncomingCallActivity, Manifest.permission.RECORD_AUDIO)
+                                == PackageManager.PERMISSION_GRANTED
+                            ) {
+                                answerAndNavigate(id)
+                            } else {
+                                pendingAnswerCallId = id
+                                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                             }
-                            startActivity(mainIntent)
-                            finish()
                         },
                         onDecline = {
                             val id = activeInfo?.callId.takeIf { !it.isNullOrEmpty() } ?: callId
@@ -116,6 +170,24 @@ class IncomingCallActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        idleGraceJob?.cancel()
+    }
+
+    /**
+     * Answers the call and navigates to the main activity.
+     * Called directly when mic permission is already granted, or after permission is granted.
+     */
+    private fun answerAndNavigate(callId: String) {
+        voiceCallManager.answerCall(callId)
+        val mainIntent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        startActivity(mainIntent)
+        finish()
     }
 
     /**

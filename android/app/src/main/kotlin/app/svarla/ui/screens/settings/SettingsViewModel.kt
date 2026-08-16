@@ -9,6 +9,7 @@ import app.svarla.data.remote.AuthManager
 import app.svarla.data.remote.api.NumbersApi
 import app.svarla.data.remote.dto.UpdateBlockInboundRequest
 import app.svarla.data.remote.dto.UpdateLabelRequest
+import app.svarla.domain.notifications.AutoStartHelper
 import app.svarla.domain.notifications.BatteryOptimizationHelper
 import app.svarla.domain.notifications.NotificationDeliveryMode
 import app.svarla.domain.notifications.NotificationDeliveryPreferences
@@ -27,7 +28,8 @@ class SettingsViewModel @Inject constructor(
     private val authManager: AuthManager,
     private val deliveryPreferences: NotificationDeliveryPreferences,
     private val pushEndpointManager: PushEndpointManager,
-    val batteryOptimizationHelper: BatteryOptimizationHelper
+    val batteryOptimizationHelper: BatteryOptimizationHelper,
+    val autoStartHelper: AutoStartHelper
 ) : ViewModel() {
 
     private val _numbers = MutableStateFlow<List<ProviderNumber>>(emptyList())

@@ -78,6 +78,7 @@ describe('Elks46TelephonyProvider', () => {
       expect(params.get('from')).toBe('+46701234567');
       expect(params.get('to')).toBe('+46709876543');
       expect(params.get('voice_start')).toBe('https://example.com/webhooks/46elks/voice_start');
+      expect(params.get('whenhangup')).toBe('https://example.com/webhooks/46elks/voice_event');
 
       expect(result).toEqual({
         callId: 'call-123',
@@ -378,6 +379,35 @@ describe('Elks46TelephonyProvider', () => {
         type: 'call_state_changed',
         callId: 'call-456',
         state: 'COMPLETED',
+      });
+    });
+
+    it('should emit call_state_changed with BUSY for busy status', async () => {
+      await provider.handleWebhook('voice_event', {
+        id: 'call-busy',
+        state: 'busy',
+        direction: 'outgoing',
+      }, {});
+
+      expect(emittedEvents).toHaveLength(1);
+      expect(emittedEvents[0]).toMatchObject({
+        type: 'call_state_changed',
+        callId: 'call-busy',
+        state: 'BUSY',
+      });
+    });
+
+    it('should read "state" field when "status" is not present', async () => {
+      await provider.handleWebhook('voice_event', {
+        id: 'call-state-field',
+        state: 'failed',
+      }, {});
+
+      expect(emittedEvents).toHaveLength(1);
+      expect(emittedEvents[0]).toMatchObject({
+        type: 'call_state_changed',
+        callId: 'call-state-field',
+        state: 'FAILED',
       });
     });
   });

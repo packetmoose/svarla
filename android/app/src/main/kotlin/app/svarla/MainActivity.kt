@@ -18,6 +18,7 @@ import app.svarla.domain.audio.AudioRouter
 import app.svarla.domain.call.VoiceCallManager
 import app.svarla.domain.contacts.ContactResolver
 import app.svarla.domain.layout.FormFactorManager
+import app.svarla.domain.notifications.AutoStartHelper
 import app.svarla.domain.notifications.NotificationDeliveryPreferences
 import app.svarla.domain.notifications.NotificationHandler
 import app.svarla.domain.notifications.PushEndpointManager
@@ -53,6 +54,9 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var pushEndpointManager: PushEndpointManager
 
+    @Inject
+    lateinit var autoStartHelper: AutoStartHelper
+
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { /* granted or not — we proceed either way */ }
@@ -81,6 +85,7 @@ class MainActivity : ComponentActivity() {
                         audioRouter = audioRouter,
                         deliveryPreferences = deliveryPreferences,
                         pushEndpointManager = pushEndpointManager,
+                        autoStartHelper = autoStartHelper,
                         initialRoute = getInitialRouteFromIntent(intent)
                     )
                 }

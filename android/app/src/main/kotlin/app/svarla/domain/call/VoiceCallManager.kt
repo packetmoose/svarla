@@ -778,7 +778,8 @@ class VoiceCallManager @Inject constructor(
                         handleIncomingCall(callId, from, providerNumber, providerNumberLabel)
                     }
                     "connected" -> handleCallConnected(callId)
-                    "disconnected", "completed" -> handleCallDisconnected(callId)
+                    "disconnected" -> handleCallDisconnected(callId)
+                    "completed" -> handleCallEnded(callId, strict = false)
                     "busy" -> handleCallBusy(callId)
                     "failed" -> handleCallFailed(callId)
                 }
@@ -837,6 +838,19 @@ class VoiceCallManager @Inject constructor(
     }
 
     private fun handleCallDisconnected(callId: String) {
+        handleCallEnded(callId, strict = true)
+    }
+
+    /**
+     * Handles call termination events.
+     *
+     * @param callId The call ID from the server event
+     * @param strict If true, require exact callId match (for "disconnected" events which
+     *   may come from internal SIP leg teardowns with non-matching IDs).
+     *   If false, accept the event even for non-matching callIds when in an active
+     *   call state (for "completed" events which indicate full call completion).
+     */
+    private fun handleCallEnded(callId: String, strict: Boolean) {
         val currentState = _callState.value
 
         if (currentState.status == CallStatus.IDLE || currentState.status == CallStatus.ENDED) {
@@ -845,10 +859,19 @@ class VoiceCallManager @Inject constructor(
 
         // Only accept disconnect if the callId matches the active call.
         // Vonage sends internal SIP leg events with different UUIDs that should not
-        // end the active call.
+        // end the active call — that's handled by strict mode.
         val activeCallId = currentState.activeCallInfo?.callId
         if (!activeCallId.isNullOrEmpty() && callId != activeCallId) {
-            Log.d(TAG, "Ignoring disconnect for non-matching callId: $callId (active: $activeCallId)")
+            if (!strict && (currentState.status == CallStatus.CONNECTED || currentState.status == CallStatus.DIALING)) {
+                // A "completed" event with a non-matching ID during an active call.
+                // This likely means the provider callId (not internal UUID) was broadcast.
+                // Accept it as a safety net since "completed" means the full call ended.
+                Log.w(TAG, "Accepting 'completed' for non-matching callId: $callId (active: $activeCallId) — " +
+                    "call is in ${currentState.status}, treating as remote hangup")
+                endCallInternal(CallEndReason.REMOTE_HANGUP)
+            } else {
+                Log.d(TAG, "Ignoring disconnect for non-matching callId: $callId (active: $activeCallId)")
+            }
             return
         }
 
