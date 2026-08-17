@@ -1,0 +1,25 @@
+# ─── CODEOWNERS ────────────────────────────────────────────────────────────────
+#
+# Requires review from the maintainer for changes to security-sensitive files.
+# This doesn't prevent a compromised account from approving its own PRs,
+# but it ensures these files don't get modified without explicit visibility
+# in the PR review interface.
+#
+# To enforce this: enable "Require review from Code Owners" in branch protection.
+#
+# ──────────────────────────────────────────────────────────────────────────────
+
+# CI workflows — control what gets built and how
+.github/workflows/          @packetmoose
+
+# GPG keys — control which signing key is trusted
+.github/keys/               @packetmoose
+
+# Release and build scripts — control the release pipeline
+scripts/                    @packetmoose
+
+# Makefile — orchestrates all builds
+Makefile                    @packetmoose
+
+# Dockerfile — controls what goes into the production container
+Dockerfile                  @packetmoose

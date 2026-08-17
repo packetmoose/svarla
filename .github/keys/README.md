@@ -13,6 +13,23 @@ gpg --armor --export YOUR_KEY_ID > .github/keys/maintainer.pub
 Then commit and push it. CI will use this key to verify that release tags
 were signed by the maintainer before building any artifacts.
 
+**Important:** Also add your key fingerprint as a repository secret to prevent
+key file tampering:
+
+```bash
+# Get your fingerprint
+gpg --list-keys --with-colons | grep '^fpr' | head -1 | cut -d: -f10
+
+# Add as a secret:
+# Settings → Secrets and variables → Actions → New repository secret
+# Name: TRUSTED_GPG_FINGERPRINT
+# Value: <your full fingerprint>
+```
+
+CI verifies that the key in this file matches the fingerprint in the secret.
+If someone replaces this file via a PR, the fingerprint won't match and CI
+will refuse to build.
+
 ## Verifying a release locally
 
 ```bash

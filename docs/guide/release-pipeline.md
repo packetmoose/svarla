@@ -285,11 +285,41 @@ apksigner verify --print-certs svarla-v1.2.0.apk
 
 ### Protecting the verification itself
 
-The tag verification only works if the verification infrastructure (workflow file, public key, scripts) cannot be tampered with. This is enforced by:
+The tag verification only works if the verification infrastructure (workflow file, public key, scripts) cannot be tampered with. This is enforced by multiple layers:
 
-- **Branch protection on `main`** — require pull requests, require approvals, no direct pushes
-- **Commit ancestry check** — CI verifies the tagged commit is on `main`, preventing tags that point to feature branch commits with modified workflows
-- **Code review** — any changes to `.github/workflows/`, `.github/keys/`, or `scripts/verify-tag.sh` are visible in PRs
+**1. GPG fingerprint pinned in GitHub secret**
+
+The trusted GPG key fingerprint is stored as a repository secret (`TRUSTED_GPG_FINGERPRINT`). CI verifies that the key file in `.github/keys/maintainer.pub` matches this fingerprint before trusting it. Even if someone replaces the key file via a PR, the fingerprint won't match and CI will refuse to build.
+
+Changing secrets requires admin access to repository settings, which triggers sudo mode (passkey re-authentication).
+
+Set this up after adding your GPG public key:
+
+```bash
+# Get your key fingerprint
+gpg --list-keys --with-colons | grep '^fpr' | head -1 | cut -d: -f10
+
+# Add it as a repository secret:
+# Settings → Secrets and variables → Actions → New repository secret
+# Name: TRUSTED_GPG_FINGERPRINT
+# Value: <your fingerprint>
+```
+
+**2. CODEOWNERS requires review for sensitive files**
+
+The `.github/CODEOWNERS` file marks security-sensitive paths as owned by the maintainer. With "Require review from Code Owners" enabled in branch protection, changes to these files are always flagged for review:
+
+- `.github/workflows/` — CI workflow definitions
+- `.github/keys/` — trusted GPG keys
+- `scripts/` — build and release scripts
+- `Makefile` — build orchestration
+- `Dockerfile` — production container definition
+
+**3. Commit ancestry check**
+
+CI verifies the tagged commit exists on `main`, preventing tags that point to feature branch commits with modified workflows.
+
+**4. Branch protection**
 
 Configure branch protection:
 
@@ -297,9 +327,12 @@ Configure branch protection:
 Repository → Settings → Branches → Add rule for "main"
   ✓ Require a pull request before merging
   ✓ Require approvals (1+)
+  ✓ Require review from code owners
   ✓ Require status checks to pass
   ✓ Do not allow bypassing the above settings (optional, strict mode)
 ```
+
+**Residual risk:** If an attacker gains access to your active GitHub session, they could potentially approve their own PR and merge it. Passkeys make this scenario unlikely (phishing-resistant, hardware-bound), and the fingerprint-in-secret adds a second barrier. For full protection against this, an organization-level push ruleset (Enterprise Cloud) would be needed to make the files truly immutable without passkey re-auth.
 
 ## Development Workflow
 

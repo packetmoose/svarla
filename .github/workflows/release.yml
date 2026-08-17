@@ -43,7 +43,43 @@ jobs:
           echo "Verified: commit ${{ github.sha }} is on main"
 
       - name: Verify tag signature
-        run: make ci-verify-tag TAG="${GITHUB_REF#refs/tags/}"
+        env:
+          TRUSTED_GPG_FINGERPRINT: ${{ secrets.TRUSTED_GPG_FINGERPRINT }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+          TRUSTED_KEY=".github/keys/maintainer.pub"
+
+          if [ -z "$TRUSTED_GPG_FINGERPRINT" ]; then
+            echo "ERROR: TRUSTED_GPG_FINGERPRINT secret is not set."
+            echo "Set it in Settings → Secrets to the fingerprint of the maintainer GPG key."
+            exit 1
+          fi
+
+          # Import key into temporary keyring
+          export GNUPGHOME="$(mktemp -d)"
+          trap 'rm -rf "$GNUPGHOME"' EXIT
+          gpg --batch --import "$TRUSTED_KEY" 2>/dev/null
+
+          # Verify the key file hasn't been swapped — fingerprint must match the secret
+          ACTUAL_FINGERPRINT=$(gpg --list-keys --with-colons 2>/dev/null | grep '^fpr' | head -1 | cut -d: -f10)
+          if [ "$ACTUAL_FINGERPRINT" != "$TRUSTED_GPG_FINGERPRINT" ]; then
+            echo "ERROR: Key fingerprint mismatch!"
+            echo "  Expected (from secret): $TRUSTED_GPG_FINGERPRINT"
+            echo "  Actual (from file):     $ACTUAL_FINGERPRINT"
+            echo ""
+            echo "  The key file .github/keys/maintainer.pub may have been tampered with."
+            exit 1
+          fi
+
+          echo "Key fingerprint verified against secret"
+
+          # Verify the tag signature
+          if ! git verify-tag "$TAG" 2>/dev/null; then
+            echo "ERROR: Tag $TAG is NOT signed by the trusted key."
+            exit 1
+          fi
+
+          echo "Tag signature verified: $TAG"
 
   download-apk:
     runs-on: ubuntu-latest
