@@ -51,6 +51,13 @@ export default defineConfig({
             { text: '46elks', link: '/guide/provider-46elks' },
             { text: 'ModemManager', link: '/guide/provider-modemmanager' }
           ]
+        },
+        {
+          text: 'Security',
+          items: [
+            { text: 'Verifying Releases', link: '/guide/verify' },
+            { text: 'Release Pipeline', link: '/guide/release-pipeline' }
+          ]
         }
       ],
       '/config/': [
