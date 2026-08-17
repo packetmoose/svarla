@@ -31,8 +31,8 @@ COPY server-config.yaml ./
 COPY public/ ./public/
 
 # Copy the signed APK into the container for self-hosted distribution.
-# In CI, APK_FILE is set to the path of the APK within the build context.
-# For local dev builds without an APK, omit the build-arg and no APK will be included.
+# - Release builds: APK_FILE points to the real signed APK (set by build-server.sh or CI)
+# - Dev builds: defaults to .gitkeep placeholder (download page shows "not available")
 ARG APK_FILE="public/downloads/.gitkeep"
 RUN mkdir -p ./public/downloads
 COPY ${APK_FILE} ./public/downloads/svarla.apk

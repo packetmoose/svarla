@@ -127,6 +127,26 @@ Each new server image includes the matching Android APK. After updating your ser
 
 See [Android App — Updating](/guide/android#updating-the-app) for details.
 
+## Building from source
+
+If you prefer to build and run everything locally without pulling from GHCR:
+
+```bash
+make all
+```
+
+This builds the APK (signed with your own keystore), bakes it into the server container, and builds the mediabridge container. Then update your `docker-compose.yml` to use the local images:
+
+```yaml
+services:
+  server:
+    image: svarla-server:dev
+  mediabridge:
+    image: svarla-mediabridge:dev
+```
+
+See [Release Pipeline](/guide/release-pipeline) for full details on the build system and key management.
+
 ## Firewall / ports that must be open
 
 These ports need to be accessible from the internet for Svarla to work:

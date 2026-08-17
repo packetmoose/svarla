@@ -23,19 +23,20 @@ You can also grab the APK from [GitHub Releases](https://github.com/packetmoose/
 
 ### Building from source
 
-If you want to build the app yourself:
+If you want to build the app yourself with your own signing key:
 
 ```bash
-cd android
-./gradlew assembleDebug
-# APK → app/build/outputs/apk/debug/app-debug.apk
+make release-apk
+# APK → build-output/svarla-signed.apk
 ```
 
-Requires JDK 17 and Android SDK platform 35. Or build without any local SDK using Docker:
+This builds the APK in Docker (reproducible, requires JDK 17 and Android SDK automatically) and signs it with your keystore. See [Release Pipeline](/guide/release-pipeline) for full details on key setup.
+
+For a debug build without signing:
 
 ```bash
-docker build -f android/Dockerfile.build -t svarla-android-builder android/
-docker run --rm -v "$(pwd)/android/output:/output" svarla-android-builder
+make apk BUILD_TYPE=debug
+# APK → build-output/app-debug.apk
 ```
 
 ## Connecting to the server

@@ -1,0 +1,5 @@
+# Replace this file with your actual GPG public key.
+# Export it with: gpg --armor --export YOUR_KEY_ID > .github/keys/maintainer.pub
+#
+# CI uses this key to verify signed release tags.
+# Without a valid key here, the release workflow will fail.

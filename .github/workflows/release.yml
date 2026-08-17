@@ -13,7 +13,7 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  version:
+  verify:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -32,9 +32,12 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Version: ${VERSION}, Tag: ${TAG}"
 
+      - name: Verify tag signature
+        run: make ci-verify-tag TAG="${GITHUB_REF#refs/tags/}"
+
   download-apk:
     runs-on: ubuntu-latest
-    needs: version
+    needs: verify
     outputs:
       apk_name: ${{ steps.download.outputs.apk_name }}
     steps:
@@ -43,7 +46,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ needs.version.outputs.tag }}"
+          TAG="${{ needs.verify.outputs.tag }}"
           APK_NAME="svarla-${TAG}.apk"
           REPO="${{ github.repository }}"
 
@@ -51,13 +54,12 @@ jobs:
 
           # Retry loop: wait up to 60s for the draft release to appear
           for i in $(seq 1 12); do
-            # Find the draft release matching this tag
-            RELEASE=$(gh api "repos/${REPO}/releases" --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == true)" 2>/dev/null || echo "")
+            RELEASE=$(gh api "repos/${REPO}/releases" \
+              --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == true)" 2>/dev/null || echo "")
 
             if [ -n "$RELEASE" ]; then
               echo "Found draft release for ${TAG}"
 
-              # Get the APK asset download URL
               ASSET_URL=$(echo "$RELEASE" | jq -r ".assets[] | select(.name == \"${APK_NAME}\") | .url")
 
               if [ -n "$ASSET_URL" ] && [ "$ASSET_URL" != "null" ]; then
@@ -79,6 +81,35 @@ jobs:
           echo "ERROR: Could not find draft release with APK for tag ${TAG} after 60s"
           exit 1
 
+      - name: Verify APK checksum
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.verify.outputs.tag }}"
+          REPO="${{ github.repository }}"
+          APK_NAME="${{ steps.download.outputs.apk_name }}"
+
+          # Download checksum file from the draft release
+          RELEASE=$(gh api "repos/${REPO}/releases" \
+            --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == true)")
+          CHECKSUM_URL=$(echo "$RELEASE" | jq -r '.assets[] | select(.name == "checksums.sha256") | .url')
+
+          if [ -n "$CHECKSUM_URL" ] && [ "$CHECKSUM_URL" != "null" ]; then
+            gh api "$CHECKSUM_URL" -H "Accept: application/octet-stream" > checksums.sha256
+            echo "Verifying APK checksum..."
+            EXPECTED=$(awk '{print $1}' checksums.sha256)
+            ACTUAL=$(sha256sum "$APK_NAME" | awk '{print $1}')
+            if [ "$EXPECTED" != "$ACTUAL" ]; then
+              echo "ERROR: Checksum mismatch!"
+              echo "  Expected: $EXPECTED"
+              echo "  Actual:   $ACTUAL"
+              exit 1
+            fi
+            echo "Checksum verified: $ACTUAL"
+          else
+            echo "WARNING: No checksum file found in draft release, skipping verification"
+          fi
+
       - name: Upload APK as workflow artifact
         uses: actions/upload-artifact@v4
         with:
@@ -88,7 +119,7 @@ jobs:
 
   server:
     runs-on: ubuntu-latest
-    needs: [version, download-apk]
+    needs: [verify, download-apk]
     steps:
       - uses: actions/checkout@v4
 
@@ -112,26 +143,16 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push server image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          build-args: |
-            APK_FILE=apk/${{ needs.download-apk.outputs.apk_name }}
-          tags: |
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/svarla-server:${{ needs.version.outputs.tag }}
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/svarla-server:latest
-          labels: |
-            org.opencontainers.image.version=${{ needs.version.outputs.version }}
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-          cache-from: type=gha,scope=server
-          cache-to: type=gha,mode=max,scope=server
+        run: |
+          make ci-server \
+            APK_PATH="./apk/${{ needs.download-apk.outputs.apk_name }}" \
+            IMAGE_TAG="${{ needs.verify.outputs.tag }}" \
+            REGISTRY="${{ env.REGISTRY }}/${{ github.repository_owner }}" \
+            PLATFORM="linux/amd64,linux/arm64"
 
   mediabridge:
     runs-on: ubuntu-latest
-    needs: version
+    needs: verify
     steps:
       - uses: actions/checkout@v4
 
@@ -149,43 +170,33 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push mediabridge image
-        uses: docker/build-push-action@v5
-        with:
-          context: ./mediabridge
-          file: ./mediabridge/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/svarla-mediabridge:${{ needs.version.outputs.tag }}
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/svarla-mediabridge:latest
-          labels: |
-            org.opencontainers.image.version=${{ needs.version.outputs.version }}
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-          cache-from: type=gha,scope=mediabridge
-          cache-to: type=gha,mode=max,scope=mediabridge
+        run: |
+          make ci-mediabridge \
+            IMAGE_TAG="${{ needs.verify.outputs.tag }}" \
+            REGISTRY="${{ env.REGISTRY }}/${{ github.repository_owner }}" \
+            PLATFORM="linux/amd64,linux/arm64"
 
   publish-release:
     runs-on: ubuntu-latest
-    needs: [version, server, mediabridge]
+    needs: [verify, server, mediabridge]
     steps:
       - name: Publish draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${{ needs.version.outputs.tag }}"
+          TAG="${{ needs.verify.outputs.tag }}"
           REPO="${{ github.repository }}"
 
           echo "Publishing draft release for tag ${TAG}..."
 
-          # Find the draft release
-          RELEASE_ID=$(gh api "repos/${REPO}/releases" --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == true) | .id")
+          RELEASE_ID=$(gh api "repos/${REPO}/releases" \
+            --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == true) | .id")
 
           if [ -z "$RELEASE_ID" ]; then
             echo "ERROR: Could not find draft release for tag ${TAG}"
             exit 1
           fi
 
-          # Un-draft the release
           gh api "repos/${REPO}/releases/${RELEASE_ID}" \
             -X PATCH \
             -f draft=false
