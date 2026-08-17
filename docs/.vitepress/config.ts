@@ -1,4 +1,10 @@
 import { defineConfig } from 'vitepress'
+import { cpSync, mkdirSync } from 'node:fs'
+import { resolve, dirname } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const keysSource = resolve(__dirname, '../../.github/keys')
 
 export default defineConfig({
   title: 'Svarla',
@@ -11,6 +17,15 @@ export default defineConfig({
   head: [
     ['link', { rel: 'icon', href: '/favicon.ico' }]
   ],
+
+  // Copy signing public keys from .github/keys/ into the docs site output
+  // so users can reference them directly (e.g., cosign verify --key https://...keys/cosign.pub)
+  buildEnd({ outDir }) {
+    const keysOut = resolve(outDir, 'keys')
+    mkdirSync(keysOut, { recursive: true })
+    cpSync(resolve(keysSource, 'maintainer.pub'), resolve(keysOut, 'maintainer.pub'))
+    cpSync(resolve(keysSource, 'cosign.pub'), resolve(keysOut, 'cosign.pub'))
+  },
 
   themeConfig: {
     nav: [

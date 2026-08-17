@@ -1,5 +1,0 @@
-# Replace this file with your actual Cosign public key.
-# Generate with: cosign generate-key-pair
-# Then copy cosign.pub here.
-#
-# Users verify container images against this key.

@@ -1,4 +1,0 @@
-# Replace this file with your actual GPG public key.
-# Export with: gpg --armor --export YOUR_KEY_ID > docs/public/keys/maintainer.pub
-#
-# Users verify git tags against this key.
