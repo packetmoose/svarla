@@ -60,7 +60,7 @@ jobs:
           trap 'rm -rf "$GNUPGHOME"' EXIT
           gpg --batch --import "$TRUSTED_KEY" 2>/dev/null
 
-          # Verify the key file hasn't been swapped — fingerprint must match the secret
+          # Verify the key file hasn't been swapped
           ACTUAL_FINGERPRINT=$(gpg --list-keys --with-colons 2>/dev/null | grep '^fpr' | head -1 | cut -d: -f10)
           if [ "$ACTUAL_FINGERPRINT" != "$TRUSTED_GPG_FINGERPRINT" ]; then
             echo "ERROR: Key fingerprint mismatch!"
@@ -81,99 +81,38 @@ jobs:
 
           echo "Tag signature verified: $TAG"
 
-  download-apk:
+  build-apk:
     runs-on: ubuntu-latest
     needs: verify
-    outputs:
-      apk_name: ${{ steps.download.outputs.apk_name }}
     steps:
-      - name: Wait for draft release and download APK
-        id: download
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@v4
+
+      - name: Build unsigned APK
         run: |
           TAG="${{ needs.verify.outputs.tag }}"
-          APK_NAME="svarla-${TAG}.apk"
-          REPO="${{ github.repository }}"
+          VERSION_NAME="${TAG#v}"
+          VERSION_CODE="$(git rev-list --count HEAD)"
+          make apk VERSION_NAME="$VERSION_NAME" VERSION_CODE="$VERSION_CODE"
 
-          echo "Waiting for draft release with APK for tag ${TAG}..."
-
-          # Retry loop: wait up to 60s for the draft release to appear
-          for i in $(seq 1 12); do
-            RELEASE=$(gh api "repos/${REPO}/releases" \
-              --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == true)" 2>/dev/null || echo "")
-
-            if [ -n "$RELEASE" ]; then
-              echo "Found draft release for ${TAG}"
-
-              ASSET_URL=$(echo "$RELEASE" | jq -r ".assets[] | select(.name == \"${APK_NAME}\") | .url")
-
-              if [ -n "$ASSET_URL" ] && [ "$ASSET_URL" != "null" ]; then
-                echo "Downloading APK from ${ASSET_URL}"
-                gh api "$ASSET_URL" -H "Accept: application/octet-stream" > "${APK_NAME}"
-
-                if [ -f "$APK_NAME" ] && [ -s "$APK_NAME" ]; then
-                  echo "APK downloaded successfully: ${APK_NAME}"
-                  echo "apk_name=${APK_NAME}" >> "$GITHUB_OUTPUT"
-                  exit 0
-                fi
-              fi
-            fi
-
-            echo "Attempt $i/12: Draft release or APK not found yet. Waiting 5s..."
-            sleep 5
-          done
-
-          echo "ERROR: Could not find draft release with APK for tag ${TAG} after 60s"
-          exit 1
-
-      - name: Verify APK checksum
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Compute checksum
         run: |
-          TAG="${{ needs.verify.outputs.tag }}"
-          REPO="${{ github.repository }}"
-          APK_NAME="${{ steps.download.outputs.apk_name }}"
-
-          # Download checksum file from the draft release
-          RELEASE=$(gh api "repos/${REPO}/releases" \
-            --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == true)")
-          CHECKSUM_URL=$(echo "$RELEASE" | jq -r '.assets[] | select(.name == "checksums.sha256") | .url')
-
-          if [ -n "$CHECKSUM_URL" ] && [ "$CHECKSUM_URL" != "null" ]; then
-            gh api "$CHECKSUM_URL" -H "Accept: application/octet-stream" > checksums.sha256
-            echo "Verifying APK checksum..."
-            EXPECTED=$(awk '{print $1}' checksums.sha256)
-            ACTUAL=$(sha256sum "$APK_NAME" | awk '{print $1}')
-            if [ "$EXPECTED" != "$ACTUAL" ]; then
-              echo "ERROR: Checksum mismatch!"
-              echo "  Expected: $EXPECTED"
-              echo "  Actual:   $ACTUAL"
-              exit 1
-            fi
-            echo "Checksum verified: $ACTUAL"
-          else
-            echo "WARNING: No checksum file found in draft release, skipping verification"
-          fi
+          sha256sum build-output/app-release-unsigned.apk > build-output/checksums.sha256
+          cat build-output/checksums.sha256
 
       - name: Upload APK as workflow artifact
         uses: actions/upload-artifact@v4
         with:
-          name: release-apk
-          path: ${{ steps.download.outputs.apk_name }}
-          retention-days: 1
+          name: unsigned-apk
+          path: |
+            build-output/app-release-unsigned.apk
+            build-output/checksums.sha256
+          retention-days: 7
 
   server:
     runs-on: ubuntu-latest
-    needs: [verify, download-apk]
+    needs: verify
     steps:
       - uses: actions/checkout@v4
-
-      - name: Download APK artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: release-apk
-          path: ./apk
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -191,7 +130,6 @@ jobs:
       - name: Build and push server image
         run: |
           make ci-server \
-            APK_PATH="./apk/${{ needs.download-apk.outputs.apk_name }}" \
             IMAGE_TAG="${{ needs.verify.outputs.tag }}" \
             REGISTRY="${{ env.REGISTRY }}/${{ github.repository_owner }}" \
             PLATFORM="linux/amd64,linux/arm64"
@@ -222,29 +160,60 @@ jobs:
             REGISTRY="${{ env.REGISTRY }}/${{ github.repository_owner }}" \
             PLATFORM="linux/amd64,linux/arm64"
 
-  publish-release:
+  create-draft-release:
     runs-on: ubuntu-latest
-    needs: [verify, server, mediabridge]
+    needs: [verify, build-apk, server, mediabridge]
     steps:
-      - name: Publish draft release
+      - uses: actions/checkout@v4
+
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: unsigned-apk
+          path: ./build-output
+
+      - name: Create draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${{ needs.verify.outputs.tag }}"
           REPO="${{ github.repository }}"
+          RELEASES_DIR="docs/releases"
+          RELEASE_FILE="${RELEASES_DIR}/${TAG}.md"
 
-          echo "Publishing draft release for tag ${TAG}..."
-
-          RELEASE_ID=$(gh api "repos/${REPO}/releases" \
-            --jq ".[] | select(.tag_name == \"${TAG}\" and .draft == true) | .id")
-
-          if [ -z "$RELEASE_ID" ]; then
-            echo "ERROR: Could not find draft release for tag ${TAG}"
-            exit 1
+          # Build release body from release notes file
+          if [ -f "$RELEASE_FILE" ]; then
+            RELEASE_CONTENT="$(sed '1{/^# /d}' "$RELEASE_FILE")"
+          else
+            RELEASE_CONTENT="Release ${TAG}"
           fi
 
-          gh api "repos/${REPO}/releases/${RELEASE_ID}" \
-            -X PATCH \
-            -f draft=false
+          RELEASE_BODY="${RELEASE_CONTENT}
 
-          echo "Release ${TAG} published successfully!"
+          ## Docker
+
+          Pull the container images:
+          \`\`\`
+          docker pull ${REGISTRY}/${GITHUB_REPOSITORY_OWNER}/svarla-server:${TAG}
+          docker pull ${REGISTRY}/${GITHUB_REPOSITORY_OWNER}/svarla-mediabridge:${TAG}
+          \`\`\`
+
+          ## Status
+
+          ⚠️ **This is a draft release.** Artifacts are unsigned.
+          The maintainer will sign the APK and container images, then publish this release.
+
+          ## Build Info
+
+          - Commit: ${{ github.sha }}
+          - Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          # Create draft release with unsigned APK
+          gh release create "$TAG" \
+            --title "Svarla $TAG" \
+            --notes "$RELEASE_BODY" \
+            --draft \
+            "build-output/app-release-unsigned.apk#svarla-${TAG}-unsigned.apk" \
+            "build-output/checksums.sha256#checksums.sha256"
+
+          echo "Draft release created for $TAG"

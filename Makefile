@@ -1,19 +1,22 @@
 # ─── Svarla Build System ──────────────────────────────────────────────────────
 #
-# Usage:
+# Development:
 #   make apk                Build unsigned APK (Docker, no signing)
 #   make sign-apk           Sign the APK with local keystore
-#   make server             Build server container (includes APK if available)
+#   make server             Build server container
 #   make mediabridge        Build mediabridge container
-#   make all                Build everything (apk + sign + server + mediabridge)
-#   make release            Full release: build, sign, tag, publish draft
+#   make all                Build everything (apk + sign + containers)
+#
+# Release (two-phase):
+#   make release-tag        Phase 1: create signed git tag, push (triggers CI)
+#   make release-sign       Phase 2: sign CI artifacts, publish release
+#   make release            Both phases with CI wait (one-shot convenience)
 #
 # Environment overrides (for CI or custom builds):
+#   BUILD_TYPE=debug        APK build type (debug/release)
 #   VERSION_NAME=1.2.0      APK version string
 #   VERSION_CODE=42         APK version code integer
-#   BUILD_TYPE=debug        APK build type (debug/release)
 #   KEYSTORE_PATH=~/my.ks   Path to signing keystore
-#   APK_PATH=./my.apk       Signed APK to bake into server image
 #   IMAGE_TAG=v1.2.0        Container image tag
 #   REGISTRY=ghcr.io/user   Container registry prefix
 #   PUSH=true               Push images to registry after build
@@ -34,11 +37,6 @@ REGISTRY ?=
 PUSH ?= false
 PLATFORM ?=
 
-# Derived
-APK_UNSIGNED := $(OUTPUT_DIR)/app-release-unsigned.apk
-APK_SIGNED := $(OUTPUT_DIR)/svarla-signed.apk
-APK_PATH ?= $(APK_SIGNED)
-
 # ─── Development Targets ──────────────────────────────────────────────────────
 
 .PHONY: apk
@@ -48,12 +46,13 @@ apk: ## Build unsigned APK in Docker
 
 .PHONY: sign-apk
 sign-apk: ## Sign the built APK with local keystore
-	APK_INPUT=$(APK_UNSIGNED) APK_OUTPUT=$(APK_SIGNED) \
+	APK_INPUT=$(OUTPUT_DIR)/app-release-unsigned.apk \
+		APK_OUTPUT=$(OUTPUT_DIR)/svarla-signed.apk \
 		./scripts/sign-apk.sh
 
 .PHONY: server
-server: ## Build server container image (includes APK if available)
-	APK_PATH=$(APK_PATH) IMAGE_TAG=$(IMAGE_TAG) REGISTRY=$(REGISTRY) \
+server: ## Build server container image
+	IMAGE_TAG=$(IMAGE_TAG) REGISTRY=$(REGISTRY) \
 		PUSH=$(PUSH) PLATFORM="$(PLATFORM)" \
 		./scripts/build-server.sh
 
@@ -68,12 +67,20 @@ all: apk sign-apk server mediabridge ## Build everything (APK + sign + container
 
 # ─── Release Targets ──────────────────────────────────────────────────────────
 
+.PHONY: release-tag
+release-tag: ## Phase 1: create signed tag, push (triggers CI)
+	./scripts/release-tag.sh
+
+.PHONY: release-sign
+release-sign: ## Phase 2: sign CI artifacts (APK + containers), publish release
+	./scripts/release-sign.sh
+
 .PHONY: release
-release: ## Full release: build APK, sign, create signed tag, push draft
+release: ## Full release: tag + wait for CI + sign + publish
 	./scripts/release.sh
 
 .PHONY: release-apk
-release-apk: apk sign-apk ## Build and sign APK (no tag, no publish)
+release-apk: apk sign-apk ## Build and sign APK locally (no tag, no publish)
 
 # ─── CI Targets (used by GitHub Actions) ──────────────────────────────────────
 
@@ -83,7 +90,7 @@ ci-verify-tag: ## Verify the signed git tag (CI only)
 
 .PHONY: ci-server
 ci-server: ## Build and push server container (CI only)
-	APK_PATH=$(APK_PATH) IMAGE_TAG=$(IMAGE_TAG) REGISTRY=$(REGISTRY) \
+	IMAGE_TAG=$(IMAGE_TAG) REGISTRY=$(REGISTRY) \
 		PUSH=true PLATFORM="$(PLATFORM)" \
 		./scripts/build-server.sh
 
@@ -98,7 +105,6 @@ ci-mediabridge: ## Build and push mediabridge container (CI only)
 .PHONY: clean
 clean: ## Remove build artifacts
 	rm -rf $(OUTPUT_DIR)
-	rm -f $(REPO_ROOT)/apk-for-build.tmp
 
 .PHONY: verify-tag
 verify-tag: ## Verify a signed git tag locally
@@ -118,6 +124,7 @@ help: ## Show this help
 	@echo "  make all                          Build everything locally"
 	@echo "  make apk BUILD_TYPE=debug         Build debug APK"
 	@echo "  make server IMAGE_TAG=v1.2.0      Build server with version tag"
-	@echo "  make release                      Full release flow"
-	@echo "  make ci-server REGISTRY=ghcr.io/packetmoose IMAGE_TAG=v1.2.0"
+	@echo "  make release-tag                  Create signed tag, trigger CI"
+	@echo "  make release-sign                 Sign artifacts, publish release"
+	@echo "  make release                      Full release (tag + wait + sign)"
 	@echo ""

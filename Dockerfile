@@ -30,12 +30,12 @@ COPY --from=builder /app/dist/migrations ./migrations-compiled
 COPY server-config.yaml ./
 COPY public/ ./public/
 
-# Copy the signed APK into the container for self-hosted distribution.
-# - Release builds: APK_FILE points to the real signed APK (set by build-server.sh or CI)
-# - Dev builds: defaults to .gitkeep placeholder (download page shows "not available")
-ARG APK_FILE="public/downloads/.gitkeep"
+# APK downloads directory.
+# The APK is provisioned at runtime by ApkProvisioningService:
+# - Production: fetched from GitHub release matching the server version
+# - Development: volume-mounted from local build output
+# - Self-builders: volume-mounted or provided via APK_SOURCE=local
 RUN mkdir -p ./public/downloads
-COPY ${APK_FILE} ./public/downloads/svarla.apk
 
 EXPOSE 3000
 

@@ -38,12 +38,14 @@ services:
       BASE_URL: ""
       CORS_ORIGIN: ""
       MEDIA_BRIDGE_URL: http://mediabridge:9090
+      APK_SOURCE: local
     depends_on:
       db:
         condition: service_healthy
     restart: unless-stopped
     volumes:
       - ./server-config.yaml:/app/server-config.yaml:ro
+      - ./build-output/svarla-signed.apk:/app/public/downloads/svarla.apk:ro
 
   mediabridge:
     build:

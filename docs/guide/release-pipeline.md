@@ -1,16 +1,15 @@
 # Release Pipeline
 
-Svarla uses a secure release pipeline where CI builds artifacts but signing keys never leave the maintainer's machine. This page documents the full flow, key management, and how to perform a release.
+Svarla uses a two-phase release pipeline where CI builds all artifacts transparently, and the maintainer signs them locally before publishing.
 
 ## Design Principles
 
-- **All code is reviewed** through pull requests before reaching `main`.
-- **Release tags are cryptographically signed** by the maintainer.
-- **CI verifies the tag signature** before building anything.
+- **CI builds everything** — fully transparent, public logs, reproducible.
+- **Maintainer signs everything** — APK (Android keystore) and container images (Cosign).
 - **Private signing keys never exist in CI** — not as secrets, not as artifacts.
-- **One command** performs the entire release from a development laptop.
+- **Two commands** to perform a release — no waiting at the terminal required.
 - **Platform-agnostic build scripts** — the same Makefile works locally and in CI.
-- **Users building from source** can use their own signing keys with no GitHub dependency.
+- **Self-builders** can use their own signing keys with no GitHub dependency.
 
 ## Trust Model
 
@@ -19,33 +18,34 @@ Svarla uses a secure release pipeline where CI builds artifacts but signing keys
 | Source changes | Pull request review |
 | Main branch | GitHub branch protection |
 | Release identity | Signed git tag (GPG) |
-| Build process | GitHub Actions (verified tag) |
-| APK authenticity | Android signing key (local) |
-| Container contents | APK baked in at build time |
-| Release approval | Maintainer local signing |
+| Build process | GitHub Actions (public logs) |
+| APK authenticity | Android signing key (maintainer) |
+| Container authenticity | Cosign signature (maintainer) |
+| Release approval | Maintainer signs + publishes |
 
 ## High-Level Flow
 
 ```
-    main branch (reviewed code)
-            │
-            ▼
-   make release (local)
-     ├── Build APK in Docker (reproducible)
-     ├── Sign APK with local keystore
-     ├── Create signed git tag (GPG)
-     ├── Push tag to GitHub
-     └── Create draft release with APK attached
-            │
-            ▼
-   GitHub Actions (triggered by tag)
-     ├── Verify tag GPG signature ← fails if not signed
-     ├── Download APK from draft release
-     ├── Verify APK checksum
-     ├── Build server container (APK baked in)
-     ├── Build mediabridge container
-     ├── Push images to GHCR
-     └── Publish (un-draft) the release
+Phase 1: make release-tag
+    ├── Validate (clean main, GPG key configured)
+    ├── Create signed git tag (git tag -s)
+    └── Push tag → triggers CI
+
+CI (automatic, ~5-10 minutes):
+    ├── Verify tag GPG signature + fingerprint
+    ├── Verify commit is on main
+    ├── Build unsigned APK in Docker
+    ├── Build server container → push to GHCR (unsigned)
+    ├── Build mediabridge container → push to GHCR (unsigned)
+    └── Create draft release with unsigned APK + checksums
+
+Phase 2: make release-sign
+    ├── Download unsigned APK from draft release
+    ├── Sign APK with Android keystore
+    ├── Sign container images with Cosign (by digest)
+    ├── Upload signed APK to release
+    ├── Update release body with verification commands
+    └── Publish (un-draft) the release
 ```
 
 ## Prerequisites
@@ -57,6 +57,7 @@ Svarla uses a secure release pipeline where CI builds artifacts but signing keys
 - `make`
 - `gh` (GitHub CLI, authenticated)
 - `gpg` with a signing key
+- `cosign` (for container image signing)
 
 ### Key Setup
 
@@ -66,40 +67,34 @@ You need three separate keys:
 |-----|---------|----------|
 | GPG signing key | Sign git tags | `~/.gnupg/` |
 | Android keystore | Sign APKs | `~/.android/release.keystore` |
-| SSH key (optional) | Push to GitHub | `~/.ssh/` |
+| Cosign key pair | Sign container images | `~/.cosign/cosign.key` + `cosign.pub` |
 
 #### GPG Key
-
-Generate if you don't have one:
 
 ```bash
 gpg --full-generate-key
 # Choose: RSA and RSA, 4096 bits, does not expire
-```
 
-Configure git to use it:
-
-```bash
 gpg --list-secret-keys --keyid-format=long
-# Note your key ID (e.g., 3AA5C34371567BD2)
+# Note your key ID
 
-git config --global user.signingkey 3AA5C34371567BD2
+git config --global user.signingkey YOUR_KEY_ID
 ```
 
-Export the public key and commit it to the repository:
+Export the public key to the repository:
 
 ```bash
-gpg --armor --export 3AA5C34371567BD2 > .github/keys/maintainer.pub
-git add .github/keys/maintainer.pub
-git commit -m "chore: add maintainer GPG public key"
-git push
+gpg --armor --export YOUR_KEY_ID > .github/keys/maintainer.pub
 ```
 
-CI uses this public key to verify release tags.
+Add the fingerprint as a repository secret (`TRUSTED_GPG_FINGERPRINT`):
+
+```bash
+gpg --list-keys --with-colons | grep '^fpr' | head -1 | cut -d: -f10
+# → Settings → Secrets → Actions → New: TRUSTED_GPP_FINGERPRINT
+```
 
 #### Android Keystore
-
-Generate if you don't have one:
 
 ```bash
 keytool -genkey -v \
@@ -109,51 +104,89 @@ keytool -genkey -v \
   -alias release
 ```
 
+#### Cosign Key Pair
+
+```bash
+cosign generate-key-pair
+# Creates cosign.key (private) and cosign.pub (public)
+mv cosign.key ~/.cosign/cosign.key
+cp cosign.pub .github/keys/cosign.pub
+```
+
+Commit `cosign.pub` to the repository so users can verify container signatures.
+
 ::: warning
-Back up your keystore and password securely. If lost, you cannot publish APK updates that Android recognizes as the same app.
+Back up all keys and passwords securely. The Android keystore cannot be rotated without users reinstalling the app.
 :::
 
 ## Performing a Release
 
-### 1. Prepare
-
-Ensure you're on `main` with a clean working directory and a release notes file:
+### 1. Prepare release notes
 
 ```bash
-git checkout main
-git pull
 # Create docs/releases/v1.2.0.md with release notes
 git add docs/releases/v1.2.0.md
 git commit -m "docs: add v1.2.0 release notes"
 git push
 ```
 
-### 2. Release
+### 2. Phase 1 — Tag and trigger CI
+
+```bash
+make release-tag
+```
+
+This creates a signed git tag and pushes it. CI begins building.
+
+### 3. Phase 2 — Sign and publish
+
+Once CI completes (check GitHub Actions), run:
+
+```bash
+make release-sign
+```
+
+This downloads the unsigned APK, signs it, signs the container images with Cosign, and publishes the release.
+
+### One-shot alternative
+
+If you prefer to wait at the terminal:
 
 ```bash
 make release
 ```
 
-This single command:
-1. Finds the unreleased version from `docs/releases/`
-2. Builds the APK in Docker (reproducible)
-3. Prompts for your keystore password and signs the APK
-4. Creates a signed git tag (`git tag -s`)
-5. Pushes the tag (triggers CI)
-6. Creates a draft GitHub release with the APK attached
+This runs both phases with an automatic CI wait loop in between.
 
-### 3. Monitor
+## APK Distribution
 
-Watch CI at `https://github.com/packetmoose/svarla/actions`. CI will:
-1. Verify your GPG tag signature
-2. Download and verify the APK checksum
-3. Build containers with the APK baked in
-4. Push to GHCR
-5. Publish the release
+The signed APK is distributed to users through the server itself:
 
-## Building from Source
+- **Production containers**: On first start, the server fetches the signed APK from the matching GitHub release and caches it locally.
+- **Download page**: Users visit their Svarla instance → see a download banner (Android) or navigate to the download page.
+- **Version check**: The Android app checks `GET /api/version` on launch and shows an update banner if outdated.
 
-Users who want to build everything locally with their own signing key:
+### APK Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `APK_SOURCE` | `auto` | `local` = serve mounted file, `remote` = fetch from URL, `auto` = use local if exists else fetch |
+| `APK_URL` | GitHub release URL | Override the URL to fetch the APK from |
+| `APK_CERT_FINGERPRINT` | *(none)* | Expected APK signing certificate fingerprint (enables verification) |
+| `APK_PATH` | `./public/downloads/svarla.apk` | Path where the APK is stored/served |
+
+For development, the root `docker-compose.yml` mounts the locally built APK:
+
+```yaml
+volumes:
+  - ./build-output/svarla-signed.apk:/app/public/downloads/svarla.apk:ro
+environment:
+  APK_SOURCE: local
+```
+
+## Building from Source (Self-Builders)
+
+Users who want to build and sign everything with their own keys:
 
 ```bash
 # Build everything — no GitHub, no CI, fully self-contained
@@ -163,30 +196,25 @@ make all
 Or step by step:
 
 ```bash
-# Build unsigned APK
-make apk
-
-# Sign with your own keystore
-KEYSTORE_PATH=~/my-keystore.jks make sign-apk
-
-# Build server container with the APK included
-make server
-
-# Build mediabridge container
-make mediabridge
+make apk                              # Build unsigned APK
+KEYSTORE_PATH=~/my.keystore make sign-apk  # Sign with your own key
+make server                           # Build server container
+make mediabridge                      # Build mediabridge container
 ```
 
-Then use the locally built images in your `docker-compose.yml`:
+Then run with the APK volume-mounted:
 
 ```yaml
 services:
   server:
     image: svarla-server:dev
-    # ...
-  mediabridge:
-    image: svarla-mediabridge:dev
-    # ...
+    environment:
+      APK_SOURCE: local
+    volumes:
+      - ./build-output/svarla-signed.apk:/app/public/downloads/svarla.apk:ro
 ```
+
+Or set `APK_URL` to point at your own release infrastructure.
 
 ## Makefile Reference
 
@@ -195,12 +223,13 @@ Run `make help` for a full list. Key targets:
 | Target | Description |
 |--------|-------------|
 | `make apk` | Build unsigned APK in Docker |
-| `make sign-apk` | Sign the APK with local keystore |
-| `make server` | Build server container (includes APK if available) |
+| `make sign-apk` | Sign APK with local keystore |
+| `make server` | Build server container |
 | `make mediabridge` | Build mediabridge container |
-| `make all` | Build everything |
-| `make release` | Full release flow |
-| `make release-apk` | Build + sign APK only (no tag/publish) |
+| `make all` | Build everything (APK + sign + containers) |
+| `make release-tag` | Phase 1: signed tag → triggers CI |
+| `make release-sign` | Phase 2: sign artifacts → publish release |
+| `make release` | Both phases with CI wait |
 | `make clean` | Remove build artifacts |
 
 ### Environment Variables
@@ -211,8 +240,8 @@ Run `make help` for a full list. Key targets:
 | `VERSION_NAME` | from git tag | APK version string |
 | `VERSION_CODE` | git commit count | APK integer version code |
 | `OUTPUT_DIR` | `./build-output` | Where build artifacts go |
-| `KEYSTORE_PATH` | `~/.android/release.keystore` | Path to Android signing keystore |
-| `APK_PATH` | `./build-output/svarla-signed.apk` | Signed APK for container builds |
+| `KEYSTORE_PATH` | `~/.android/release.keystore` | Android signing keystore |
+| `COSIGN_KEY` | `~/.cosign/cosign.key` | Cosign private key |
 | `IMAGE_TAG` | `dev` | Docker image tag |
 | `REGISTRY` | *(empty)* | Container registry prefix |
 | `PUSH` | `false` | Push images to registry after build |
@@ -222,106 +251,39 @@ Run `make help` for a full list. Key targets:
 
 ### Backup Strategy
 
-Store encrypted copies of your keys:
-
 ```
 release-keys/
   ├── android-release.keystore.enc   # gpg --symmetric
+  ├── cosign.key.enc                 # gpg --symmetric
   ├── git-signing.key.enc            # gpg --export-secret-keys | gpg --symmetric
-  └── passwords.kdbx                 # KeePassXC database (separate master password)
+  └── passwords.kdbx                 # KeePassXC (separate master password)
 ```
 
 Keep encrypted backups on:
 - Development laptop
-- Self-hosted storage (e.g., your server)
+- Self-hosted storage
 - Offline USB drive
 
 ::: warning
-Store key files and their passwords separately. The encrypted keystore on a USB drive is useless without the password in KeePassXC (and vice versa).
+Store key files and their passwords separately.
 :::
 
 ### Key Rotation
 
-If you need to rotate a signing key:
-
-- **GPG key**: Export new public key to `.github/keys/maintainer.pub`, commit and push. Old releases remain verifiable.
-- **Android keystore**: You **cannot** rotate this without users reinstalling the app. Plan carefully.
-
-### Device Loss
-
-If your development device is lost or compromised:
-
-1. Revoke the GPG key: `gpg --gen-revoke KEY_ID`
-2. Generate a new GPG key and update `.github/keys/maintainer.pub`
-3. The Android keystore can be restored from your encrypted backup
-4. All existing releases remain valid (signatures are permanent)
-
-## Verifying a Release
-
-Users can verify that a release was signed by the maintainer:
-
-```bash
-# Import the maintainer's public key
-gpg --import .github/keys/maintainer.pub
-
-# Verify a release tag
-git verify-tag v1.2.0
-```
-
-The APK signature can be verified with:
-
-```bash
-apksigner verify --print-certs svarla-v1.2.0.apk
-```
+- **GPG key**: Export new public key to `.github/keys/maintainer.pub`, update the `TRUSTED_GPG_FINGERPRINT` secret.
+- **Cosign key**: Generate new pair, commit new `cosign.pub`, sign future images with new key.
+- **Android keystore**: **Cannot** be rotated without users reinstalling the app.
 
 ## Security Considerations
 
-- The GPG key proves **who** approved a release.
-- The Android keystore proves **which app** is legitimate.
-- The signed tag connects **source code** to **release artifacts**.
-- CI only builds if the tag signature is valid — a compromised GitHub account alone cannot produce a release.
-- CI verifies the tagged commit exists on `main` — tags pointing to unreviewed commits on feature branches are rejected.
-- Signing keys exist only on the maintainer's machine and encrypted backups.
+- CI only builds if the tag is GPG-signed by the trusted key.
+- CI verifies the tagged commit exists on `main` — tags pointing to unreviewed commits are rejected.
+- The GPG fingerprint is pinned in a repository secret — swapping the key file alone doesn't bypass verification.
+- `CODEOWNERS` requires maintainer review for changes to workflows, keys, and scripts.
+- Container images are signed by digest (immutable) — tag-based attacks are not possible.
+- The APK and containers are unsigned until the maintainer explicitly runs `make release-sign`.
 
-### Protecting the verification itself
-
-The tag verification only works if the verification infrastructure (workflow file, public key, scripts) cannot be tampered with. This is enforced by multiple layers:
-
-**1. GPG fingerprint pinned in GitHub secret**
-
-The trusted GPG key fingerprint is stored as a repository secret (`TRUSTED_GPG_FINGERPRINT`). CI verifies that the key file in `.github/keys/maintainer.pub` matches this fingerprint before trusting it. Even if someone replaces the key file via a PR, the fingerprint won't match and CI will refuse to build.
-
-Changing secrets requires admin access to repository settings, which triggers sudo mode (passkey re-authentication).
-
-Set this up after adding your GPG public key:
-
-```bash
-# Get your key fingerprint
-gpg --list-keys --with-colons | grep '^fpr' | head -1 | cut -d: -f10
-
-# Add it as a repository secret:
-# Settings → Secrets and variables → Actions → New repository secret
-# Name: TRUSTED_GPG_FINGERPRINT
-# Value: <your fingerprint>
-```
-
-**2. CODEOWNERS requires review for sensitive files**
-
-The `.github/CODEOWNERS` file marks security-sensitive paths as owned by the maintainer. With "Require review from Code Owners" enabled in branch protection, changes to these files are always flagged for review:
-
-- `.github/workflows/` — CI workflow definitions
-- `.github/keys/` — trusted GPG keys
-- `scripts/` — build and release scripts
-- `Makefile` — build orchestration
-- `Dockerfile` — production container definition
-
-**3. Commit ancestry check**
-
-CI verifies the tagged commit exists on `main`, preventing tags that point to feature branch commits with modified workflows.
-
-**4. Branch protection**
-
-Configure branch protection:
+### Branch Protection
 
 ```
 Repository → Settings → Branches → Add rule for "main"
@@ -329,21 +291,45 @@ Repository → Settings → Branches → Add rule for "main"
   ✓ Require approvals (1+)
   ✓ Require review from code owners
   ✓ Require status checks to pass
-  ✓ Do not allow bypassing the above settings (optional, strict mode)
+  ✓ Do not allow bypassing the above settings
 ```
 
-**Residual risk:** If an attacker gains access to your active GitHub session, they could potentially approve their own PR and merge it. Passkeys make this scenario unlikely (phishing-resistant, hardware-bound), and the fingerprint-in-secret adds a second barrier. For full protection against this, an organization-level push ruleset (Enterprise Cloud) would be needed to make the files truly immutable without passkey re-auth.
+## Verifying a Release
+
+### Verify the git tag
+
+```bash
+gpg --import .github/keys/maintainer.pub
+git verify-tag v1.2.0
+```
+
+### Verify the APK
+
+```bash
+apksigner verify --print-certs svarla-v1.2.0.apk
+# Check the certificate fingerprint matches the expected value
+```
+
+### Verify container images
+
+```bash
+cosign verify \
+  --key https://raw.githubusercontent.com/packetmoose/svarla/main/.github/keys/cosign.pub \
+  ghcr.io/packetmoose/svarla-server@sha256:<digest>
+```
 
 ## Development Workflow
 
 For day-to-day development, none of the release infrastructure is needed:
 
 ```bash
-# Just run the containers for development
-docker compose up
-
-# Or use the dev server with hot reload
-npm run dev
+docker compose up    # builds from source, no APK needed
+npm run dev          # or hot-reload dev server
 ```
 
-The Makefile and release scripts are only used when producing production builds or cutting a release.
+To test the APK download flow locally:
+
+```bash
+make release-apk     # build + sign APK
+docker compose up    # mounts the APK via volume
+```
