@@ -123,6 +123,10 @@ docker compose pull
 docker compose up -d
 ```
 
+Each new server image includes the matching Android APK. After updating your server, open the app — it will detect the new version and prompt you to update from your instance's download page.
+
+See [Android App — Updating](/guide/android#updating-the-app) for details.
+
 ## Firewall / ports that must be open
 
 These ports need to be accessible from the internet for Svarla to work:

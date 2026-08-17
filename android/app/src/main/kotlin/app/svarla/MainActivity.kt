@@ -22,6 +22,7 @@ import app.svarla.domain.notifications.AutoStartHelper
 import app.svarla.domain.notifications.NotificationDeliveryPreferences
 import app.svarla.domain.notifications.NotificationHandler
 import app.svarla.domain.notifications.PushEndpointManager
+import app.svarla.domain.version.VersionCheckService
 import app.svarla.ui.navigation.AppNavigation
 import app.svarla.ui.theme.SvarlaTheme
 import dagger.hilt.android.AndroidEntryPoint
@@ -57,6 +58,9 @@ class MainActivity : ComponentActivity() {
     @Inject
     lateinit var autoStartHelper: AutoStartHelper
 
+    @Inject
+    lateinit var versionCheckService: VersionCheckService
+
     private val notificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { /* granted or not — we proceed either way */ }
@@ -85,6 +89,7 @@ class MainActivity : ComponentActivity() {
                         audioRouter = audioRouter,
                         deliveryPreferences = deliveryPreferences,
                         pushEndpointManager = pushEndpointManager,
+                        versionCheckService = versionCheckService,
                         autoStartHelper = autoStartHelper,
                         initialRoute = getInitialRouteFromIntent(intent)
                     )

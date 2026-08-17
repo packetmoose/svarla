@@ -4,17 +4,22 @@ The Svarla Android app is a native Kotlin client built with Jetpack Compose and 
 
 ## Installing
 
-### Obtainium (recommended)
+### From your Svarla instance (recommended)
 
-The easiest way to install and keep Svarla updated is with [Obtainium](https://github.com/ImranR98/Obtainium), which tracks GitHub releases and notifies you of updates.
+The APK is bundled inside the server container and served directly from your instance. This ensures the app version always matches your server.
 
-1. Install Obtainium from [F-Droid](https://f-droid.org/packages/dev.imranr.obtainium.fdroid/) or their GitHub releases.
-2. Add a new app with the URL: `https://github.com/packetmoose/svarla`
-3. Obtainium will find the APK from releases and install it.
+1. Open your Svarla server URL in your phone's browser (e.g. `https://phone.example.com`)
+2. You'll see a banner prompting you to download the app, or navigate to the download page manually
+3. Tap **Download APK** and install it
+4. If prompted, allow installation from this source in your device settings
+
+::: tip
+You can also access the APK directly at `https://your-server/public/downloads/svarla.apk`.
+:::
 
 ### Manual APK download
 
-Grab the latest APK directly from [GitHub Releases](https://github.com/packetmoose/svarla/releases).
+You can also grab the APK from [GitHub Releases](https://github.com/packetmoose/svarla/releases). Make sure the version matches your server version.
 
 ### Building from source
 
@@ -26,7 +31,7 @@ cd android
 # APK → app/build/outputs/apk/debug/app-debug.apk
 ```
 
-Requires JDK 17 and Android SDK platform 34. Or build without any local SDK using Docker:
+Requires JDK 17 and Android SDK platform 35. Or build without any local SDK using Docker:
 
 ```bash
 docker build -f android/Dockerfile.build -t svarla-android-builder android/
@@ -41,6 +46,19 @@ On the login screen, enter:
 - **Password** — The password set via `INITIAL_PASSWORD`
 
 The app registers the device, syncs history via WebSocket, and is ready to make calls.
+
+## Updating the app
+
+When you update your server container, a new APK is included automatically. The app checks your server's version on every launch:
+
+- **App older than server** — An "Update available" banner appears with a button to open the download page in your browser.
+- **App newer than server** — A warning banner appears indicating the versions are incompatible. Update your server to resolve this.
+
+Simply tap the update banner, download the new APK, and install it over the existing app.
+
+::: warning Do not use Obtainium or similar tools
+Third-party update tools like Obtainium track GitHub releases independently of your server. This can result in installing an app version that is incompatible with your server. Always update the app from your own Svarla instance to guarantee version compatibility.
+:::
 
 ## Requirements
 

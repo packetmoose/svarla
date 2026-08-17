@@ -3,11 +3,13 @@ import { Router, registerRoutes, navigate } from "./router";
 import { Nav } from "./components/nav";
 import { CallBanner } from "./components/call-banner";
 import { NewDeviceBanner } from "./components/new-device-banner";
+import { AndroidBanner } from "./components/android-banner";
 import { Login } from "./components/login";
 import { CallHistory } from "./components/call-history";
 import { Conversations } from "./components/conversations";
 import { Settings } from "./components/settings";
 import { Dashboard } from "./components/dashboard";
+import { Download } from "./components/download";
 import { initWebSocket } from "./ws";
 
 // Register application routes (no login route — App handles that)
@@ -16,6 +18,7 @@ registerRoutes([
   { path: "/call-history", component: CallHistory },
   { path: "/conversations", component: Conversations },
   { path: "/settings", component: Settings },
+  { path: "/download", component: Download },
 ]);
 
 function isAuthenticated(): boolean {
@@ -72,6 +75,7 @@ class App extends Component<Record<string, never>, AppState> {
         </main>
         <CallBanner />
         <NewDeviceBanner />
+        <AndroidBanner />
       </div>
     );
   }

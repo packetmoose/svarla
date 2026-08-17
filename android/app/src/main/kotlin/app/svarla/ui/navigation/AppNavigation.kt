@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -37,6 +38,8 @@ import app.svarla.domain.notifications.AutoStartHelper
 import app.svarla.domain.notifications.NotificationDeliveryMode
 import app.svarla.domain.notifications.NotificationDeliveryPreferences
 import app.svarla.domain.notifications.PushEndpointManager
+import app.svarla.domain.version.VersionCheckResult
+import app.svarla.domain.version.VersionCheckService
 import app.svarla.ui.screens.call.ActiveCallScreen
 import app.svarla.ui.screens.call.CallHistoryScreen
 import app.svarla.ui.screens.call.IncomingCallScreen
@@ -48,6 +51,7 @@ import app.svarla.ui.screens.login.LoginScreen
 import app.svarla.ui.screens.settings.DeviceListScreen
 import app.svarla.ui.screens.settings.NotificationSetupDialog
 import app.svarla.ui.screens.settings.SettingsScreen
+import app.svarla.ui.screens.version.VersionBanner
 
 /**
  * Top-level navigation destinations for the Svarla app.
@@ -76,6 +80,7 @@ fun AppNavigation(
     audioRouter: AudioRouter,
     deliveryPreferences: NotificationDeliveryPreferences,
     pushEndpointManager: PushEndpointManager,
+    versionCheckService: VersionCheckService,
     autoStartHelper: AutoStartHelper? = null,
     initialRoute: String? = null,
     navController: NavHostController = rememberNavController()
@@ -83,6 +88,16 @@ fun AppNavigation(
     val isAuthenticated by authManager.isAuthenticated.collectAsState()
     val callState by voiceCallManager.callState.collectAsState()
     var showNotificationSetup by remember { mutableStateOf(false) }
+    var versionCheckResult by remember { mutableStateOf<VersionCheckResult?>(null) }
+    var versionBannerDismissed by remember { mutableStateOf(false) }
+
+    // Check version on launch when authenticated
+    LaunchedEffect(isAuthenticated) {
+        if (isAuthenticated) {
+            versionCheckResult = versionCheckService.check()
+            versionBannerDismissed = false
+        }
+    }
 
     // Check if we need to show the notification setup dialog on first auth
     LaunchedEffect(isAuthenticated) {
@@ -201,23 +216,34 @@ fun AppNavigation(
             )
         }
         composable(Screen.Home.route) {
-            HomeScreen(
-                currentRoute = Screen.Home.route,
-                initialTab = when {
-                    initialRoute == "home?tab=calls" -> BottomNavDestination.CALLS
-                    initialRoute == "home?tab=settings" -> BottomNavDestination.SETTINGS
-                    else -> null
-                },
-                onNavigate = { dest ->
-                    // Navigation between tabs — for now just stay on home
-                },
-                onConversationClick = { providerNumber, phoneNumber ->
-                    navController.navigate(Screen.ConversationDetail.createRoute(providerNumber, phoneNumber))
-                },
-                contactResolver = contactResolver,
-                voiceCallManager = voiceCallManager,
-                audioRouter = audioRouter
-            )
+            Column(modifier = Modifier.fillMaxSize()) {
+                if (!versionBannerDismissed) {
+                    VersionBanner(
+                        versionCheckResult = versionCheckResult,
+                        authManager = authManager,
+                        onDismiss = { versionBannerDismissed = true }
+                    )
+                }
+                Box(modifier = Modifier.weight(1f)) {
+                    HomeScreen(
+                        currentRoute = Screen.Home.route,
+                        initialTab = when {
+                            initialRoute == "home?tab=calls" -> BottomNavDestination.CALLS
+                            initialRoute == "home?tab=settings" -> BottomNavDestination.SETTINGS
+                            else -> null
+                        },
+                        onNavigate = { dest ->
+                            // Navigation between tabs — for now just stay on home
+                        },
+                        onConversationClick = { providerNumber, phoneNumber ->
+                            navController.navigate(Screen.ConversationDetail.createRoute(providerNumber, phoneNumber))
+                        },
+                        contactResolver = contactResolver,
+                        voiceCallManager = voiceCallManager,
+                        audioRouter = audioRouter
+                    )
+                }
+            }
         }
         composable(
             route = Screen.ConversationDetail.route,

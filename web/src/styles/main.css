@@ -2311,3 +2311,193 @@ textarea {
     right: var(--md-space-lg);
   }
 }
+
+
+/* ===== Download Page ===== */
+
+.download-page {
+  max-width: 600px;
+  margin: 0 auto;
+  padding: var(--md-space-lg);
+}
+
+.download-hero {
+  text-align: center;
+  margin-bottom: var(--md-space-xl);
+}
+
+.download-icon {
+  font-size: 3rem;
+  margin-bottom: var(--md-space-md);
+}
+
+.download-description {
+  color: var(--md-on-surface-variant);
+  margin-top: var(--md-space-sm);
+  line-height: 1.6;
+}
+
+.download-card {
+  background: var(--md-surface);
+  border-radius: var(--md-radius-lg);
+  box-shadow: var(--md-elevation-2);
+  overflow: hidden;
+  margin-bottom: var(--md-space-xl);
+}
+
+.download-card-content {
+  padding: var(--md-space-lg);
+  text-align: center;
+}
+
+.download-card-meta {
+  color: var(--md-on-surface-variant);
+  margin: var(--md-space-sm) 0 var(--md-space-lg);
+  font-size: 0.875rem;
+}
+
+.download-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--md-space-sm) var(--md-space-lg);
+  background: var(--md-primary);
+  color: var(--md-on-primary);
+  border: none;
+  border-radius: var(--md-radius-xl);
+  font-size: 1rem;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+  transition: background var(--md-motion-duration-short) var(--md-motion-ease);
+  min-height: var(--min-touch-target);
+}
+
+.download-button:hover {
+  background: var(--md-primary-hover);
+}
+
+.download-instructions {
+  background: var(--md-surface);
+  border-radius: var(--md-radius-lg);
+  padding: var(--md-space-lg);
+  margin-bottom: var(--md-space-lg);
+}
+
+.download-instructions h3 {
+  margin-bottom: var(--md-space-md);
+}
+
+.download-instructions ol {
+  padding-left: var(--md-space-lg);
+}
+
+.download-instructions li {
+  margin-bottom: var(--md-space-sm);
+  color: var(--md-on-surface-variant);
+  line-height: 1.6;
+}
+
+.download-note {
+  background: var(--md-surface-container);
+  border-radius: var(--md-radius-lg);
+  padding: var(--md-space-lg);
+  border-left: 4px solid var(--md-primary);
+}
+
+.download-note h3 {
+  margin-bottom: var(--md-space-sm);
+}
+
+.download-note p {
+  color: var(--md-on-surface-variant);
+  line-height: 1.6;
+  font-size: 0.875rem;
+}
+
+/* ===== Android Download Banner ===== */
+
+.android-banner {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--md-surface);
+  box-shadow: var(--md-elevation-3);
+  padding: var(--md-space-md) var(--md-space-lg);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--md-space-md);
+  z-index: 1000;
+  border-top: 1px solid var(--md-outline-variant);
+}
+
+.android-banner-content {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-md);
+  flex: 1;
+  min-width: 0;
+}
+
+.android-banner-icon {
+  font-size: 1.5rem;
+  flex-shrink: 0;
+}
+
+.android-banner-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.android-banner-text strong {
+  font-size: 0.875rem;
+  color: var(--md-on-surface);
+}
+
+.android-banner-text span {
+  font-size: 0.75rem;
+  color: var(--md-on-surface-variant);
+}
+
+.android-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-sm);
+  flex-shrink: 0;
+}
+
+.android-banner-btn {
+  border: none;
+  border-radius: var(--md-radius-xl);
+  cursor: pointer;
+  font-weight: 500;
+  font-size: 0.875rem;
+  transition: background var(--md-motion-duration-short) var(--md-motion-ease);
+}
+
+.android-banner-btn-primary {
+  background: var(--md-primary);
+  color: var(--md-on-primary);
+  padding: var(--md-space-sm) var(--md-space-md);
+}
+
+.android-banner-btn-primary:hover {
+  background: var(--md-primary-hover);
+}
+
+.android-banner-btn-dismiss {
+  background: transparent;
+  color: var(--md-on-surface-variant);
+  padding: var(--md-space-sm);
+  min-width: var(--min-touch-target);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.android-banner-btn-dismiss:hover {
+  background: var(--md-surface-container);
+}

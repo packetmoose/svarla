@@ -38,12 +38,13 @@ What it does:
   1. Finds the next unreleased version from docs/releases/
   2. Validates repo state and tools
   3. Shows version info and asks for confirmation
-  4. Creates and pushes the git tag (triggers CI for container build)
-  5. Builds the release APK inside Docker
-  6. Signs the APK inside Docker using your local keystore
-  7. Computes SHA-256 of the signed APK
-  8. Creates a GitHub release with the release file content, container info,
-     APK attachment, and SHA-256
+  4. Builds the release APK inside Docker
+  5. Signs the APK inside Docker using your local keystore
+  6. Computes SHA-256 of the signed APK
+  7. Creates and pushes the git tag (triggers CI for container build)
+  8. Creates a draft GitHub release with the release file content,
+     container info, APK attachment, and SHA-256
+  9. CI builds containers with the APK baked in, then publishes the release
 
 Examples:
   $0
@@ -182,16 +183,8 @@ fi
 
 KEY_PASSWORD="${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
 
-# ─── Create tag and push ─────────────────────────────────────────────────────
-
-info "Creating tag $VERSION and pushing"
-
-git tag -a "$VERSION" -m "Release $VERSION"
-git push origin "$VERSION"
-
-echo "Tag pushed. CI will build the server container."
-
 # ─── Build release APK ───────────────────────────────────────────────────────
+# Build the APK BEFORE pushing the tag. If the build fails, nothing is published.
 
 info "Building release APK in Docker"
 
@@ -236,6 +229,16 @@ info "Computing SHA-256"
 SHA256="$(sha256sum "$FINAL_APK" | awk '{print $1}')"
 echo "SHA-256: $SHA256"
 
+# ─── Create tag and push ─────────────────────────────────────────────────────
+# APK is built and signed. Now push the tag to trigger CI.
+
+info "Creating tag $VERSION and pushing"
+
+git tag -a "$VERSION" -m "Release $VERSION"
+git push origin "$VERSION"
+
+echo "Tag pushed. CI will build the server container with the APK baked in."
+
 # ─── Build release body ──────────────────────────────────────────────────────
 
 info "Building release body"
@@ -255,24 +258,32 @@ docker pull ${REGISTRY}/${GH_REPO%/*}/svarla-mediabridge:${VERSION}
 
 ## Android
 
-Download the signed APK from the assets below.
+The APK is bundled inside the server container and available for download
+from your Svarla instance. You can also download it from the assets below.
 
 **SHA-256:** \`${SHA256}\`"
 
-# ─── Create GitHub release ───────────────────────────────────────────────────
+# ─── Create draft GitHub release ─────────────────────────────────────────────
+# Create as draft — CI will un-draft it after building the containers with the APK.
 
-info "Creating GitHub release"
+info "Creating draft GitHub release"
 
 gh release create "$VERSION" \
     --title "Svarla $VERSION" \
     --notes "$RELEASE_BODY" \
+    --draft \
     "$FINAL_APK#svarla-${VERSION}.apk"
+
+echo "Draft release created. CI will publish it after containers are built."
 
 # ─── Done ────────────────────────────────────────────────────────────────────
 
-info "Release $VERSION complete"
+info "Release $VERSION initiated"
 echo ""
-echo "  Release:   https://github.com/${GH_REPO}/releases/tag/${VERSION}"
+echo "  Draft:     https://github.com/${GH_REPO}/releases/tag/${VERSION}"
 echo "  APK:       $FINAL_APK"
 echo "  SHA-256:   $SHA256"
+echo ""
+echo "  CI will build containers with the APK and publish the release."
+echo "  Monitor:   https://github.com/${GH_REPO}/actions"
 echo ""

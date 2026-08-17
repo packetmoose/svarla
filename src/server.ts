@@ -1,5 +1,7 @@
 import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import type { AppConfig } from './config.js';
 import { createDatabase } from './database.js';
 import { AuthService } from './services/auth-service.js';
@@ -88,6 +90,9 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
           : undefined,
     },
   });
+
+  // Load package.json for version info (used by /api/version endpoint)
+  const pkg = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf-8'));
 
   // --- Security plugins ---
 
@@ -533,19 +538,17 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
 
   // Serve static files from /public (ringback tones, etc.)
   const staticPlugin = await import('@fastify/static');
-  const path = await import('path');
   await server.register(staticPlugin.default, {
-    root: path.join(process.cwd(), 'public'),
+    root: join(process.cwd(), 'public'),
     prefix: '/public/',
     decorateReply: false,
   });
 
   // Conditionally register web interface routes based on config
   if (config.webInterfaceEnabled) {
-    const webDistPath = path.join(process.cwd(), 'dist', 'web');
+    const webDistPath = join(process.cwd(), 'dist', 'web');
     try {
-      const fs = await import('node:fs');
-      if (fs.existsSync(webDistPath)) {
+      if (existsSync(webDistPath)) {
         await server.register(staticPlugin.default, {
           root: webDistPath,
           prefix: '/',
@@ -582,6 +585,11 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
   // Health check
   server.get('/health', async () => {
     return { status: 'ok', timestamp: new Date().toISOString() };
+  });
+
+  // Version endpoint — used by the mobile app to check compatibility
+  server.get('/api/version', async () => {
+    return { version: pkg.version };
   });
 
   // Global error handler

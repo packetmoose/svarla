@@ -30,6 +30,13 @@ COPY --from=builder /app/dist/migrations ./migrations-compiled
 COPY server-config.yaml ./
 COPY public/ ./public/
 
+# Copy the signed APK into the container for self-hosted distribution.
+# In CI, APK_FILE is set to the path of the APK within the build context.
+# For local dev builds without an APK, omit the build-arg and no APK will be included.
+ARG APK_FILE="public/downloads/.gitkeep"
+RUN mkdir -p ./public/downloads
+COPY ${APK_FILE} ./public/downloads/svarla.apk
+
 EXPOSE 3000
 
 CMD ["node", "dist/index.js"]
