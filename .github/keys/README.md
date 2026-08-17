@@ -1,54 +1,69 @@
-# Release Signing Public Keys
+# Signing Key Verification
 
-This directory contains the public keys used to verify releases.
-CI validates these files against pinned hashes in repository secrets
-to prevent tampering.
+Svarla uses a simplified signing model with minimal key management:
 
-These same keys are also published on the docs site for easy user access:
-https://packetmoose.github.io/svarla/guide/verify
+## How verification works
 
-## Files
+| What | Verified by | Protected by |
+|------|-------------|--------------|
+| Git tags | GitHub's tag verification API | Account GPG key (passkey to modify) |
+| Container images | Cosign keyless (Sigstore) | GitHub identity (passkey to authenticate) |
+| Android APK | Android keystore | Local file (maintainer's machine) |
 
-| File | Purpose | Pinned secret |
-|------|---------|---------------|
-| `maintainer.pub` | GPG key for verifying signed git tags | `TRUSTED_GPG_FINGERPRINT` |
-| `cosign.pub` | Cosign key for verifying container images | `TRUSTED_COSIGN_KEY_HASH` |
+## Setup required
 
-## Setup
+### GPG key (for signed tags)
 
-### GPG Key
+Add a GPG key to your GitHub account:
 
 ```bash
-# Export your GPG public key
-gpg --armor --export YOUR_KEY_ID > .github/keys/maintainer.pub
+gpg --full-generate-key
+gpg --armor --export YOUR_KEY_ID
+# → GitHub → Settings → SSH and GPG keys → New GPG key
 
-# Also copy to docs site
-cp .github/keys/maintainer.pub docs/public/keys/maintainer.pub
-
-# Get the fingerprint for the secret
-gpg --list-keys --with-colons | grep '^fpr' | head -1 | cut -d: -f10
-# → Settings → Secrets → Actions → TRUSTED_GPG_FINGERPRINT
+git config --global user.signingkey YOUR_KEY_ID
 ```
 
-### Cosign Key
+CI verifies tags via `gh api .../git/tags/<sha>` — checking GitHub's own
+verification status. No key file in the repo needed.
+
+### Cosign (for container images)
+
+No key pair needed. Uses [Sigstore keyless signing](https://docs.sigstore.dev/cosign/signing/overview/):
 
 ```bash
-# Generate a key pair (if you haven't already)
+cosign sign ghcr.io/packetmoose/svarla-server@sha256:<digest>
+# Opens browser for GitHub OIDC authentication
+```
+
+Users verify with:
+
+```bash
+cosign verify \
+  --certificate-identity-regexp="https://github.com/packetmoose" \
+  --certificate-oidc-issuer=https://github.com/login/oauth \
+  ghcr.io/packetmoose/svarla-server@sha256:<digest>
+```
+
+### Android keystore (for APK signing)
+
+The only key you need to manage locally:
+
+```bash
+keytool -genkey -v \
+  -keystore ~/.android/release.keystore \
+  -keyalg RSA -keysize 2048 \
+  -validity 10000 \
+  -alias release
+```
+
+## Migrating to key-pair Cosign later
+
+If you want to move away from keyless signing:
+
+```bash
 cosign generate-key-pair
-mv cosign.key ~/.cosign/cosign.key
-
-# Copy public key to repo and docs site
-cp cosign.pub .github/keys/cosign.pub
-cp cosign.pub docs/public/keys/cosign.pub
-
-# Get the SHA-256 hash for the secret
-sha256sum .github/keys/cosign.pub | awk '{print $1}'
-# → Settings → Secrets → Actions → TRUSTED_COSIGN_KEY_HASH
+# Store cosign.key securely, commit cosign.pub here
+# Update release-sign.sh to use: cosign sign --key cosign.key ...
+# Update verify docs to use: cosign verify --key cosign.pub ...
 ```
-
-## Why both a file and a secret?
-
-The file is what CI and users use to perform verification. The secret pins the
-file's identity — if someone replaces the file via a PR, CI will detect the
-mismatch and fail. Changing secrets requires admin access with sudo mode
-(passkey re-authentication).

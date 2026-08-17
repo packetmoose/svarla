@@ -84,10 +84,6 @@ release-apk: apk sign-apk ## Build and sign APK locally (no tag, no publish)
 
 # ─── CI Targets (used by GitHub Actions) ──────────────────────────────────────
 
-.PHONY: ci-verify-tag
-ci-verify-tag: ## Verify the signed git tag (CI only)
-	./scripts/verify-tag.sh
-
 .PHONY: ci-server
 ci-server: ## Build and push server container (CI only)
 	IMAGE_TAG=$(IMAGE_TAG) REGISTRY=$(REGISTRY) \
@@ -105,10 +101,6 @@ ci-mediabridge: ## Build and push mediabridge container (CI only)
 .PHONY: clean
 clean: ## Remove build artifacts
 	rm -rf $(OUTPUT_DIR)
-
-.PHONY: verify-tag
-verify-tag: ## Verify a signed git tag locally
-	./scripts/verify-tag.sh
 
 .PHONY: help
 help: ## Show this help

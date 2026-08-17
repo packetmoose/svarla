@@ -16,7 +16,7 @@ set -e
 # Prerequisites:
 #   - gh CLI authenticated
 #   - Android keystore available
-#   - Cosign installed with key pair at ~/.cosign/cosign.key
+#   - Cosign installed (keyless mode — no key pair needed)
 #   - CI has completed and created a draft release
 #
 # Environment variables:
@@ -24,8 +24,8 @@ set -e
 #   KEYSTORE_PASSWORD   Keystore password (prompted if not set)
 #   KEY_ALIAS           Key alias. Default: release
 #   KEY_PASSWORD        Key password. Defaults to KEYSTORE_PASSWORD.
-#   COSIGN_KEY          Path to Cosign private key. Default: ~/.cosign/cosign.key
-#   COSIGN_PASSWORD     Cosign key password (prompted if not set)
+#   COSIGN_KEY          (Optional) Path to Cosign private key for key-pair mode.
+#                       If not set, uses keyless signing (Sigstore OIDC).
 #
 # Usage:
 #   ./scripts/release-sign.sh
@@ -47,8 +47,8 @@ Environment variables:
   KEYSTORE_PASSWORD   Keystore password. Prompted interactively if not set.
   KEY_ALIAS           Key alias. Default: release
   KEY_PASSWORD        Key password. Defaults to KEYSTORE_PASSWORD.
-  COSIGN_KEY          Path to Cosign private key. Default: ~/.cosign/cosign.key
-  COSIGN_PASSWORD     Cosign key password. Prompted interactively if not set.
+  COSIGN_KEY          (Optional) Path to Cosign private key for key-pair mode.
+                      If not set, uses keyless signing (opens browser for auth).
 EOF
     exit 0
 }
@@ -63,7 +63,7 @@ REPO_ROOT="$(git rev-parse --show-toplevel)"
 OUTPUT_DIR="$REPO_ROOT/build-output"
 KEYSTORE_PATH="${KEYSTORE_PATH:-$HOME/.android/release.keystore}"
 KEY_ALIAS="${KEY_ALIAS:-release}"
-COSIGN_KEY="${COSIGN_KEY:-$HOME/.cosign/cosign.key}"
+COSIGN_KEY="${COSIGN_KEY:-}"
 
 GH_REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")"
 REGISTRY="ghcr.io"
@@ -98,10 +98,6 @@ fi
 
 if [ ! -f "$KEYSTORE_PATH" ]; then
     die "Android keystore not found at $KEYSTORE_PATH"
-fi
-
-if [ ! -f "$COSIGN_KEY" ]; then
-    die "Cosign private key not found at $COSIGN_KEY"
 fi
 
 # ─── Find the draft release ──────────────────────────────────────────────────
@@ -210,14 +206,7 @@ echo "$APK_SHA256  $(basename "$SIGNED_APK")" > "$SIGNED_APK.sha256"
 
 info "Signing container images"
 
-if [ -z "${COSIGN_PASSWORD:-}" ]; then
-    read -r -s -p "Cosign key password: " COSIGN_PASSWORD
-    echo ""
-fi
-
-export COSIGN_PASSWORD
-
-# Get container image digests from the draft release
+# Get container image digests
 SERVER_IMAGE="${REGISTRY}/${GH_REPO%/*}/svarla-server:${VERSION}"
 MEDIABRIDGE_IMAGE="${REGISTRY}/${GH_REPO%/*}/svarla-mediabridge:${VERSION}"
 
@@ -226,7 +215,6 @@ echo "Resolving image digests..."
 
 SERVER_DIGEST="$(docker manifest inspect "$SERVER_IMAGE" 2>/dev/null | jq -r '.digest // empty')"
 if [ -z "$SERVER_DIGEST" ]; then
-    # Try crane or cosign triangulate
     SERVER_DIGEST="$(cosign triangulate "$SERVER_IMAGE" 2>/dev/null | grep -oP 'sha256:[a-f0-9]+' || echo "")"
 fi
 
@@ -247,12 +235,26 @@ echo "Server:      $SERVER_IMAGE@$SERVER_DIGEST"
 echo "MediaBridge: $MEDIABRIDGE_IMAGE@$MEDIABRIDGE_DIGEST"
 echo ""
 
-# Sign by digest (immutable reference)
+# Sign with Cosign — keyless (Sigstore OIDC) by default, key pair if COSIGN_KEY is set
+COSIGN_SIGN_ARGS=""
+if [ -n "$COSIGN_KEY" ] && [ -f "$COSIGN_KEY" ]; then
+    echo "Using key pair: $COSIGN_KEY"
+    COSIGN_SIGN_ARGS="--key $COSIGN_KEY"
+    if [ -z "${COSIGN_PASSWORD:-}" ]; then
+        read -r -s -p "Cosign key password: " COSIGN_PASSWORD
+        echo ""
+    fi
+    export COSIGN_PASSWORD
+else
+    echo "Using keyless signing (Sigstore OIDC — will open browser for auth)"
+    COSIGN_SIGN_ARGS="--yes"
+fi
+
 echo "Signing server image..."
-cosign sign --key "$COSIGN_KEY" "${REGISTRY}/${GH_REPO%/*}/svarla-server@${SERVER_DIGEST}"
+cosign sign $COSIGN_SIGN_ARGS "${REGISTRY}/${GH_REPO%/*}/svarla-server@${SERVER_DIGEST}"
 
 echo "Signing mediabridge image..."
-cosign sign --key "$COSIGN_KEY" "${REGISTRY}/${GH_REPO%/*}/svarla-mediabridge@${MEDIABRIDGE_DIGEST}"
+cosign sign $COSIGN_SIGN_ARGS "${REGISTRY}/${GH_REPO%/*}/svarla-mediabridge@${MEDIABRIDGE_DIGEST}"
 
 echo "Container images signed."
 
@@ -288,9 +290,11 @@ SIGNING_INFO="
 
 **APK SHA-256:** \`${APK_SHA256}\`
 
-**Container images are signed with Cosign.** Verify with:
+**Container images are signed with Cosign (Sigstore).** Verify with:
 \`\`\`bash
-cosign verify --key https://raw.githubusercontent.com/${GH_REPO}/main/.github/keys/cosign.pub \\\\
+cosign verify \\\\
+  --certificate-identity-regexp=\"https://github.com/packetmoose\" \\\\
+  --certificate-oidc-issuer=https://github.com/login/oauth \\\\
   ${REGISTRY}/${GH_REPO%/*}/svarla-server@${SERVER_DIGEST}
 \`\`\`
 

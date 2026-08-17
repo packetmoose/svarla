@@ -12,9 +12,6 @@
 # CI workflows — control what gets built and how
 .github/workflows/          @packetmoose
 
-# GPG keys — control which signing key is trusted
-.github/keys/               @packetmoose
-
 # Release and build scripts — control the release pipeline
 scripts/                    @packetmoose
 

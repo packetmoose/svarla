@@ -1,7 +1,0 @@
-# Replace this file with your actual Cosign public key.
-# Generate with: cosign generate-key-pair
-# Copy cosign.pub here and to docs/public/keys/cosign.pub
-#
-# Then add the SHA-256 hash of this file as a repository secret:
-#   sha256sum .github/keys/cosign.pub
-#   → Settings → Secrets → Actions → TRUSTED_COSIGN_KEY_HASH

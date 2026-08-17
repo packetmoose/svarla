@@ -61,40 +61,45 @@ Phase 2: make release-sign
 
 ### Key Setup
 
-You need three separate keys:
+You need only one signing key to manage:
 
 | Key | Purpose | Location |
 |-----|---------|----------|
-| GPG signing key | Sign git tags | `~/.gnupg/` |
+| GPG signing key | Sign git tags | Registered on your GitHub account |
 | Android keystore | Sign APKs | `~/.android/release.keystore` |
-| Cosign key pair | Sign container images | `~/.cosign/cosign.key` + `cosign.pub` |
+| *(Cosign)* | Sign container images | Keyless — uses your GitHub identity |
 
 #### GPG Key
+
+Generate if you don't have one:
 
 ```bash
 gpg --full-generate-key
 # Choose: RSA and RSA, 4096 bits, does not expire
+```
 
+Configure git to use it:
+
+```bash
 gpg --list-secret-keys --keyid-format=long
-# Note your key ID
+# Note your key ID (e.g., 3AA5C34371567BD2)
 
-git config --global user.signingkey YOUR_KEY_ID
+git config --global user.signingkey 3AA5C34371567BD2
 ```
 
-Export the public key to the repository:
+Add the public key to your GitHub account:
 
 ```bash
-gpg --armor --export YOUR_KEY_ID > .github/keys/maintainer.pub
+gpg --armor --export 3AA5C34371567BD2
+# → GitHub → Settings → SSH and GPG keys → New GPG key
 ```
 
-Add the fingerprint as a repository secret (`TRUSTED_GPG_FINGERPRINT`):
-
-```bash
-gpg --list-keys --with-colons | grep '^fpr' | head -1 | cut -d: -f10
-# → Settings → Secrets → Actions → New: TRUSTED_GPP_FINGERPRINT
-```
+CI verifies tags via GitHub's API — no key file in the repo needed.
+Adding/removing GPG keys on your account requires passkey re-authentication.
 
 #### Android Keystore
+
+Generate if you don't have one:
 
 ```bash
 keytool -genkey -v \
@@ -104,16 +109,21 @@ keytool -genkey -v \
   -alias release
 ```
 
-#### Cosign Key Pair
+#### Cosign (Container Images)
 
+No setup needed. Uses [Sigstore keyless signing](https://docs.sigstore.dev/cosign/signing/overview/)
+which authenticates via your GitHub identity (opens browser for OIDC flow).
+
+Install Cosign:
 ```bash
-cosign generate-key-pair
-# Creates cosign.key (private) and cosign.pub (public)
-mv cosign.key ~/.cosign/cosign.key
-cp cosign.pub .github/keys/cosign.pub
+# macOS
+brew install cosign
+
+# Linux
+go install github.com/sigstore/cosign/v2/cmd/cosign@latest
 ```
 
-Commit `cosign.pub` to the repository so users can verify container signatures.
+To migrate to a key pair later, see `.github/keys/README.md`.
 
 ::: warning
 Back up all keys and passwords securely. The Android keystore cannot be rotated without users reinstalling the app.
@@ -241,7 +251,7 @@ Run `make help` for a full list. Key targets:
 | `VERSION_CODE` | git commit count | APK integer version code |
 | `OUTPUT_DIR` | `./build-output` | Where build artifacts go |
 | `KEYSTORE_PATH` | `~/.android/release.keystore` | Android signing keystore |
-| `COSIGN_KEY` | `~/.cosign/cosign.key` | Cosign private key |
+| `COSIGN_KEY` | *(none — keyless)* | Optional Cosign private key for key-pair mode |
 | `IMAGE_TAG` | `dev` | Docker image tag |
 | `REGISTRY` | *(empty)* | Container registry prefix |
 | `PUSH` | `false` | Push images to registry after build |
@@ -251,13 +261,15 @@ Run `make help` for a full list. Key targets:
 
 ### Backup Strategy
 
+Only the Android keystore needs local backup:
+
 ```
 release-keys/
   ├── android-release.keystore.enc   # gpg --symmetric
-  ├── cosign.key.enc                 # gpg --symmetric
-  ├── git-signing.key.enc            # gpg --export-secret-keys | gpg --symmetric
   └── passwords.kdbx                 # KeePassXC (separate master password)
 ```
+
+Your GPG key is backed up via `gpg --export-secret-keys` and your standard GPG backup process. Cosign keyless requires no backup — it's identity-based.
 
 Keep encrypted backups on:
 - Development laptop
@@ -270,18 +282,18 @@ Store key files and their passwords separately.
 
 ### Key Rotation
 
-- **GPG key**: Export new public key to `.github/keys/maintainer.pub`, update the `TRUSTED_GPG_FINGERPRINT` secret.
-- **Cosign key**: Generate new pair, commit new `cosign.pub`, sign future images with new key.
+- **GPG key**: Generate new key, add to GitHub account (passkey re-auth required), old releases remain verifiable.
+- **Cosign (keyless)**: Nothing to rotate — tied to your GitHub identity.
 - **Android keystore**: **Cannot** be rotated without users reinstalling the app.
 
 ## Security Considerations
 
-- CI only builds if the tag is GPG-signed by the trusted key.
+- CI verifies tags via GitHub's API — the tag must be signed by a GPG key registered on the maintainer's account (passkey-protected).
 - CI verifies the tagged commit exists on `main` — tags pointing to unreviewed commits are rejected.
-- The GPG fingerprint is pinned in a repository secret — swapping the key file alone doesn't bypass verification.
-- `CODEOWNERS` requires maintainer review for changes to workflows, keys, and scripts.
+- Container images are signed by the maintainer's GitHub identity (Sigstore keyless) — signatures are logged in a public transparency log.
+- `CODEOWNERS` requires maintainer review for changes to workflows and scripts.
 - Container images are signed by digest (immutable) — tag-based attacks are not possible.
-- The APK and containers are unsigned until the maintainer explicitly runs `make release-sign`.
+- The only local key to manage is the Android keystore.
 
 ### Branch Protection
 
@@ -296,26 +308,22 @@ Repository → Settings → Branches → Add rule for "main"
 
 ## Verifying a Release
 
-### Verify the git tag
+See the dedicated [Verifying Releases](/guide/verify) page for full instructions.
+
+Quick reference:
 
 ```bash
-gpg --import .github/keys/maintainer.pub
-git verify-tag v1.2.0
-```
-
-### Verify the APK
-
-```bash
-apksigner verify --print-certs svarla-v1.2.0.apk
-# Check the certificate fingerprint matches the expected value
-```
-
-### Verify container images
-
-```bash
+# Verify container image
 cosign verify \
-  --key https://raw.githubusercontent.com/packetmoose/svarla/main/.github/keys/cosign.pub \
-  ghcr.io/packetmoose/svarla-server@sha256:<digest>
+  --certificate-identity-regexp="https://github.com/packetmoose" \
+  --certificate-oidc-issuer=https://github.com/login/oauth \
+  ghcr.io/packetmoose/svarla-server:v1.2.0
+
+# Verify git tag
+git verify-tag v1.2.0
+
+# Verify APK
+apksigner verify --print-certs svarla-v1.2.0.apk
 ```
 
 ## Development Workflow

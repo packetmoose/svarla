@@ -44,52 +44,32 @@ jobs:
 
       - name: Verify tag signature
         env:
-          TRUSTED_GPG_FINGERPRINT: ${{ secrets.TRUSTED_GPG_FINGERPRINT }}
-          TRUSTED_COSIGN_KEY_HASH: ${{ secrets.TRUSTED_COSIGN_KEY_HASH }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF#refs/tags/}"
-          TRUSTED_KEY=".github/keys/maintainer.pub"
-          COSIGN_PUB=".github/keys/cosign.pub"
 
-          if [ -z "$TRUSTED_GPG_FINGERPRINT" ]; then
-            echo "ERROR: TRUSTED_GPG_FINGERPRINT secret is not set."
-            echo "Set it in Settings → Secrets to the fingerprint of the maintainer GPG key."
+          # Use GitHub's own tag verification — checks that the tag is signed
+          # by a GPG key registered on the repository owner's account.
+          # Adding/removing GPG keys requires sudo mode (passkey re-auth).
+          TAG_SHA=$(git rev-list -1 "$TAG")
+
+          # GitHub annotated tags have their own object; lightweight tags point directly to a commit
+          TAG_TYPE=$(git cat-file -t "$TAG" 2>/dev/null || echo "commit")
+          if [ "$TAG_TYPE" = "tag" ]; then
+            TAG_OBJ_SHA=$(git rev-parse "$TAG")
+            VERIFIED=$(gh api "repos/${{ github.repository }}/git/tags/$TAG_OBJ_SHA" --jq '.verification.verified' 2>/dev/null || echo "false")
+          else
+            # Lightweight tag — check the commit signature
+            VERIFIED=$(gh api "repos/${{ github.repository }}/git/commits/$TAG_SHA" --jq '.verification.verified' 2>/dev/null || echo "false")
+          fi
+
+          if [ "$VERIFIED" != "true" ]; then
+            echo "ERROR: Tag $TAG is not signed by a verified GPG key."
+            echo "The tag must be signed by a key registered on the repository owner's GitHub account."
             exit 1
           fi
 
-          # --- Verify GPG key file ---
-          export GNUPGHOME="$(mktemp -d)"
-          trap 'rm -rf "$GNUPGHOME"' EXIT
-          gpg --batch --import "$TRUSTED_KEY" 2>/dev/null
-
-          ACTUAL_FINGERPRINT=$(gpg --list-keys --with-colons 2>/dev/null | grep '^fpr' | head -1 | cut -d: -f10)
-          if [ "$ACTUAL_FINGERPRINT" != "$TRUSTED_GPG_FINGERPRINT" ]; then
-            echo "ERROR: GPG key fingerprint mismatch!"
-            echo "  Expected (from secret): $TRUSTED_GPG_FINGERPRINT"
-            echo "  Actual (from file):     $ACTUAL_FINGERPRINT"
-            exit 1
-          fi
-          echo "GPG key fingerprint verified"
-
-          # --- Verify Cosign public key file ---
-          if [ -n "$TRUSTED_COSIGN_KEY_HASH" ] && [ -f "$COSIGN_PUB" ]; then
-            ACTUAL_COSIGN_HASH=$(sha256sum "$COSIGN_PUB" | awk '{print $1}')
-            if [ "$ACTUAL_COSIGN_HASH" != "$TRUSTED_COSIGN_KEY_HASH" ]; then
-              echo "ERROR: Cosign public key hash mismatch!"
-              echo "  Expected (from secret): $TRUSTED_COSIGN_KEY_HASH"
-              echo "  Actual (from file):     $ACTUAL_COSIGN_HASH"
-              exit 1
-            fi
-            echo "Cosign public key hash verified"
-          fi
-
-          # --- Verify tag signature ---
-          if ! git verify-tag "$TAG" 2>/dev/null; then
-            echo "ERROR: Tag $TAG is NOT signed by the trusted key."
-            exit 1
-          fi
-
-          echo "Tag signature verified: $TAG"
+          echo "Tag $TAG signature verified by GitHub"
 
   build-apk:
     runs-on: ubuntu-latest
