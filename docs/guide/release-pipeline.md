@@ -280,7 +280,26 @@ apksigner verify --print-certs svarla-v1.2.0.apk
 - The Android keystore proves **which app** is legitimate.
 - The signed tag connects **source code** to **release artifacts**.
 - CI only builds if the tag signature is valid — a compromised GitHub account alone cannot produce a release.
+- CI verifies the tagged commit exists on `main` — tags pointing to unreviewed commits on feature branches are rejected.
 - Signing keys exist only on the maintainer's machine and encrypted backups.
+
+### Protecting the verification itself
+
+The tag verification only works if the verification infrastructure (workflow file, public key, scripts) cannot be tampered with. This is enforced by:
+
+- **Branch protection on `main`** — require pull requests, require approvals, no direct pushes
+- **Commit ancestry check** — CI verifies the tagged commit is on `main`, preventing tags that point to feature branch commits with modified workflows
+- **Code review** — any changes to `.github/workflows/`, `.github/keys/`, or `scripts/verify-tag.sh` are visible in PRs
+
+Configure branch protection:
+
+```
+Repository → Settings → Branches → Add rule for "main"
+  ✓ Require a pull request before merging
+  ✓ Require approvals (1+)
+  ✓ Require status checks to pass
+  ✓ Do not allow bypassing the above settings (optional, strict mode)
+```
 
 ## Development Workflow
 
