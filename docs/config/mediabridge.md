@@ -52,7 +52,7 @@ log:
 
 | Setting | Default | Env Override | Description |
 |---------|---------|-------------|-------------|
-| `publicIp` | 127.0.0.1 | `PUBLIC_IP` | The address included in ICE candidates sent to clients. Can be an IP address or a domain name (the MediaBridge resolves it). Set this to your server's public IP or domain. |
+| `publicIp` | 127.0.0.1 | `PUBLIC_IP` | The address included in ICE candidates sent to clients. Can be an IP address or a domain name — if a hostname is given, the MediaBridge resolves it via DNS and re-resolves every 2 minutes (handles dynamic IPs). |
 
 ### sip
 

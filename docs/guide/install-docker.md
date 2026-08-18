@@ -128,7 +128,7 @@ DOMAIN=phone.example.com
 ```
 
 ::: tip
-`PUBLIC_IP` can be a domain name instead of an IP address (e.g. `PUBLIC_IP=phone.example.com`). The MediaBridge resolves it at startup. This is useful if your IP changes or you prefer not to hardcode it.
+`PUBLIC_IP` can be a domain name instead of an IP address (e.g. `PUBLIC_IP=phone.example.com`). The MediaBridge resolves it via DNS and re-resolves every 2 minutes, so it handles dynamic IPs automatically.
 :::
 
 | Variable | Purpose |
