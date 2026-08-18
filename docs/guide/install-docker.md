@@ -92,6 +92,10 @@ volumes:
   caddy_config:
 ```
 
+::: info Image signing
+All container images are signed with [Cosign](https://docs.sigstore.dev/cosign/overview/) (Sigstore keyless). You can verify their authenticity before running them — see [Verifying Releases](/guide/verify) for instructions.
+:::
+
 ## 3. Create `Caddyfile`
 
 ```
