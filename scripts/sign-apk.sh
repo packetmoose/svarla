@@ -9,7 +9,7 @@ set -e
 # Environment variables:
 #   APK_INPUT          Path to unsigned APK. Default: ./build-output/app-release-unsigned.apk
 #   APK_OUTPUT         Path for signed APK. Default: ./build-output/svarla-signed.apk
-#   KEYSTORE_PATH      Path to the keystore file. Default: ~/.android/release.keystore
+#   KEYSTORE_PATH      Path to the keystore file. Default: ~/.android/release.p12
 #   KEYSTORE_PASSWORD  Keystore password. Prompted interactively if not set.
 #   KEY_ALIAS          Key alias in the keystore. Default: release
 #   KEY_PASSWORD       Key password. Defaults to KEYSTORE_PASSWORD.
@@ -21,7 +21,7 @@ set -e
 # Usage:
 #   ./scripts/sign-apk.sh
 #   APK_INPUT=path/to/unsigned.apk APK_OUTPUT=path/to/signed.apk ./scripts/sign-apk.sh
-#   KEYSTORE_PATH=~/keys/my.keystore ./scripts/sign-apk.sh
+#   KEYSTORE_PATH=~/keys/my.p12 ./scripts/sign-apk.sh
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 info() { echo "─── $* ───"; }
@@ -29,7 +29,7 @@ info() { echo "─── $* ───"; }
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 APK_INPUT="${APK_INPUT:-$REPO_ROOT/build-output/app-release-unsigned.apk}"
 APK_OUTPUT="${APK_OUTPUT:-$REPO_ROOT/build-output/svarla-signed.apk}"
-KEYSTORE_PATH="${KEYSTORE_PATH:-$HOME/.android/release.keystore}"
+KEYSTORE_PATH="${KEYSTORE_PATH:-$HOME/.android/release.p12}"
 KEY_ALIAS="${KEY_ALIAS:-release}"
 IMAGE_NAME="svarla-android-build"
 
@@ -72,7 +72,7 @@ OUTPUT_FILENAME="$(basename "$APK_OUTPUT")"
 
 # Use the Docker build image which has apksigner available
 sudo docker run --rm \
-    -v "$KEYSTORE_PATH:/keystore/release.keystore:ro" \
+    -v "$KEYSTORE_PATH:/keystore/release.p12:ro" \
     -v "$INPUT_DIR:/input:ro" \
     -v "$OUTPUT_DIR:/output" \
     -e KEYSTORE_PASSWORD="$KEYSTORE_PASSWORD" \
@@ -82,7 +82,7 @@ sudo docker run --rm \
     "$IMAGE_NAME:release" \
     -c "
         apksigner sign \
-            --ks /keystore/release.keystore \
+            --ks /keystore/release.p12 \
             --ks-pass 'pass:${KEYSTORE_PASSWORD}' \
             --ks-key-alias '${KEY_ALIAS}' \
             --key-pass 'pass:${KEY_PASSWORD}' \

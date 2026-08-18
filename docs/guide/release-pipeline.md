@@ -66,7 +66,7 @@ You need only one signing key to manage:
 | Key | Purpose | Location |
 |-----|---------|----------|
 | GPG signing key | Sign git tags | Registered on your GitHub account |
-| Android keystore | Sign APKs | `~/.android/release.keystore` |
+| Android keystore | Sign APKs | `~/.android/release.p12` |
 | *(Cosign)* | Sign container images | Keyless — uses your GitHub identity |
 
 #### GPG Key
@@ -102,7 +102,8 @@ Generate if you don't have one:
 
 ```bash
 keytool -genkey -v \
-  -keystore ~/.android/release.keystore \
+  -keystore ~/.android/release.p12 \
+  -storetype PKCS12 \
   -keyalg RSA -keysize 2048 \
   -validity 10000 \
   -alias release
@@ -206,7 +207,7 @@ Or step by step:
 
 ```bash
 make apk                              # Build unsigned APK
-KEYSTORE_PATH=~/my.keystore make sign-apk  # Sign with your own key
+KEYSTORE_PATH=~/my.p12 make sign-apk  # Sign with your own key
 make server                           # Build server container
 make mediabridge                      # Build mediabridge container
 ```
@@ -249,7 +250,7 @@ Run `make help` for a full list. Key targets:
 | `VERSION_NAME` | from git tag | APK version string |
 | `VERSION_CODE` | git commit count | APK integer version code |
 | `OUTPUT_DIR` | `./build-output` | Where build artifacts go |
-| `KEYSTORE_PATH` | `~/.android/release.keystore` | Android signing keystore |
+| `KEYSTORE_PATH` | `~/.android/release.p12` | Android signing keystore (PKCS12) |
 | `COSIGN_KEY` | *(none — keyless)* | Optional Cosign private key for key-pair mode |
 | `IMAGE_TAG` | `dev` | Docker image tag |
 | `REGISTRY` | *(empty)* | Container registry prefix |
@@ -264,7 +265,7 @@ Only the Android keystore needs local backup:
 
 ```
 release-keys/
-  ├── android-release.keystore.enc   # gpg --symmetric
+  ├── android-release.p12.enc         # gpg --symmetric
   └── passwords.kdbx                 # KeePassXC (separate master password)
 ```
 

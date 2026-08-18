@@ -51,7 +51,8 @@ The only key you need to manage locally:
 
 ```bash
 keytool -genkey -v \
-  -keystore ~/.android/release.keystore \
+  -keystore ~/.android/release.p12 \
+  -storetype PKCS12 \
   -keyalg RSA -keysize 2048 \
   -validity 10000 \
   -alias release
