@@ -50,7 +50,6 @@ jobs:
 
           # Use GitHub's own tag verification — checks that the tag is signed
           # by a GPG key registered on the repository owner's account.
-          # Adding/removing GPG keys requires sudo mode (passkey re-auth).
           TAG_SHA=$(git rev-list -1 "$TAG")
 
           # GitHub annotated tags have their own object; lightweight tags point directly to a commit

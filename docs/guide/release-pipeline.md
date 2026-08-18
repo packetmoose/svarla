@@ -95,7 +95,6 @@ gpg --armor --export 3AA5C34371567BD2
 ```
 
 CI verifies tags via GitHub's API — no key file in the repo needed.
-Adding/removing GPG keys on your account requires passkey re-authentication.
 
 #### Android Keystore
 
@@ -282,13 +281,13 @@ Store key files and their passwords separately.
 
 ### Key Rotation
 
-- **GPG key**: Generate new key, add to GitHub account (passkey re-auth required), old releases remain verifiable.
+- **GPG key**: Generate new key, add to GitHub account, old releases remain verifiable.
 - **Cosign (keyless)**: Nothing to rotate — tied to your GitHub identity.
 - **Android keystore**: **Cannot** be rotated without users reinstalling the app.
 
 ## Security Considerations
 
-- CI verifies tags via GitHub's API — the tag must be signed by a GPG key registered on the maintainer's account (passkey-protected).
+- CI verifies tags via GitHub's API — the tag must be signed by a GPG key registered on the maintainer's account.
 - CI verifies the tagged commit exists on `main` — tags pointing to unreviewed commits are rejected.
 - Container images are signed by the maintainer's GitHub identity (Sigstore keyless) — signatures are logged in a public transparency log.
 - `CODEOWNERS` requires maintainer review for changes to workflows and scripts.

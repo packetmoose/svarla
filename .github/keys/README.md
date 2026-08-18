@@ -6,8 +6,8 @@ Svarla uses a simplified signing model with minimal key management:
 
 | What | Verified by | Protected by |
 |------|-------------|--------------|
-| Git tags | GitHub's tag verification API | Account GPG key (passkey to modify) |
-| Container images | Cosign keyless (Sigstore) | GitHub identity (passkey to authenticate) |
+| Git tags | GitHub's tag verification API | Account GPG key |
+| Container images | Cosign keyless (Sigstore) | GitHub identity |
 | Android APK | Android keystore | Local file (maintainer's machine) |
 
 ## Setup required

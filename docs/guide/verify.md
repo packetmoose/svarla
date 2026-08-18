@@ -40,7 +40,6 @@ Svarla uses a minimal signing model — no key files to distribute or manage:
 - **No key files to distribute** — you don't need to download a public key from anywhere
 - **No key rotation headaches** — identity-based, not key-based
 - **Transparency log** — every signature is recorded in [Rekor](https://rekor.sigstore.dev), publicly auditable
-- **Protected by passkey** — the GitHub identity used for signing requires passkey authentication
 
 ## Detailed Verification
 
@@ -97,7 +96,7 @@ You can also use [AppVerifier](https://f-droid.org/packages/dev.nicholasgasior.a
 ## Trust Chain
 
 ```
-Maintainer's GitHub account (passkey-protected)
+Maintainer's GitHub account
     │
     ├── GPG key registered on account
     │     └── Signs git tags → "Verified" badge on GitHub
