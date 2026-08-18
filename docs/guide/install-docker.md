@@ -144,22 +144,61 @@ DOMAIN=phone.example.com
 | `CONFIG_ENCRYPTION_KEY` | Encrypts provider secrets (API keys, tokens) at rest in the database. If omitted, secrets are stored in plaintext. |
 :::
 
-## 5. Start it
+## 5. Open firewall ports and verify DNS
 
-::: warning Before starting
-Make sure your DNS A record is pointing to the server and ports 80 and 443 are open **before** running `docker compose up`. Caddy will immediately attempt to obtain a Let's Encrypt certificate, and if the ACME challenge fails (because DNS doesn't resolve or port 80 is blocked), repeated attempts can **rate-limit your domain** for up to a week.
+Before starting, ensure your firewall allows the necessary ports and your DNS is configured.
+
+**Required ports:**
+
+| Port | Protocol | Why |
+|------|----------|-----|
+| 80 | TCP | Caddy — HTTP → HTTPS redirect and Let's Encrypt challenge |
+| 443 | TCP | Caddy — HTTPS for clients, provider webhooks, and 46elks audio WebSocket |
+| 10443 | TCP + UDP | WebRTC audio — the Android app connects here for call audio |
+| 5060 | TCP + UDP | SIP signaling (Vonage only) |
+| 5061 | TCP | SIP TLS (Vonage only) |
+| 5062 | UDP | RTP media — SIP call audio (Vonage only) |
+
+::: info
+Ports 5060, 5061, and 5062 are only required if you use a SIP-based provider (Vonage). If you only use 46elks, you can leave them closed — 46elks audio goes through the WebSocket proxy on port 443.
 :::
+
+**Ports that stay closed:**
+
+| Port | Purpose |
+|------|---------|
+| 3000 | Server (only accessed by Caddy internally) |
+| 5432 | PostgreSQL (internal only) |
+| 9090 | MediaBridge ControlAPI (internal only) |
+| 9091 | Audio WebSocket (proxied through Caddy on port 443, not exposed directly) |
+
+**Verify DNS resolves correctly:**
+
+```bash
+dig +short phone.example.com
+# Should return your server's public IP
+```
+
+::: warning
+Caddy will immediately attempt to obtain a Let's Encrypt certificate on startup. If DNS doesn't resolve to this server or port 80 is blocked, the ACME challenge fails and repeated attempts can **rate-limit your domain** for up to a week.
+:::
+
+## 6. Start it
 
 ```bash
 docker compose up -d
 ```
 
-Caddy will automatically obtain a TLS certificate from Let's Encrypt (your domain's DNS must already point to the server). Your server is now running at `https://phone.example.com`.
+Caddy will automatically obtain a TLS certificate from Let's Encrypt. Your server is now running at `https://phone.example.com`.
 
 Log in with the password you set in `INITIAL_PASSWORD`.
 
 ::: tip
 Port 10443 (WebRTC) is **not** proxied through Caddy — it uses DTLS encryption directly between the client and MediaBridge. No additional TLS termination is needed for audio.
+:::
+
+::: warning
+If port 10443 is not reachable from the internet, calls will have no audio — signaling works but the audio path fails.
 :::
 
 ## Using your own reverse proxy
@@ -202,36 +241,6 @@ services:
 ```
 
 See [Building from Source](/guide/install-manual) for full details on the build system.
-
-## Firewall / ports that must be open
-
-These ports need to be accessible from the internet for Svarla to work:
-
-| Port | Protocol | Why |
-|------|----------|-----|
-| 80 | TCP | Caddy — HTTP → HTTPS redirect and Let's Encrypt challenge |
-| 443 | TCP | Caddy — HTTPS for clients, provider webhooks, and 46elks audio WebSocket |
-| 10443 | TCP + UDP | WebRTC audio — the Android app connects here for call audio |
-| 5060 | TCP + UDP | SIP signaling (Vonage only) |
-| 5061 | TCP | SIP TLS (Vonage only) |
-| 5062 | UDP | RTP media — SIP call audio (Vonage only) |
-
-::: info
-Ports 5060, 5061, and 5062 are only required if you use a SIP-based provider (Vonage). If you only use 46elks, you can leave them closed — 46elks audio goes through the WebSocket proxy on port 443.
-:::
-
-These ports can stay **closed** to the internet:
-
-| Port | Purpose |
-|------|---------|
-| 3000 | Server (only accessed by Caddy internally) |
-| 5432 | PostgreSQL (internal only) |
-| 9090 | MediaBridge ControlAPI (internal only) |
-| 9091 | Audio WebSocket (proxied through Caddy on port 443, not exposed directly) |
-
-::: warning
-If port 10443 is not reachable from the internet, calls will have no audio — signaling works but the audio path fails.
-:::
 
 ## Next steps
 
