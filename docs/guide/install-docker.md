@@ -208,9 +208,13 @@ These ports need to be accessible from the internet for Svarla to work:
 | 80 | TCP | Caddy — HTTP → HTTPS redirect and Let's Encrypt challenge |
 | 443 | TCP | Caddy — HTTPS for clients, provider webhooks, and 46elks audio WebSocket |
 | 10443 | TCP + UDP | WebRTC audio — the Android app connects here for call audio |
-| 5060 | TCP + UDP | SIP — provider connects here for call signaling |
-| 5061 | TCP | SIP TLS — provider secure SIP |
-| 5062 | UDP | RTP media — SIP call audio |
+| 5060 | TCP + UDP | SIP signaling (Vonage only) |
+| 5061 | TCP | SIP TLS (Vonage only) |
+| 5062 | UDP | RTP media — SIP call audio (Vonage only) |
+
+::: info
+Ports 5060, 5061, and 5062 are only required if you use a SIP-based provider (Vonage). If you only use 46elks, you can leave them closed — 46elks audio goes through the WebSocket proxy on port 443.
+:::
 
 These ports can stay **closed** to the internet:
 
@@ -222,7 +226,7 @@ These ports can stay **closed** to the internet:
 | 9091 | Audio WebSocket (proxied through Caddy on port 443, not exposed directly) |
 
 ::: warning
-If ports 10443 and 5060 are not reachable from the internet, calls will fail silently — the signaling works but no audio flows.
+If port 10443 is not reachable from the internet, calls will have no audio — signaling works but the audio path fails.
 :::
 
 ## Next steps
