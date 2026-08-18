@@ -4,11 +4,18 @@ If you want to develop Svarla or run it without pulling pre-built images, you ca
 
 ## Prerequisites
 
+### Building containers and APKs (Makefile)
+
+- Docker
+- Make
+
+Everything else (Node.js, Go, Android SDK) runs inside Docker — no local runtimes needed.
+
+### Local development (without Docker)
+
 - Node.js 20+
 - PostgreSQL 16+
-- Go 1.22+ (for MediaBridge, only if building without Docker)
-- Docker (for container builds and APK builds)
-- Make
+- Go 1.22+ (only for working on the MediaBridge)
 
 ## Using the Makefile
 
