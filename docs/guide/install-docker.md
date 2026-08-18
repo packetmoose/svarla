@@ -146,6 +146,10 @@ DOMAIN=phone.example.com
 
 ## 5. Start it
 
+::: warning Before starting
+Make sure your DNS A record is pointing to the server and ports 80 and 443 are open **before** running `docker compose up`. Caddy will immediately attempt to obtain a Let's Encrypt certificate, and if the ACME challenge fails (because DNS doesn't resolve or port 80 is blocked), repeated attempts can **rate-limit your domain** for up to a week.
+:::
+
 ```bash
 docker compose up -d
 ```
