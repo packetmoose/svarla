@@ -13,7 +13,7 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  version:
+  verify:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.version.outputs.version }}
@@ -32,9 +32,74 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "Version: ${VERSION}, Tag: ${TAG}"
 
+      - name: Verify commit is on main
+        run: |
+          git fetch origin main
+          if ! git merge-base --is-ancestor ${{ github.sha }} origin/main; then
+            echo "ERROR: Tagged commit is not on the main branch."
+            echo "Releases can only be created from commits that exist on main."
+            exit 1
+          fi
+          echo "Verified: commit ${{ github.sha }} is on main"
+
+      - name: Verify tag signature
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF#refs/tags/}"
+
+          # Use GitHub's own tag verification — checks that the tag is signed
+          # by a GPG key registered on the repository owner's account.
+          TAG_SHA=$(git rev-list -1 "$TAG")
+
+          # GitHub annotated tags have their own object; lightweight tags point directly to a commit
+          TAG_TYPE=$(git cat-file -t "$TAG" 2>/dev/null || echo "commit")
+          if [ "$TAG_TYPE" = "tag" ]; then
+            TAG_OBJ_SHA=$(git rev-parse "$TAG")
+            VERIFIED=$(gh api "repos/${{ github.repository }}/git/tags/$TAG_OBJ_SHA" --jq '.verification.verified' 2>/dev/null || echo "false")
+          else
+            # Lightweight tag — check the commit signature
+            VERIFIED=$(gh api "repos/${{ github.repository }}/git/commits/$TAG_SHA" --jq '.verification.verified' 2>/dev/null || echo "false")
+          fi
+
+          if [ "$VERIFIED" != "true" ]; then
+            echo "ERROR: Tag $TAG is not signed by a verified GPG key."
+            echo "The tag must be signed by a key registered on the repository owner's GitHub account."
+            exit 1
+          fi
+
+          echo "Tag $TAG signature verified by GitHub"
+
+  build-apk:
+    runs-on: ubuntu-latest
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build unsigned APK
+        run: |
+          TAG="${{ needs.verify.outputs.tag }}"
+          VERSION_NAME="${TAG#v}"
+          VERSION_CODE="$(git rev-list --count HEAD)"
+          make apk VERSION_NAME="$VERSION_NAME" VERSION_CODE="$VERSION_CODE"
+
+      - name: Compute checksum
+        run: |
+          sha256sum build-output/app-release-unsigned.apk > build-output/checksums.sha256
+          cat build-output/checksums.sha256
+
+      - name: Upload APK as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: unsigned-apk
+          path: |
+            build-output/app-release-unsigned.apk
+            build-output/checksums.sha256
+          retention-days: 7
+
   server:
     runs-on: ubuntu-latest
-    needs: version
+    needs: verify
     steps:
       - uses: actions/checkout@v4
 
@@ -52,24 +117,15 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push server image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/svarla-server:${{ needs.version.outputs.tag }}
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/svarla-server:latest
-          labels: |
-            org.opencontainers.image.version=${{ needs.version.outputs.version }}
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-          cache-from: type=gha,scope=server
-          cache-to: type=gha,mode=max,scope=server
+        run: |
+          make ci-server \
+            IMAGE_TAG="${{ needs.verify.outputs.tag }}" \
+            REGISTRY="${{ env.REGISTRY }}/${{ github.repository_owner }}" \
+            PLATFORM="linux/amd64,linux/arm64"
 
   mediabridge:
     runs-on: ubuntu-latest
-    needs: version
+    needs: verify
     steps:
       - uses: actions/checkout@v4
 
@@ -87,17 +143,66 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push mediabridge image
-        uses: docker/build-push-action@v5
+        run: |
+          make ci-mediabridge \
+            IMAGE_TAG="${{ needs.verify.outputs.tag }}" \
+            REGISTRY="${{ env.REGISTRY }}/${{ github.repository_owner }}" \
+            PLATFORM="linux/amd64,linux/arm64"
+
+  create-draft-release:
+    runs-on: ubuntu-latest
+    needs: [verify, build-apk, server, mediabridge]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download APK artifact
+        uses: actions/download-artifact@v4
         with:
-          context: ./mediabridge
-          file: ./mediabridge/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/svarla-mediabridge:${{ needs.version.outputs.tag }}
-            ${{ env.REGISTRY }}/${{ github.repository_owner }}/svarla-mediabridge:latest
-          labels: |
-            org.opencontainers.image.version=${{ needs.version.outputs.version }}
-            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
-          cache-from: type=gha,scope=mediabridge
-          cache-to: type=gha,mode=max,scope=mediabridge
+          name: unsigned-apk
+          path: ./build-output
+
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.verify.outputs.tag }}"
+          REPO="${{ github.repository }}"
+          RELEASES_DIR="docs/releases"
+          RELEASE_FILE="${RELEASES_DIR}/${TAG}.md"
+
+          # Build release body from release notes file
+          if [ -f "$RELEASE_FILE" ]; then
+            RELEASE_CONTENT="$(sed '1{/^# /d}' "$RELEASE_FILE")"
+          else
+            RELEASE_CONTENT="Release ${TAG}"
+          fi
+
+          RELEASE_BODY="${RELEASE_CONTENT}
+
+          ## Docker
+
+          Pull the container images:
+          \`\`\`
+          docker pull ${REGISTRY}/${GITHUB_REPOSITORY_OWNER}/svarla-server:${TAG}
+          docker pull ${REGISTRY}/${GITHUB_REPOSITORY_OWNER}/svarla-mediabridge:${TAG}
+          \`\`\`
+
+          ## Status
+
+          ⚠️ **This is a draft release.** Artifacts are unsigned.
+          The maintainer will sign the APK and container images, then publish this release.
+
+          ## Build Info
+
+          - Commit: ${{ github.sha }}
+          - Workflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          # Create draft release with unsigned APK
+          gh release create "$TAG" \
+            --title "Svarla $TAG" \
+            --notes "$RELEASE_BODY" \
+            --draft \
+            "build-output/app-release-unsigned.apk#svarla-${TAG}-unsigned.apk" \
+            "build-output/checksums.sha256#checksums.sha256"
+
+          echo "Draft release created for $TAG"

@@ -16,7 +16,7 @@ if [ "$BUILD_TYPE" = "release" ]; then
     fi
 
     # Sign the APK if keystore is available
-    if [ -f "/keystore/release.keystore" ]; then
+    if [ -f "/keystore/svarla-release.p12" ]; then
         echo "Signing APK..."
 
         if [ -z "$KEYSTORE_PASSWORD" ]; then
@@ -28,7 +28,7 @@ if [ "$BUILD_TYPE" = "release" ]; then
         KEY_PASSWORD="${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
 
         apksigner sign \
-            --ks /keystore/release.keystore \
+            --ks /keystore/svarla-release.p12 \
             --ks-pass "pass:${KEYSTORE_PASSWORD}" \
             --ks-key-alias "$KEY_ALIAS" \
             --key-pass "pass:${KEY_PASSWORD}" \
@@ -39,7 +39,7 @@ if [ "$BUILD_TYPE" = "release" ]; then
         apksigner verify --print-certs "$SIGNED_APK_PATH"
         echo "Signed APK: $SIGNED_APK_PATH"
     else
-        echo "No keystore found at /keystore/release.keystore, copying unsigned APK"
+        echo "No keystore found at /keystore/svarla-release.p12, copying unsigned APK"
         cp "$APK_PATH" "${OUTPUT_DIR}/app-release-unsigned.apk"
     fi
 else

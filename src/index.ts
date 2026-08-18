@@ -3,6 +3,7 @@ import { buildServer } from './server.js';
 import { bootstrap } from './bootstrap.js';
 import { createDatabase } from './database.js';
 import { StartupCleanupService } from './services/startup-cleanup-service.js';
+import { ApkProvisioningService } from './services/apk-provisioning-service.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -28,6 +29,20 @@ async function main(): Promise<void> {
   await cleanupDb.destroy();
 
   const server = await buildServer(config);
+
+  // Provision APK for the download endpoint (non-blocking — server starts regardless)
+  const pkg = await import('../package.json', { assert: { type: 'json' } });
+  const apkConfig = ApkProvisioningService.loadConfig(pkg.default.version);
+  const apkService = new ApkProvisioningService(apkConfig, server.log);
+  apkService.provision().then((available) => {
+    if (available) {
+      server.log.info('[APK] Download endpoint ready');
+    } else {
+      server.log.info('[APK] No APK available — download page will show unavailable');
+    }
+  }).catch((err) => {
+    server.log.warn(err, '[APK] Provisioning failed');
+  });
 
   try {
     await server.listen({ port: config.port, host: config.host });

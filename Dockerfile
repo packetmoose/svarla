@@ -30,6 +30,13 @@ COPY --from=builder /app/dist/migrations ./migrations-compiled
 COPY server-config.yaml ./
 COPY public/ ./public/
 
+# APK downloads directory.
+# The APK is provisioned at runtime by ApkProvisioningService:
+# - Production: fetched from GitHub release matching the server version
+# - Development: volume-mounted from local build output
+# - Self-builders: volume-mounted or provided via APK_SOURCE=local
+RUN mkdir -p ./public/downloads
+
 EXPOSE 3000
 
 CMD ["node", "dist/index.js"]
