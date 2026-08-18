@@ -66,7 +66,6 @@ services:
       - "5060:5060/tcp"     # SIP (TCP)
       - "5061:5061/tcp"     # SIP TLS (SIPS)
       - "5062:5062/udp"     # RTP media (SIP audio)
-      - "9091:9091"         # Audio WebSocket
     environment:
       PUBLIC_IP: ${PUBLIC_IP}
     depends_on:
@@ -97,9 +96,26 @@ volumes:
 
 ```
 {$DOMAIN} {
-    reverse_proxy server:3000
+    # Audio WebSocket proxy (46elks connects here for call audio over TLS)
+    handle /audio/* {
+        reverse_proxy mediabridge:9091
+    }
+
+    # All other traffic goes to the server
+    handle {
+        reverse_proxy server:3000
+    }
+
+    header {
+        Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+    }
 }
 ```
+
+This handles both the server API and the 46elks audio WebSocket behind TLS. Caddy automatically obtains and renews Let's Encrypt certificates for your domain.
 
 ## 4. Create `.env`
 
@@ -186,12 +202,11 @@ These ports need to be accessible from the internet for Svarla to work:
 | Port | Protocol | Why |
 |------|----------|-----|
 | 80 | TCP | Caddy — HTTP → HTTPS redirect and Let's Encrypt challenge |
-| 443 | TCP | Caddy — HTTPS for clients and provider webhooks |
+| 443 | TCP | Caddy — HTTPS for clients, provider webhooks, and 46elks audio WebSocket |
 | 10443 | TCP + UDP | WebRTC audio — the Android app connects here for call audio |
 | 5060 | TCP + UDP | SIP — provider connects here for call signaling |
 | 5061 | TCP | SIP TLS — provider secure SIP |
 | 5062 | UDP | RTP media — SIP call audio |
-| 9091 | TCP | Audio WebSocket — 46elks connects here for call audio |
 
 These ports can stay **closed** to the internet:
 
@@ -200,9 +215,10 @@ These ports can stay **closed** to the internet:
 | 3000 | Server (only accessed by Caddy internally) |
 | 5432 | PostgreSQL (internal only) |
 | 9090 | MediaBridge ControlAPI (internal only) |
+| 9091 | Audio WebSocket (proxied through Caddy on port 443, not exposed directly) |
 
 ::: warning
-If ports 10443, 5060, and 9091 are not reachable from the internet, calls will fail silently — the signaling works but no audio flows.
+If ports 10443 and 5060 are not reachable from the internet, calls will fail silently — the signaling works but no audio flows.
 :::
 
 ## Next steps
