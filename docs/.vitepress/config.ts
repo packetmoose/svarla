@@ -33,6 +33,7 @@ export default defineConfig({
           text: 'Installation',
           items: [
             { text: 'Installation', link: '/guide/install-docker' },
+            { text: 'Cloudflare Tunnel', link: '/guide/cloudflare-tunnel' },
             { text: 'Building from Source', link: '/guide/install-manual' }
           ]
         },
