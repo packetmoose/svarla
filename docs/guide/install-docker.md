@@ -127,11 +127,15 @@ PUBLIC_IP=203.0.113.10
 DOMAIN=phone.example.com
 ```
 
+::: tip
+`PUBLIC_IP` can be a domain name instead of an IP address (e.g. `PUBLIC_IP=phone.example.com`). The MediaBridge resolves it at startup. This is useful if your IP changes or you prefer not to hardcode it.
+:::
+
 | Variable | Purpose |
 |----------|---------|
 | `POSTGRES_PASSWORD` | Database password. Pick something strong, you won't need to type it. |
 | `INITIAL_PASSWORD` | The password you log in with. Can be changed later from the web interface. |
-| `PUBLIC_IP` | Your server's public IP. Used in WebRTC ICE candidates and SIP so clients and providers can connect for call audio. |
+| `PUBLIC_IP` | Your server's public IP address or domain name. Used in WebRTC ICE candidates and SIP so clients and providers can connect for call audio. Can be an IP (e.g. `203.0.113.10`) or a hostname (e.g. `phone.example.com`) — the MediaBridge resolves it. |
 | `DOMAIN` | Your domain name (e.g. `phone.example.com`). Caddy automatically obtains a Let's Encrypt certificate for it. |
 
 ::: info Optional variables
