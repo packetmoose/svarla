@@ -66,7 +66,7 @@ You need only one signing key to manage:
 | Key | Purpose | Location |
 |-----|---------|----------|
 | GPG signing key | Sign git tags | Registered on your GitHub account |
-| Android keystore | Sign APKs | `~/.android/release.p12` |
+| Android keystore | Sign APKs | `~/.android/svarla-release.p12` |
 | *(Cosign)* | Sign container images | Keyless — uses your GitHub identity |
 
 #### GPG Key
@@ -102,7 +102,7 @@ Generate if you don't have one:
 
 ```bash
 keytool -genkey -v \
-  -keystore ~/.android/release.p12 \
+  -keystore ~/.android/svarla-release.p12 \
   -storetype PKCS12 \
   -keyalg RSA -keysize 2048 \
   -validity 10000 \
@@ -250,7 +250,7 @@ Run `make help` for a full list. Key targets:
 | `VERSION_NAME` | from git tag | APK version string |
 | `VERSION_CODE` | git commit count | APK integer version code |
 | `OUTPUT_DIR` | `./build-output` | Where build artifacts go |
-| `KEYSTORE_PATH` | `~/.android/release.p12` | Android signing keystore (PKCS12) |
+| `KEYSTORE_PATH` | `~/.android/svarla-release.p12` | Android signing keystore (PKCS12) |
 | `COSIGN_KEY` | *(none — keyless)* | Optional Cosign private key for key-pair mode |
 | `IMAGE_TAG` | `dev` | Docker image tag |
 | `REGISTRY` | *(empty)* | Container registry prefix |
@@ -265,7 +265,7 @@ Only the Android keystore needs local backup:
 
 ```
 release-keys/
-  ├── android-release.p12.enc         # gpg --symmetric
+  ├── android-svarla-release.p12.enc         # gpg --symmetric
   └── passwords.kdbx                 # KeePassXC (separate master password)
 ```
 

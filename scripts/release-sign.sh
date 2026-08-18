@@ -20,7 +20,7 @@ set -e
 #   - CI has completed and created a draft release
 #
 # Environment variables:
-#   KEYSTORE_PATH       Path to the Android keystore. Default: ~/.android/release.p12
+#   KEYSTORE_PATH       Path to the Android keystore. Default: ~/.android/svarla-release.p12
 #   KEYSTORE_PASSWORD   Keystore password (prompted if not set)
 #   KEY_ALIAS           Key alias. Default: release
 #   KEY_PASSWORD        Key password. Defaults to KEYSTORE_PASSWORD.
@@ -43,7 +43,7 @@ Options:
   -h, --help      Show this help message
 
 Environment variables:
-  KEYSTORE_PATH       Path to Android keystore. Default: ~/.android/release.p12
+  KEYSTORE_PATH       Path to Android keystore. Default: ~/.android/svarla-release.p12
   KEYSTORE_PASSWORD   Keystore password. Prompted interactively if not set.
   KEY_ALIAS           Key alias. Default: release
   KEY_PASSWORD        Key password. Defaults to KEYSTORE_PASSWORD.
@@ -61,7 +61,7 @@ fi
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 OUTPUT_DIR="$REPO_ROOT/build-output"
-KEYSTORE_PATH="${KEYSTORE_PATH:-$HOME/.android/release.p12}"
+KEYSTORE_PATH="${KEYSTORE_PATH:-$HOME/.android/svarla-release.p12}"
 KEY_ALIAS="${KEY_ALIAS:-release}"
 COSIGN_KEY="${COSIGN_KEY:-}"
 
@@ -176,13 +176,13 @@ if ! docker image inspect "$IMAGE_NAME:release" >/dev/null 2>&1; then
 fi
 
 sudo docker run --rm \
-    -v "$KEYSTORE_PATH:/keystore/release.p12:ro" \
+    -v "$KEYSTORE_PATH:/keystore/svarla-release.p12:ro" \
     -v "$OUTPUT_DIR:/work" \
     --entrypoint /bin/bash \
     "$IMAGE_NAME:release" \
     -c "
         apksigner sign \
-            --ks /keystore/release.p12 \
+            --ks /keystore/svarla-release.p12 \
             --ks-pass 'pass:${KEYSTORE_PASSWORD}' \
             --ks-key-alias '${KEY_ALIAS}' \
             --key-pass 'pass:${KEY_PASSWORD}' \

@@ -51,7 +51,7 @@ The only key you need to manage locally:
 
 ```bash
 keytool -genkey -v \
-  -keystore ~/.android/release.p12 \
+  -keystore ~/.android/svarla-release.p12 \
   -storetype PKCS12 \
   -keyalg RSA -keysize 2048 \
   -validity 10000 \
