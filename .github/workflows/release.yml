@@ -56,15 +56,29 @@ jobs:
           TAG_TYPE=$(git cat-file -t "$TAG" 2>/dev/null || echo "commit")
           if [ "$TAG_TYPE" = "tag" ]; then
             TAG_OBJ_SHA=$(git rev-parse "$TAG")
-            VERIFIED=$(gh api "repos/${{ github.repository }}/git/tags/$TAG_OBJ_SHA" --jq '.verification.verified' 2>/dev/null || echo "false")
+            API_PATH="repos/${{ github.repository }}/git/tags/$TAG_OBJ_SHA"
           else
             # Lightweight tag — check the commit signature
-            VERIFIED=$(gh api "repos/${{ github.repository }}/git/commits/$TAG_SHA" --jq '.verification.verified' 2>/dev/null || echo "false")
+            API_PATH="repos/${{ github.repository }}/git/commits/$TAG_SHA"
           fi
+
+          # GitHub's signature verification is async — it may not be ready
+          # immediately after a tag push triggers the workflow. Retry a few times.
+          VERIFIED="false"
+          for i in 1 2 3 4 5; do
+            VERIFIED=$(gh api "$API_PATH" --jq '.verification.verified' 2>/dev/null || echo "false")
+            if [ "$VERIFIED" = "true" ]; then
+              break
+            fi
+            echo "Attempt $i: verification not yet confirmed, waiting 10s..."
+            sleep 10
+          done
 
           if [ "$VERIFIED" != "true" ]; then
             echo "ERROR: Tag $TAG is not signed by a verified GPG key."
             echo "The tag must be signed by a key registered on the repository owner's GitHub account."
+            echo "Debug: API response for $API_PATH:"
+            gh api "$API_PATH" --jq '.verification' 2>/dev/null || echo "(API call failed)"
             exit 1
           fi
 
