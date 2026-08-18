@@ -6,7 +6,13 @@ Svarla runs as a set of Docker containers. You don't need to clone the source co
 
 - A Linux server (VPS, home server, etc.)
 - Docker and Docker Compose installed
-- A public IP address (for receiving calls and webhooks from cloud providers)
+- **A public IP address** — required for WebRTC audio and provider SIP connections
+- **A domain name with TLS (HTTPS)** — required for provider webhooks and the web interface
+- A DNS A record pointing your domain to the server's public IP
+
+::: warning Required: Public IP + TLS
+Svarla **will not work** without a public IP and TLS. Telephony providers (Vonage, 46elks) require HTTPS callback URLs for incoming calls and SMS. The MediaBridge needs a public IP so clients can connect for call audio and providers can reach it via SIP. Without these, signaling may appear to work but calls will have no audio and incoming events won't arrive.
+:::
 
 ## 1. Create the deployment directory
 
@@ -87,34 +93,68 @@ CONFIG_ENCRYPTION_KEY=
 |----------|---------|
 | `POSTGRES_PASSWORD` | Database password. Pick something strong, you won't need to type it. |
 | `INITIAL_PASSWORD` | The password you log in with. Can be changed later from the web interface. |
-| `PUBLIC_IP` | Your server's public IP. Used in WebRTC ICE candidates so clients can connect for call audio. |
-| `BASE_URL` | The public URL of your server (e.g. `https://phone.example.com`). Telephony providers send webhooks to this address. |
+| `PUBLIC_IP` | Your server's public IP. Used in WebRTC ICE candidates and SIP so clients and providers can connect for call audio. |
+| `BASE_URL` | The public HTTPS URL of your server (e.g. `https://phone.example.com`). Telephony providers send webhooks to this address — **must be HTTPS**. |
 | `CORS_ORIGIN` | Usually the same as `BASE_URL`. Allows the web interface to make API requests. |
 | `CONFIG_ENCRYPTION_KEY` | Optional. A key for encrypting provider secrets (API keys, tokens) at rest in the database. If omitted, secrets are stored in plaintext. |
 
-## 4. Start it
+## 4. Set up TLS
 
-```bash
-docker compose up -d
-```
+TLS is required for Svarla to function — providers will not send webhooks to plain HTTP URLs, and browsers restrict features on insecure origins.
 
-That's it. The server is running at `http://your-server:3000`. Log in with the password you set in `INITIAL_PASSWORD`.
-
-## Adding TLS
-
-For HTTPS with automatic certificates, add Caddy as a reverse proxy. Create a `Caddyfile`:
+The simplest approach is Caddy as a reverse proxy with automatic Let's Encrypt certificates. Create a `Caddyfile`:
 
 ```
-your-domain.com {
+phone.example.com {
     reverse_proxy server:3000
 }
 ```
 
-And add a Caddy service to your compose file, or use a separate Caddy instance. Set `BASE_URL` and `CORS_ORIGIN` in `.env` to your domain (e.g. `https://phone.example.com`).
+And a `docker-compose.caddy.yml` overlay:
+
+```yaml
+services:
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - server
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
+```
+
+Then start everything together:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+```
+
+Set `BASE_URL` and `CORS_ORIGIN` in `.env` to your domain (e.g. `https://phone.example.com`).
 
 ::: tip
-Port 10443 (WebRTC) doesn't go through the reverse proxy — it uses DTLS encryption directly between the client and MediaBridge.
+Port 10443 (WebRTC) is **not** proxied through Caddy — it uses DTLS encryption directly between the client and MediaBridge. No additional TLS termination is needed for audio.
 :::
+
+::: info Alternative: existing reverse proxy
+If you already have a reverse proxy (nginx, Traefik, etc.), point it at port 3000 and configure TLS there. The key requirement is that `BASE_URL` resolves to an HTTPS endpoint that providers can reach.
+:::
+
+## 5. Start it
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.caddy.yml up -d
+```
+
+Your server is now running at `https://phone.example.com`. Log in with the password you set in `INITIAL_PASSWORD`.
 
 ## Updating
 
@@ -145,7 +185,7 @@ services:
     image: svarla-mediabridge:dev
 ```
 
-See [Release Pipeline](/guide/release-pipeline) for full details on the build system and key management.
+See [Building from Source](/guide/install-manual) for full details on the build system.
 
 ## Firewall / ports that must be open
 
@@ -153,12 +193,12 @@ These ports need to be accessible from the internet for Svarla to work:
 
 | Port | Protocol | Why |
 |------|----------|-----|
-| 3000 (or 443) | TCP | Server API — clients connect here, providers send webhooks here |
+| 443 (or 3000) | TCP | Server API — clients connect here, providers send webhooks here |
 | 10443 | TCP + UDP | WebRTC audio — the Android app connects here for call audio |
-| 5060 | TCP + UDP | SIP — Vonage connects here for call signaling |
-| 5061 | TCP | SIP TLS — Vonage secure SIP |
+| 5060 | TCP + UDP | SIP — provider connects here for call signaling |
+| 5061 | TCP | SIP TLS — provider secure SIP |
 | 5062 | UDP | RTP media — SIP call audio |
-| 9091 | TCP | Audio WebSocket — 46elks connects here for call audio (should be proxied through Caddy or similar for TLS) |
+| 9091 | TCP | Audio WebSocket — 46elks connects here for call audio (should be proxied through Caddy for TLS) |
 
 These ports can stay **closed** to the internet:
 

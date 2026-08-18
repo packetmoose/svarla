@@ -40,7 +40,8 @@ export default defineConfig({
           text: 'Clients',
           items: [
             { text: 'Android App', link: '/guide/android' },
-            { text: 'Web Interface', link: '/guide/web-interface' }
+            { text: 'Web Interface', link: '/guide/web-interface' },
+            { text: 'Notifications', link: '/guide/notifications' }
           ]
         },
         {
@@ -48,8 +49,7 @@ export default defineConfig({
           items: [
             { text: 'Overview', link: '/guide/providers-overview' },
             { text: 'Vonage', link: '/guide/provider-vonage' },
-            { text: '46elks', link: '/guide/provider-46elks' },
-            { text: 'ModemManager', link: '/guide/provider-modemmanager' }
+            { text: '46elks', link: '/guide/provider-46elks' }
           ]
         },
         {

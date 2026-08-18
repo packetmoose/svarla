@@ -8,7 +8,6 @@ Svarla is provider-agnostic. You can add, remove, and reconfigure telephony prov
 |----------|------|-----------------|----------|
 | [Vonage](/guide/provider-vonage) | Cloud VoIP | SIP → MediaBridge | Voice + SMS |
 | [46elks](/guide/provider-46elks) | Cloud VoIP | Audio WS → MediaBridge | Voice + SMS |
-| [ModemManager](/guide/provider-modemmanager) | Hardware | — | SMS only (physical SIM) |
 
 ## How providers work
 
