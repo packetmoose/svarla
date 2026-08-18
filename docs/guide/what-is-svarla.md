@@ -25,7 +25,7 @@ Most VoIP solutions are either locked to a single provider, run through someone 
 1. The **Server** handles signaling, call state, SMS routing, and device sync.
 2. The **MediaBridge** terminates WebRTC connections from clients and bridges the audio to telephony providers via SIP or WebSocket streams.
 3. The **Android App** connects to the server over WebSocket for signaling and to the MediaBridge over WebRTC for audio.
-4. **Telephony providers** (Vonage, 46elks, ModemManager) connect to the MediaBridge for audio and send webhooks to the Server for call/SMS events.
+4. **Telephony providers** (Vonage, 46elks) connect to the MediaBridge for audio and send webhooks to the Server for call/SMS events.
 
 ## Current status
 

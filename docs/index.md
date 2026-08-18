@@ -17,7 +17,7 @@ features:
   - title: Self-Hosted
     details: Run the entire stack on your own hardware. No third-party services sit between you and your calls.
   - title: Provider Agnostic
-    details: Plug in Vonage, 46elks, or a USB modem — swap providers at runtime without restarting anything.
+    details: Plug in Vonage or 46elks — swap providers at runtime without restarting anything.
   - title: Native Android Client
     details: A purpose-built Kotlin app with Jetpack Compose, WebRTC audio, and real-time sync over WebSocket.
   - title: WebRTC Audio

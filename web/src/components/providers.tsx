@@ -510,7 +510,6 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
           >
             <option value="vonage">Vonage</option>
             <option value="46elks">46elks</option>
-            <option value="modemmanager">ModemManager</option>
             <option value="dummy">Dummy</option>
           </select>
           {getFieldError("type") && (
