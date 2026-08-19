@@ -9,7 +9,8 @@ Most VoIP solutions are either locked to a single provider, run through someone 
 - You own the infrastructure
 - You choose your telephony provider (or use multiple)
 - Your call audio never touches a third-party server unnecessarily
-- You can add or remove numbers at runtime
+- You can receive calls and text while only on wifi
+- You use the same numbers on all devices
 
 ## Components
 
@@ -29,4 +30,4 @@ Most VoIP solutions are either locked to a single provider, run through someone 
 
 ## Current status
 
-Svarla is in active development. It works for personal use but is not production-hardened. Expect breaking changes, known security gaps, and rough edges.
+Svarla is in active development. It works for personal use but is not fully production ready. Expect breaking changes, and rough edges.

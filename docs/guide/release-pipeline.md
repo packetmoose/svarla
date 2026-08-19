@@ -19,8 +19,8 @@ Svarla uses a two-phase release pipeline where CI builds all artifacts transpare
 | Main branch | GitHub branch protection |
 | Release identity | Signed git tag (GPG) |
 | Build process | GitHub Actions (public logs) |
-| APK authenticity | Android signing key (maintainer) |
-| Container authenticity | Cosign signature (maintainer) |
+| APK authenticity | Android signing key |
+| Container authenticity | Cosign signature |
 | Release approval | Maintainer signs + publishes |
 
 ## High-Level Flow
@@ -61,8 +61,6 @@ Phase 2: make release-sign
 
 ### Key Setup
 
-You need only one signing key to manage:
-
 | Key | Purpose | Location |
 |-----|---------|----------|
 | GPG signing key | Sign git tags | Registered on your GitHub account |
@@ -94,7 +92,7 @@ gpg --armor --export 3AA5C34371567BD2
 # → GitHub → Settings → SSH and GPG keys → New GPG key
 ```
 
-CI verifies tags via GitHub's API — no key file in the repo needed.
+CI verifies tags via GitHub's API. 
 
 #### Android Keystore
 
@@ -257,40 +255,11 @@ Run `make help` for a full list. Key targets:
 | `PUSH` | `false` | Push images to registry after build |
 | `PLATFORM` | *(native)* | Docker platform(s) for cross-build |
 
-## Key Management
-
-### Backup Strategy
-
-Only the Android keystore needs local backup:
-
-```
-release-keys/
-  ├── android-svarla-release.p12.enc         # gpg --symmetric
-  └── passwords.kdbx                 # KeePassXC (separate master password)
-```
-
-Your GPG key is backed up via `gpg --export-secret-keys` and your standard GPG backup process. Cosign keyless requires no backup — it's identity-based.
-
-Keep encrypted backups on:
-- Development laptop
-- Self-hosted storage
-- Offline USB drive
-
-::: warning
-Store key files and their passwords separately.
-:::
-
-### Key Rotation
-
-- **GPG key**: Generate new key, add to GitHub account, old releases remain verifiable.
-- **Cosign (keyless)**: Nothing to rotate — tied to your GitHub identity.
-- **Android keystore**: **Cannot** be rotated without users reinstalling the app.
-
 ## Security Considerations
 
 - CI verifies tags via GitHub's API — the tag must be signed by a GPG key registered on the maintainer's account.
 - CI verifies the tagged commit exists on `main` — tags pointing to unreviewed commits are rejected.
-- Container images are signed by the maintainer's GitHub identity (Sigstore keyless) — signatures are logged in a public transparency log.
+- Container images are signed by GitHub identity (Sigstore keyless) — signatures are logged in a public transparency log.
 - `CODEOWNERS` requires maintainer review for changes to workflows and scripts.
 - Container images are signed by digest (immutable) — tag-based attacks are not possible.
 - The only local key to manage is the Android keystore.

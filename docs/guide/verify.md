@@ -1,6 +1,6 @@
 # Verifying Releases
 
-Every Svarla release is cryptographically signed. You can verify that the software you're running was approved by the maintainer and hasn't been tampered with.
+Every Svarla release is cryptographically signed. You can verify that the software you're running was approved and hasn't been tampered with.
 
 ## Quick Verification
 
@@ -31,7 +31,7 @@ Svarla uses a minimal signing model — no key files to distribute or manage:
 
 | Artifact | Signing method | How to verify |
 |----------|---------------|---------------|
-| Git tags | GPG key on maintainer's GitHub account | `git verify-tag` or GitHub's "Verified" badge |
+| Git tags | GPG key GitHub account | `git verify-tag` or GitHub's "Verified" badge |
 | Container images | Cosign keyless (Sigstore OIDC) | `cosign verify` with identity filter |
 | Android APK | Android keystore (local) | `apksigner verify` |
 
@@ -45,7 +45,7 @@ Svarla uses a minimal signing model — no key files to distribute or manage:
 
 ### Container Images (Cosign keyless)
 
-Container signatures are tied to the maintainer's GitHub identity. Sigstore's Fulcio CA issues a short-lived certificate at signing time, and the signature is logged in Rekor (public transparency log).
+Container signatures are tied to the GitHub identity. Sigstore's Fulcio CA issues a short-lived certificate at signing time, and the signature is logged in Rekor (public transparency log).
 
 ```bash
 # Verify server image
@@ -73,7 +73,7 @@ cosign verify \
 
 ### Git Tags (GPG)
 
-Release tags are signed with the maintainer's GPG key, which is registered on their GitHub account. GitHub shows a "Verified" badge on signed tags.
+Release tags are signed with a GPG key, which is registered on Github. GitHub shows a "Verified" badge on signed tags.
 
 ```bash
 # Verify locally
@@ -96,7 +96,7 @@ You can also use [AppVerifier](https://f-droid.org/packages/dev.nicholasgasior.a
 ## Trust Chain
 
 ```
-Maintainer's GitHub account
+GitHub account
     │
     ├── GPG key registered on account
     │     └── Signs git tags → "Verified" badge on GitHub

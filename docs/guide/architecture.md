@@ -43,7 +43,7 @@ The server is the control plane:
 The MediaBridge is the media plane:
 
 - **WebRTC Endpoint** — Accepts WebRTC connections from Android clients over TCP (port 10443). Uses DTLS-SRTP for encrypted audio.
-- **SIP UAS** — Accepts SIP connections from providers (Vonage, 46elks) for call audio.
+- **SIP UAS** — Accepts SIP connections from providers (e.g., Vonage) for call audio.
 - **Audio WebSocket** — Accepts raw audio streams from providers that use WebSocket-based audio delivery (e.g., 46elks).
 - **ControlAPI** — HTTP API called by the Server to create/destroy sessions, transfer calls, etc.
 - **Event WebSocket** — Pushes media events (DTMF, hangup, silence detection) back to the Server.

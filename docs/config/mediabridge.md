@@ -58,7 +58,7 @@ log:
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `port` | 5060 | SIP signaling port (UDP + TCP). Must be reachable by your telephony provider. |
+| `port` | 5060 | SIP signaling port (UDP + TCP). Used by providers not supporting encrypted sip. |
 | `mediaPort` | 5062 | RTP media port (UDP). Used for SIP call audio. |
 | `tls.port` | 5061 | SIP-over-TLS (SIPS) port. Used by providers that support encrypted SIP. |
 | `tls.certPath` | *(empty)* | Path to TLS certificate PEM file. If empty, a self-signed certificate is auto-generated. |

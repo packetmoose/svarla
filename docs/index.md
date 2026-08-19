@@ -15,13 +15,13 @@ hero:
 
 features:
   - title: Self-Hosted
-    details: Run the entire stack on your own hardware. No third-party services sit between you and your calls.
+    details: Run the entire stack on your own hardware. No third-party services sit between you and the telephone provider.
   - title: Provider Agnostic
     details: Plug in Vonage or 46elks — swap providers at runtime without restarting anything.
   - title: Native Android Client
     details: A purpose-built Kotlin app with Jetpack Compose, WebRTC audio, and real-time sync over WebSocket.
   - title: WebRTC Audio
-    details: All call audio routes through a Go-based MediaBridge using Pion, with end-to-end DTLS encryption.
+    details: All call audio routes through a Go-based MediaBridge using Pion, with DTLS encryption.
   - title: Web Interface
     details: Lightweight Preact SPA for managing calls, SMS, and provider configuration from a browser.
   - title: Open Source
