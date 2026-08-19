@@ -96,7 +96,7 @@ The server can serve the Android APK directly to users, ensuring the app version
 
 ### Modes
 
-- **Production (pre-built images):** The server container ships with the APK baked in. No configuration needed — it just works.
+- **Production (pre-built images):** The server container fetches the apk on start. No configuration needed — it just works.
 - **Self-hosted builds:** Mount your own signed APK and set `APK_SOURCE=local`:
   ```yaml
   volumes:
