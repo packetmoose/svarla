@@ -18,10 +18,11 @@ On the 46elks dashboard, set these webhooks for your number:
 
 | Webhook | URL |
 |---------|-----|
-| `voice_start` | `{BASE_URL}/webhooks/46elks/voice_start` |
-| `sms_url` | `{BASE_URL}/webhooks/46elks/sms_incoming` |
+| `voice_start` | `{BASE_URL}/webhooks/{PROVIDER_ID}/voice_start` |
+| `sms_url` | `{BASE_URL}/webhooks/{PROVIDER_ID}/sms_incoming` |
 
 Replace `{BASE_URL}` with your server's public URL.
+And `{PROVIDER_ID}` with the id shown in the svarla provider managnent
 
 ### 4. Add to Svarla
 
@@ -33,4 +34,4 @@ Via the web interface or API, add a 46elks provider with:
 
 ### Audio routing
 
-46elks call audio goes through the MediaBridge via WebSocket. The Server responds to 46elks webhooks with a `connect` action pointing to the MediaBridge's audio WebSocket port.
+46elks call audio goes through the MediaBridge via WebSocket. The Server responds to 46elks webhooks with a `connect` action pointing to the audio WebSocket port.

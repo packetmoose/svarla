@@ -54,7 +54,7 @@ The Android app supports three notification delivery modes, configurable in Sett
 That's it. The app will now receive push notifications through ntfy with minimal battery usage.
 
 ::: info Self-hosted ntfy
-If you run ntfy on the same server as Svarla, set `push.allowPrivateEndpoints: true` in `server-config.yaml` to allow the server to POST to private/LAN endpoint URLs. By default, only HTTPS URLs resolving to public IPs are accepted (SSRF protection).
+If you run ntfy on the same local network as Svarla and are accessing it over LAN/VPN, set `push.allowPrivateEndpoints: true` in `server-config.yaml` to allow the server to POST to private/LAN endpoint URLs. By default, only HTTPS URLs resolving to public IPs are accepted (SSRF protection).
 :::
 
 ### Persistent WebSocket (fallback)
@@ -140,6 +140,6 @@ The server generates notifications for:
 - High-priority (incoming calls) are always delivered immediately
 - If using persistent WebSocket: check if your device manufacturer restricts background connections
 
-**ntfy on the same server:**
+**ntfy on the same network:**
 
 If you run ntfy alongside Svarla and the push endpoint URL is a private/LAN address (e.g., `http://ntfy:8080/...`), you must set `push.allowPrivateEndpoints: true` in your server config. Otherwise the server will reject the endpoint URL as a potential SSRF target.

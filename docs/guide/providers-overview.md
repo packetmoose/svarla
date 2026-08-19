@@ -1,6 +1,6 @@
 # Telephony Providers
 
-Svarla is provider-agnostic. You can add, remove, and reconfigure telephony providers at runtime through the API or web interface — no restart required.
+Svarla is provider-agnostic. You can add, remove, and reconfigure telephony providers at runtime through the API or web interface. 
 
 ## Supported providers
 
