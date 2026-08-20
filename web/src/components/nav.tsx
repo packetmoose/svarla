@@ -12,6 +12,7 @@ const navItems: NavItem[] = [
   { label: "Dashboard", path: "/", icon: "⌂" },
   { label: "Conversations", path: "/conversations", icon: "◬" },
   { label: "Call History", path: "/call-history", icon: "↗" },
+  { label: "Download", path: "/download", icon: "📥" },
   { label: "Settings", path: "/settings", icon: "⚙" },
 ];
 

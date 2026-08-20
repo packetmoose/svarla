@@ -1,6 +1,6 @@
 import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AppConfig } from './config.js';
 import { createDatabase } from './database.js';
@@ -542,6 +542,21 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
     root: join(process.cwd(), 'public'),
     prefix: '/public/',
     decorateReply: false,
+  });
+
+  // APK download status endpoint — lets the frontend know if the APK is available
+  const apkPath = process.env.APK_PATH || join(process.cwd(), 'public', 'downloads', 'svarla.apk');
+  server.get('/api/download/status', async () => {
+    let isAvailable = false;
+    try {
+      if (existsSync(apkPath)) {
+        const stats = statSync(apkPath);
+        isAvailable = stats.size > 1000;
+      }
+    } catch {
+      isAvailable = false;
+    }
+    return { available: isAvailable, url: '/public/downloads/svarla.apk' };
   });
 
   // Conditionally register web interface routes based on config
