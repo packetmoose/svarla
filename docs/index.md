@@ -24,6 +24,6 @@ features:
     details: All call audio routes through a Go-based MediaBridge using Pion, with DTLS encryption.
   - title: Web Interface
     details: Lightweight Preact SPA for managing calls, SMS, and provider configuration from a browser.
-  - title: Open Source
-    details: Licensed under AGPL-3.0. Inspect every line, fork it, run it your way.
+  - title: Local Calls, Anywhere
+    details: Make and receive calls on your local numbers from anywhere in the world — your server handles the routing, not your physical location.
 ---
