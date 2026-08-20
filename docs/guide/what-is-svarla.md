@@ -10,6 +10,7 @@ Most VoIP solutions are either locked to a single provider, run through someone 
 - You choose your telephony provider (or use multiple)
 - Your call audio never touches a third-party server unnecessarily
 - You can receive calls and text while only on wifi
+- You make and receive local calls from anywhere in the world — your numbers stay local regardless of where you are
 - You use the same numbers on all devices
 
 ## Components
