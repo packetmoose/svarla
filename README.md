@@ -1,6 +1,6 @@
 # Svarla
 
-> **Heads up:** Svarla is in active development and rough around the edges. APIs may change, there are known security gaps, and things will break. Treat it as an experiment, not infrastructure.
+> **Heads up:** Svarla is in active development and rough around the edges. APIs may change, and things might break.
 
 A self-hosted softphone for making and receiving phone calls and SMS over a data connection. Runs on your own server with a native Android client and a web interface.
 
