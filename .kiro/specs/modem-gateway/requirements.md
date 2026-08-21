@@ -20,6 +20,10 @@ The modem-gateway feature introduces a new telephony provider type for Svarla th
 - **Configuration_File**: The YAML or TOML file read by the Modem_Gateway_Binary at startup, containing connection settings, modem options, and feature flags.
 - **Passive_Registration_Mode**: The default mode in which the Modem_Gateway_Binary does not manage modem network registration, deferring to the host OS or external tools.
 - **Self_Registration_Mode**: An optional mode in which the Modem_Gateway_Binary directly manages modem network registration and SIM PIN unlock via AT commands.
+- **GSM-7**: The default 7-bit character encoding used for SMS messages, supporting Latin characters, digits, and common symbols; allows up to 160 characters per single SMS segment.
+- **UCS-2**: A 16-bit Unicode encoding used for SMS messages containing characters outside the GSM-7 character set (e.g., non-Latin scripts, emoji); limits a single SMS segment to 70 characters.
+- **Concatenated_SMS**: A multi-part SMS message that is split into multiple segments for transmission and reassembled by the receiving device into a single logical message, using a concatenation header to identify parts.
+- **Delivery_Report**: A status notification sent by the mobile network back to the sender's modem indicating whether an SMS was successfully delivered to the recipient or failed.
 
 ## Requirements
 
@@ -228,7 +232,7 @@ The modem-gateway feature introduces a new telephony provider type for Svarla th
 
 1. THE Modem_Gateway_Binary SHALL read configuration from a file in YAML or TOML format at a path specified via a command-line argument (defaulting to `./modem-gateway.yaml` if no path is provided).
 2. IF no configuration file exists at the configured path, THEN THE Modem_Gateway_Binary SHALL generate a default configuration file at that path, print a message to standard output indicating the user should edit the file, and exit with a non-zero exit code.
-3. THE configuration file SHALL include fields for: Svarla connection endpoint URL, pairing secret (used only during initial setup), serial port device path (defaulting to `/dev/ttyUSB2`), phone number override in E.164 format (optional), voice enabled/disabled flag (defaulting to true), network registration mode flag (defaulting to false), SIM PIN (optional), and ALSA device name (optional, used to override automatic UAC device detection).
+3. THE configuration file SHALL include fields for: Svarla connection endpoint URL, pairing secret (used only during initial setup), serial port device path (defaulting to `/dev/ttyUSB2`), phone number override in E.164 format (optional), voice enabled/disabled flag (defaulting to true), network registration mode flag (defaulting to false), SIM PIN (optional), ALSA device name (optional, used to override automatic UAC device detection), `ca_cert` path to a custom CA certificate file in PEM format (optional), `tls_skip_verify` flag to disable TLS certificate verification (optional, defaulting to false), `log_level` controlling the minimum log severity (optional, defaulting to "info"), and `log_file` path to write logs to a file instead of standard output (optional).
 4. IF the configuration file is present but contains invalid syntax or missing required fields, THEN THE Modem_Gateway_Binary SHALL print a descriptive error message identifying the issue and exit with a non-zero exit code.
 5. THE Modem_Gateway_Binary SHALL treat the Svarla connection endpoint URL and serial port device path as required fields, and SHALL treat all other fields as optional with documented defaults.
 
@@ -254,3 +258,111 @@ The modem-gateway feature introduces a new telephony provider type for Svarla th
 2. WHEN `EXPERIMENTAL_PROVIDERS` is not set or set to any value other than "true", THE Svarla_Server SHALL exclude "modem-gateway" from the provider type selection options in the UI, while continuing to operate any existing modem-gateway providers already configured in the database.
 3. IF a modem-gateway provider already exists in the database, THEN THE Svarla_Server SHALL start and operate that provider normally regardless of the `EXPERIMENTAL_PROVIDERS` environment variable value.
 4. THE feature flag SHALL only control visibility of the modem-gateway type in the UI provider creation flow; API requests to create a modem-gateway provider SHALL be accepted regardless of the flag value.
+
+### Requirement 18: Multi-part and Unicode SMS Handling
+
+**User Story:** As a Svarla user, I want to send and receive long messages and messages with non-Latin characters so that SMS communication works correctly regardless of content or language.
+
+#### Acceptance Criteria
+
+1. WHEN the modem receives a multi-part (concatenated) SMS, THE Modem_Gateway_Binary SHALL reassemble all parts into a single complete message before forwarding it to the Svarla_Server over the Signaling_WebSocket.
+2. WHEN the Svarla_Server requests sending an SMS longer than 160 GSM-7 characters (or 70 UCS-2 characters), THE Modem_Gateway_Binary SHALL handle message splitting as required by the modem's capabilities (text mode handles this automatically; PDU mode requires explicit concatenation handling).
+3. WHEN the message body contains characters outside the GSM-7 character set (non-Latin scripts, emoji, etc.), THE Modem_Gateway_Binary SHALL detect this and use UCS-2 encoding for the SMS transmission.
+4. WHEN receiving an SMS encoded in UCS-2, THE Modem_Gateway_Binary SHALL decode it correctly and forward the full Unicode text to the Svarla_Server.
+
+### Requirement 19: SMS Delivery Reports
+
+**User Story:** As a Svarla user, I want to see when my sent SMS has been delivered so that I know the recipient received my message.
+
+#### Acceptance Criteria
+
+1. WHEN the Modem_Gateway_Binary sends an SMS, THE Modem_Gateway_Binary SHALL request a delivery report from the network (via `AT+CSMP` configuration or equivalent).
+2. WHEN the modem receives an SMS delivery report (detected via `+CDS` URC or status report indication), THE Modem_Gateway_Binary SHALL forward the delivery status (delivered or failed) and the original message reference to the Svarla_Server over the Signaling_WebSocket.
+3. WHEN the Svarla_Server receives a delivery report from the Modem_Gateway_Binary, THE Svarla_Server SHALL emit an `sms_status_update` TelephonyEvent with the messageId and status (DELIVERED or FAILED).
+
+### Requirement 20: Call Duration Tracking
+
+**User Story:** As a Svarla user, I want to see the duration of my calls so that I can track usage.
+
+#### Acceptance Criteria
+
+1. WHEN a voice call is answered (either inbound or outbound), THE Modem_Gateway_Binary SHALL record the timestamp of the answer event.
+2. WHEN a voice call ends (COMPLETED state), THE Modem_Gateway_Binary SHALL calculate the call duration in seconds from the answer timestamp to the hangup timestamp and include the duration in the call_state_changed message sent to the Svarla_Server over the Signaling_WebSocket.
+3. IF the call was never answered (FAILED or BUSY state), THEN THE Modem_Gateway_Binary SHALL report a null duration.
+
+### Requirement 21: Missed Call Buffering
+
+**User Story:** As a Svarla user, I want to be notified of calls that came in while my modem gateway was disconnected from Svarla so that I don't miss important calls.
+
+#### Acceptance Criteria
+
+1. IF an incoming call arrives while the Signaling_WebSocket is disconnected, THEN THE Modem_Gateway_Binary SHALL reject the call via AT command (`ATH`) and buffer a missed call notification locally containing the caller number and timestamp.
+2. THE Modem_Gateway_Binary SHALL persist the missed call buffer to disk so that notifications survive a restart or reboot.
+3. WHEN the Signaling_WebSocket reconnects after an outage or restart, THE Modem_Gateway_Binary SHALL deliver all buffered missed call notifications to the Svarla_Server in chronological order (oldest first).
+4. THE missed call buffer SHALL share the same persistence mechanism and maximum size limits as the SMS buffer (up to 1000 entries, discarding the oldest when full).
+
+### Requirement 22: TLS and Certificate Configuration
+
+**User Story:** As a user deploying the modem gateway, I want to connect securely to my Svarla instance over TLS, including support for self-signed certificates, so that communication is encrypted.
+
+#### Acceptance Criteria
+
+1. THE Modem_Gateway_Binary SHALL connect to the Svarla Signaling_WebSocket using TLS (`wss://`) when the configured endpoint URL uses the `wss` scheme.
+2. THE Modem_Gateway_Binary configuration file SHALL include an optional `ca_cert` field specifying the path to a custom CA certificate file (PEM format) used to verify the server's TLS certificate.
+3. THE Modem_Gateway_Binary configuration file SHALL include an optional `tls_skip_verify` flag (defaulting to false) that, when set to true, disables TLS certificate verification (for development/testing with self-signed certificates).
+4. WHEN connecting to the MediaBridge Audio_WebSocket, THE Modem_Gateway_Binary SHALL apply the same TLS configuration (custom CA or skip-verify) as used for the Signaling_WebSocket.
+
+### Requirement 23: Logging and Diagnostics
+
+**User Story:** As a user running the modem gateway on a headless device, I want configurable logging so that I can troubleshoot issues remotely.
+
+#### Acceptance Criteria
+
+1. THE Modem_Gateway_Binary SHALL support configurable log levels: error, warn, info, debug, and verbose.
+2. THE Modem_Gateway_Binary configuration file SHALL include a `log_level` field (defaulting to "info") that controls the minimum severity of log messages output.
+3. THE Modem_Gateway_Binary SHALL log to standard output by default, and SHALL support an optional `log_file` configuration field to write logs to a specified file path.
+4. THE Modem_Gateway_Binary SHALL NOT log sensitive information (pairing secrets, private keys, SIM PINs, or message contents) at any log level except verbose, and SHALL redact such fields in log output at all other levels.
+5. AT the verbose log level, THE Modem_Gateway_Binary SHALL log raw AT command exchanges with the modem (both commands sent and responses received) for debugging purposes.
+
+### Requirement 24: Graceful Shutdown
+
+**User Story:** As a system administrator, I want the modem gateway to shut down cleanly when stopped so that no data is lost and active calls are properly terminated.
+
+#### Acceptance Criteria
+
+1. WHEN the Modem_Gateway_Binary receives a SIGTERM or SIGINT signal, THE Modem_Gateway_Binary SHALL initiate a graceful shutdown sequence.
+2. DURING graceful shutdown, IF a voice call is active, THEN THE Modem_Gateway_Binary SHALL hang up the call via AT command (`ATH`), close the Audio_WebSocket, and notify the Svarla_Server of the call termination over the Signaling_WebSocket.
+3. DURING graceful shutdown, THE Modem_Gateway_Binary SHALL flush the SMS and missed call buffer to disk before exiting.
+4. DURING graceful shutdown, THE Modem_Gateway_Binary SHALL close the Signaling_WebSocket connection with a normal closure code.
+5. THE Modem_Gateway_Binary SHALL complete the graceful shutdown sequence within 10 seconds; if the sequence has not completed within 10 seconds, the binary SHALL force-exit.
+
+### Requirement 25: Modem and Firmware Version Reporting
+
+**User Story:** As a Svarla user, I want to see modem model and firmware version information so that I can verify compatibility and troubleshoot issues.
+
+#### Acceptance Criteria
+
+1. WHEN the Modem_Gateway_Binary initializes the modem, THE Modem_Gateway_Binary SHALL query the modem model (`AT+CGMM`), manufacturer (`AT+CGMI`), and firmware version (`AT+CGMR`) and store the results.
+2. WHEN the Modem_Gateway_Binary first connects (or reconnects) to the Signaling_WebSocket, THE Modem_Gateway_Binary SHALL include the modem model, manufacturer, and firmware version in the initial status report.
+3. THE Svarla_Server SHALL store the modem information as part of the provider's status and make it available for display in the provider detail view in the web UI.
+
+### Requirement 26: Audio Sample Rate Handling
+
+**User Story:** As a user with different modem firmware versions, I want the Go binary to handle both 8kHz and 16kHz audio from the modem so that voice calls work regardless of the modem's UAC configuration.
+
+#### Acceptance Criteria
+
+1. WHEN the Modem_Gateway_Binary opens the UAC ALSA device, THE Modem_Gateway_Binary SHALL detect the device's native sample rate (8kHz or 16kHz).
+2. IF the modem's UAC device operates at 8kHz, THEN THE Modem_Gateway_Binary SHALL upsample captured audio from 8kHz to 16kHz before sending it over the Audio_WebSocket, and SHALL downsample received 16kHz audio to 8kHz before playing it to the modem.
+3. IF the modem's UAC device operates at 16kHz, THEN THE Modem_Gateway_Binary SHALL send and receive audio without sample rate conversion.
+4. THE Audio_WebSocket protocol SHALL always carry PCM 16-bit 16kHz mono audio regardless of the modem's native sample rate (the binary handles any necessary conversion locally).
+
+### Requirement 27: Provider Documentation Page
+
+**User Story:** As a Svarla user or developer, I want a documentation page for the modem-gateway provider so that I can understand setup requirements, supported hardware, and configuration.
+
+#### Acceptance Criteria
+
+1. THE Svarla project SHALL include a documentation page for the modem-gateway provider covering: overview and architecture, supported modems (with the Quectel EG25-G with UAC firmware as the primary reference), hardware setup requirements (Raspberry Pi, USB modem, SIM card), Go binary installation and configuration, pairing flow walkthrough, and troubleshooting common issues.
+2. THE documentation page SHALL note that the Svarla server must be running with `EXPERIMENTAL_PROVIDERS=true` to add a new modem-gateway provider via the web UI.
+3. THE documentation page SHALL list the required modem firmware features: USB Audio Class (UAC) support and AT command interface accessibility.
