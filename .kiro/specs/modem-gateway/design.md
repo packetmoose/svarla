@@ -123,23 +123,39 @@ graph TB
 #### `internal/config`
 - YAML config file parsing and validation
 - Default generation for `--generate-config`
-- Required fields: `endpoint` (Svarla WS URL), `serial_port` (device path)
-- Optional: `pairing_secret`, `phone_number`, `voice_enabled`, `network_registration`, `sim_pin`, `alsa_device`, `ca_cert`, `tls_skip_verify`, `log_level`, `log_file`
+- Required fields: `connection.endpoint` (Svarla WS URL), `modem.serialPort` (device path)
+- Optional: `connection.pairingSecret`, `modem.phoneNumber`, `modem.voiceEnabled`, `modem.networkRegistration`, `modem.simPin`, `modem.alsaDevice`, `tls.caCert`, `tls.skipVerify`, `log.level`, `log.file`
 
 ```go
 type Config struct {
-    Endpoint            string `yaml:"endpoint"`             // Required: wss://svarla.example/ws/providers/{id}
-    PairingSecret       string `yaml:"pairing_secret"`       // One-time setup
-    SerialPort          string `yaml:"serial_port"`          // Default: /dev/ttyUSB2
-    PhoneNumber         string `yaml:"phone_number"`         // E.164 override
-    VoiceEnabled        bool   `yaml:"voice_enabled"`        // Default: true
-    NetworkRegistration bool   `yaml:"network_registration"` // Default: false
-    SimPin              string `yaml:"sim_pin"`              // Optional
-    AlsaDevice          string `yaml:"alsa_device"`          // Optional override
-    CACert              string `yaml:"ca_cert"`              // PEM file path
-    TLSSkipVerify       bool   `yaml:"tls_skip_verify"`     // Default: false
-    LogLevel            string `yaml:"log_level"`            // Default: info
-    LogFile             string `yaml:"log_file"`             // Optional
+    Connection ConnectionConfig `yaml:"connection"`
+    Modem      ModemConfig      `yaml:"modem"`
+    TLS        TLSConfig        `yaml:"tls"`
+    Log        LogConfig        `yaml:"log"`
+}
+
+type ConnectionConfig struct {
+    Endpoint      string `yaml:"endpoint"`      // Required: wss://svarla.example/ws/providers/{id}/signaling
+    PairingSecret string `yaml:"pairingSecret"` // One-time setup, remove after pairing
+}
+
+type ModemConfig struct {
+    SerialPort          string `yaml:"serialPort"`          // Default: /dev/ttyUSB2
+    PhoneNumber         string `yaml:"phoneNumber"`         // E.164 override
+    VoiceEnabled        bool   `yaml:"voiceEnabled"`        // Default: true
+    AlsaDevice          string `yaml:"alsaDevice"`          // Optional override
+    NetworkRegistration bool   `yaml:"networkRegistration"` // Default: false
+    SimPin              string `yaml:"simPin"`              // Optional
+}
+
+type TLSConfig struct {
+    CACert     string `yaml:"caCert"`     // PEM file path
+    SkipVerify bool   `yaml:"skipVerify"` // Default: false
+}
+
+type LogConfig struct {
+    Level string `yaml:"level"` // Default: info
+    File  string `yaml:"file"`  // Optional, empty = stdout
 }
 ```
 
@@ -544,7 +560,7 @@ sequenceDiagram
     Svarla->>User: {providerId, pairingSecret, wsEndpoint}
 
     Note over User,MGB: Configuration
-    User->>MGB: Edit modem-gateway.yaml (endpoint, pairing_secret)
+    User->>MGB: Edit modem-gateway.yaml (connection.endpoint, connection.pairingSecret)
 
     Note over MGB,Svarla: First Connection (Pairing)
     MGB->>MGB: Generate Ed25519 keypair, store to .key file
@@ -738,27 +754,29 @@ interface ModemGatewayStatus {
 ### Go Binary Config File (`modem-gateway.yaml`)
 
 ```yaml
-# Svarla connection
-endpoint: "wss://svarla.example/ws/providers/abc-123/signaling"
-pairing_secret: "abc123xy"  # Remove after successful pairing
+# Connection to Svarla server
+connection:
+  endpoint: "wss://svarla.example/ws/providers/abc-123/signaling"
+  pairingSecret: "abc123xy"  # Remove after successful pairing
 
 # Modem settings
-serial_port: "/dev/ttyUSB2"
-phone_number: "+46701234567"  # Optional E.164 override
-voice_enabled: true
-alsa_device: ""               # Empty = auto-detect UAC device
+modem:
+  serialPort: "/dev/ttyUSB2"
+  phoneNumber: "+46701234567"  # Optional E.164 override
+  voiceEnabled: true
+  alsaDevice: ""               # Empty = auto-detect UAC device
+  networkRegistration: false
+  simPin: ""
 
-# Network registration (advanced)
-network_registration: false
-sim_pin: ""
-
-# TLS
-ca_cert: ""
-tls_skip_verify: false
+# TLS settings
+tls:
+  caCert: ""                   # Path to custom CA certificate (PEM)
+  skipVerify: false            # Disable certificate verification
 
 # Logging
-log_level: "info"
-log_file: ""
+log:
+  level: "info"                # error, warn, info, debug, verbose
+  file: ""                     # Empty = stdout
 ```
 
 ### SMS Buffer Entry (JSON Lines on disk)
