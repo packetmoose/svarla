@@ -31,6 +31,7 @@ interface SettingsState {
   error: string;
   success: string;
   loading: boolean;
+  serverVersion: string | null;
 }
 
 interface ChangePasswordErrorData {
@@ -47,6 +48,7 @@ export class Settings extends Component<Record<string, never>, SettingsState> {
     error: "",
     success: "",
     loading: false,
+    serverVersion: null,
   };
 
   componentDidMount() {
@@ -60,6 +62,13 @@ export class Settings extends Component<Record<string, never>, SettingsState> {
         this.setState({ activeTab: tab as SettingsTab });
       }
     }
+
+    // Fetch server version
+    api.get<{ version: string }>("/api/version").then((res) => {
+      if (res.ok) {
+        this.setState({ serverVersion: res.data.version });
+      }
+    });
   }
 
   private handleTabChange = (tab: SettingsTab) => {
@@ -232,7 +241,7 @@ export class Settings extends Component<Record<string, never>, SettingsState> {
   }
 
   render() {
-    const { activeTab } = this.state;
+    const { activeTab, serverVersion } = this.state;
 
     return (
       <div class="settings-container">
@@ -256,6 +265,10 @@ export class Settings extends Component<Record<string, never>, SettingsState> {
         <div class="settings-tab-content" role="tabpanel">
           {this.renderTabContent()}
         </div>
+
+        {serverVersion && (
+          <p class="settings-version">Server version {serverVersion}</p>
+        )}
       </div>
     );
   }

@@ -32,7 +32,8 @@ async function main(): Promise<void> {
 
   // Provision APK for the download endpoint (non-blocking — server starts regardless)
   const pkg = await import('../package.json', { assert: { type: 'json' } });
-  const apkConfig = ApkProvisioningService.loadConfig(pkg.default.version);
+  const apkVersion = process.env.DEV_VERSION_OVERRIDE || pkg.default.version;
+  const apkConfig = ApkProvisioningService.loadConfig(apkVersion);
   const apkService = new ApkProvisioningService(apkConfig, server.log);
   apkService.provision().then((available) => {
     if (available) {
