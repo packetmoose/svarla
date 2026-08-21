@@ -231,10 +231,11 @@ The modem-gateway feature introduces a new telephony provider type for Svarla th
 #### Acceptance Criteria
 
 1. THE Modem_Gateway_Binary SHALL read configuration from a file in YAML or TOML format at a path specified via a command-line argument (defaulting to `./modem-gateway.yaml` if no path is provided).
-2. IF no configuration file exists at the configured path, THEN THE Modem_Gateway_Binary SHALL generate a default configuration file at that path, print a message to standard output indicating the user should edit the file, and exit with a non-zero exit code.
+2. THE Modem_Gateway_Binary SHALL support a `--generate-config` command-line flag (or argument) that generates a default configuration file at the configured path (or the default path if none specified), prints a message to standard output indicating the user should edit the file, and exits with a zero exit code. This allows first-time setup without requiring the binary to attempt a full startup.
 3. THE configuration file SHALL include fields for: Svarla connection endpoint URL, pairing secret (used only during initial setup), serial port device path (defaulting to `/dev/ttyUSB2`), phone number override in E.164 format (optional), voice enabled/disabled flag (defaulting to true), network registration mode flag (defaulting to false), SIM PIN (optional), ALSA device name (optional, used to override automatic UAC device detection), `ca_cert` path to a custom CA certificate file in PEM format (optional), `tls_skip_verify` flag to disable TLS certificate verification (optional, defaulting to false), `log_level` controlling the minimum log severity (optional, defaulting to "info"), and `log_file` path to write logs to a file instead of standard output (optional).
 4. IF the configuration file is present but contains invalid syntax or missing required fields, THEN THE Modem_Gateway_Binary SHALL print a descriptive error message identifying the issue and exit with a non-zero exit code.
 5. THE Modem_Gateway_Binary SHALL treat the Svarla connection endpoint URL and serial port device path as required fields, and SHALL treat all other fields as optional with documented defaults.
+6. IF the Modem_Gateway_Binary is started without `--generate-config` and no configuration file exists at the configured path, THEN THE Modem_Gateway_Binary SHALL print an error message suggesting the user run with `--generate-config` to create a default configuration file, and exit with a non-zero exit code.
 
 ### Requirement 16: Modem Network Registration Mode
 
@@ -363,7 +364,7 @@ The modem-gateway feature introduces a new telephony provider type for Svarla th
 
 #### Acceptance Criteria
 
-1. THE Svarla project SHALL include a documentation page for the modem-gateway provider covering: overview and architecture, supported modems (with the Quectel EG25-G with UAC firmware as the primary reference), hardware setup requirements (Raspberry Pi, USB modem, SIM card), Go binary installation and configuration, pairing flow walkthrough, and troubleshooting common issues.
+1. THE Svarla project SHALL include a documentation page for the modem-gateway provider covering: overview and architecture, supported modems (with the Quectel EG25-G with UAC firmware as the primary reference), hardware setup requirements (Raspberry Pi, USB modem, SIM card), Go binary installation and configuration including the `--generate-config` flag for first-time setup, pairing flow walkthrough, and troubleshooting common issues.
 2. THE documentation page SHALL note that the Svarla server must be running with `EXPERIMENTAL_PROVIDERS=true` to add a new modem-gateway provider via the web UI.
 3. THE documentation page SHALL list the required modem firmware features: USB Audio Class (UAC) support and AT command interface accessibility.
 
