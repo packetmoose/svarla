@@ -1,0 +1,17 @@
+FROM eclipse-temurin:17-jre
+
+ENV ANDROID_HOME=/opt/android-sdk
+ENV PATH="${PATH}:${ANDROID_HOME}/build-tools/35.0.0"
+
+RUN apt-get update && apt-get install -y --no-install-recommends unzip wget && \
+    mkdir -p ${ANDROID_HOME}/cmdline-tools && \
+    wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip -O /tmp/tools.zip && \
+    unzip -q /tmp/tools.zip -d ${ANDROID_HOME}/cmdline-tools && \
+    mv ${ANDROID_HOME}/cmdline-tools/cmdline-tools ${ANDROID_HOME}/cmdline-tools/latest && \
+    rm /tmp/tools.zip && \
+    yes | ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager --licenses > /dev/null 2>&1 && \
+    ${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager "build-tools;35.0.0" && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /work
+ENTRYPOINT ["apksigner"]

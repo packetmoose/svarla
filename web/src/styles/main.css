@@ -2140,6 +2140,13 @@ textarea {
   margin-top: var(--md-space-sm);
 }
 
+.settings-version {
+  margin-top: var(--md-space-xl);
+  font-size: 0.75rem;
+  color: var(--md-on-surface-variant);
+  text-align: center;
+}
+
 /* ===== Loading state ===== */
 
 .loading-text {

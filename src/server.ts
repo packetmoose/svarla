@@ -604,7 +604,8 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
 
   // Version endpoint — used by the mobile app to check compatibility
   server.get('/api/version', async () => {
-    return { version: pkg.version };
+    const version = process.env.DEV_VERSION_OVERRIDE || pkg.version;
+    return { version };
   });
 
   // Global error handler
