@@ -366,3 +366,28 @@ The modem-gateway feature introduces a new telephony provider type for Svarla th
 1. THE Svarla project SHALL include a documentation page for the modem-gateway provider covering: overview and architecture, supported modems (with the Quectel EG25-G with UAC firmware as the primary reference), hardware setup requirements (Raspberry Pi, USB modem, SIM card), Go binary installation and configuration, pairing flow walkthrough, and troubleshooting common issues.
 2. THE documentation page SHALL note that the Svarla server must be running with `EXPERIMENTAL_PROVIDERS=true` to add a new modem-gateway provider via the web UI.
 3. THE documentation page SHALL list the required modem firmware features: USB Audio Class (UAC) support and AT command interface accessibility.
+
+
+### Requirement 28: Systemd Service Documentation
+
+**User Story:** As a user deploying the modem gateway on a Raspberry Pi or similar Linux system, I want documentation with systemd service examples so that I can run the Go binary as a managed background service that starts on boot.
+
+#### Acceptance Criteria
+
+1. THE provider documentation (from R27) SHALL include a dedicated section on running the Modem_Gateway_Binary as a systemd service.
+2. THE documentation SHALL include a complete, ready-to-use example systemd unit file (`.service` file) with inline comments explaining each directive, covering: service type, restart policy, user/group, working directory, ExecStart pointing to the binary with config path argument, and standard output/error logging to journal.
+3. THE documentation SHALL include step-by-step instructions for installing the service: copying the unit file to `/etc/systemd/system/`, running `systemctl daemon-reload`, enabling the service with `systemctl enable`, and starting it with `systemctl start`.
+4. THE documentation SHALL include examples of common systemd management commands: checking status (`systemctl status`), viewing logs (`journalctl -u`), restarting (`systemctl restart`), and stopping (`systemctl stop`).
+5. THE systemd unit file example SHALL configure the service to restart automatically on failure with a 5-second delay, and SHALL set appropriate resource limits and security hardening options (e.g., `ProtectSystem=strict`, `PrivateTmp=true`, device access for the serial port and ALSA).
+
+### Requirement 29: Cross-Platform Build and Release Integration
+
+**User Story:** As a developer or user, I want the Go binary to be built for both amd64 and arm64 architectures as part of the release process so that I can deploy it on both x86 servers and ARM-based devices like Raspberry Pi.
+
+#### Acceptance Criteria
+
+1. THE Svarla project's build system SHALL produce statically-linked Modem_Gateway_Binary artifacts for both `linux/amd64` and `linux/arm64` architectures.
+2. THE existing release workflow (GitHub Actions) SHALL be extended to build the Modem_Gateway_Binary for both target architectures and include the resulting binaries as release assets alongside the existing Svarla server artifacts.
+3. THE release assets SHALL follow a naming convention that clearly identifies the architecture: e.g., `modem-gateway-linux-amd64` and `modem-gateway-linux-arm64`.
+4. THE build process SHALL produce reproducible builds with version information embedded in the binary (git tag/commit hash and build date), queryable via a `--version` flag on the binary.
+5. THE Go binary build SHALL use CGO only for ALSA bindings and SHALL cross-compile correctly for arm64 from an amd64 build host (using appropriate cross-compilation toolchain).
