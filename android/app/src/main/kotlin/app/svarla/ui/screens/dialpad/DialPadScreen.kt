@@ -5,6 +5,7 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.os.Build
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -92,6 +93,10 @@ fun DialPadScreen(
     val selectedProviderNumber by viewModel.selectedProviderNumber.collectAsState()
 
     var showContactSearch by remember { mutableStateOf(false) }
+
+    BackHandler(enabled = showContactSearch) {
+        showContactSearch = false
+    }
 
     if (showContactSearch) {
         ContactSearchOverlay(
