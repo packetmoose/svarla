@@ -158,6 +158,23 @@ class DialPadViewModel @Inject constructor(
      */
     fun getCurrentNumber(): String = _rawInput.value
 
+    /**
+     * Paste a number from the clipboard into the dial pad.
+     * Sanitizes the input by stripping everything except dial-valid characters
+     * (digits, +, *, #). If the result is non-empty, replaces the current input.
+     *
+     * @param text The raw clipboard text to paste
+     * @return true if valid dial characters were found and pasted, false otherwise
+     */
+    fun pasteNumber(text: String): Boolean {
+        val sanitized = text.filter { it.isDigit() || it == '+' || it == '*' || it == '#' }
+        if (sanitized.isEmpty()) return false
+        _rawInput.value = sanitized
+        _formattedNumber.value = formatNumber(sanitized)
+        _showingLastDialed.value = false
+        return true
+    }
+
     // ========================================================================
     // Number formatting
     // ========================================================================

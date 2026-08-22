@@ -1,5 +1,10 @@
 package app.svarla.ui.screens.dialpad
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.os.Build
+import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -26,6 +31,8 @@ import androidx.compose.material.icons.filled.Call
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.PersonSearch
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -43,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
@@ -122,7 +130,9 @@ fun DialPadScreen(
             NumberDisplayField(
                 formattedNumber = formattedNumber,
                 rawInput = rawInput,
-                matchedContactName = matchedContactName
+                matchedContactName = matchedContactName,
+                onCopy = { rawInput },
+                onPaste = { text -> viewModel.pasteNumber(text) }
             )
 
             // Search contact button
@@ -306,18 +316,29 @@ private fun ProviderNumberIndicator(
 /**
  * Displays the formatted phone number the user is entering,
  * with the matched contact name shown below when a complete number matches.
+ * Long-press shows a context menu with Copy (when input exists) and Paste options.
  */
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun NumberDisplayField(
     formattedNumber: String,
     rawInput: String,
-    matchedContactName: String?
+    matchedContactName: String?,
+    onCopy: () -> String,
+    onPaste: (String) -> Boolean
 ) {
+    val context = LocalContext.current
+    var showMenu by remember { mutableStateOf(false) }
+
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .height(if (matchedContactName != null) 92.dp else 72.dp)
-            .padding(horizontal = MaterialTheme.spacing.medium),
+            .padding(horizontal = MaterialTheme.spacing.medium)
+            .combinedClickable(
+                onClick = {},
+                onLongClick = { showMenu = true }
+            ),
         contentAlignment = Alignment.Center
     ) {
         Column(
@@ -352,6 +373,41 @@ private fun NumberDisplayField(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
+            }
+        }
+
+        DropdownMenu(
+            expanded = showMenu,
+            onDismissRequest = { showMenu = false }
+        ) {
+            // Show "Paste" if clipboard has text content
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            if (clipboard.hasPrimaryClip()) {
+                DropdownMenuItem(
+                    text = { Text("Paste") },
+                    onClick = {
+                        showMenu = false
+                        val clipText = clipboard.primaryClip?.getItemAt(0)?.text?.toString()
+                        if (clipText != null) {
+                            onPaste(clipText)
+                        }
+                    }
+                )
+            }
+            // Show "Copy" only when there's a number entered
+            if (rawInput.isNotEmpty()) {
+                DropdownMenuItem(
+                    text = { Text("Copy") },
+                    onClick = {
+                        showMenu = false
+                        val number = onCopy()
+                        val clip = ClipData.newPlainText("Phone number", number)
+                        clipboard.setPrimaryClip(clip)
+                        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                            Toast.makeText(context, "Number copied", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                )
             }
         }
     }
