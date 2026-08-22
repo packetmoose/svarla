@@ -354,7 +354,8 @@ confirm "Everything looks good. Publish release $VERSION?" || { echo "Aborted. R
 
 gh api "repos/${GH_REPO}/releases/${RELEASE_ID}" \
     -X PATCH \
-    -f draft=false \
+    -f tag_name="$VERSION" \
+    -F draft=false \
     -f make_latest=true
 
 # ─── Done ────────────────────────────────────────────────────────────────────
