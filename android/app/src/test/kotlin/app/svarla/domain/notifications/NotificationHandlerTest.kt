@@ -131,7 +131,7 @@ class NotificationHandlerTest : FunSpec({
     }
 
     test("NotificationChannels constants should have correct values") {
-        NotificationChannels.CHANNEL_ID_CALLS shouldBe "svarla_calls"
+        NotificationChannels.CHANNEL_ID_CALLS shouldBe "svarla_calls_v2"
         NotificationChannels.CHANNEL_ID_MESSAGES shouldBe "svarla_messages"
         NotificationChannels.CHANNEL_ID_MISSED_CALLS shouldBe "svarla_missed_calls"
     }
