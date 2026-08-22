@@ -1,5 +1,6 @@
 import { existsSync, statSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { isDevVersion } from '../version.js';
 
 /**
  * APK provisioning configuration, controlled by environment variables:
@@ -175,9 +176,9 @@ export class ApkProvisioningService {
 
     // Default: GitHub release for this version
     const version = this.config.version;
-    if (!version || version === '0.0.0' || version === '0.0.0-development') {
-      // Don't try to fetch for placeholder dev versions that will never have a release
-      this.logger.info('[APK] Dev placeholder version detected — skipping remote fetch');
+    if (!version || isDevVersion(version)) {
+      // Don't try to fetch for dev versions that will never have a release
+      this.logger.info('[APK] Dev version detected — skipping remote fetch');
       return null;
     }
 
@@ -235,7 +236,7 @@ export class ApkProvisioningService {
    */
   private resolveChecksumUrl(): string | null {
     const version = this.config.version;
-    if (!version || version === '0.0.0' || version === '0.0.0-development') return null;
+    if (!version || isDevVersion(version)) return null;
     return `https://github.com/packetmoose/svarla/releases/download/v${version}/checksums.sha256`;
   }
 }

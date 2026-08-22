@@ -2147,6 +2147,27 @@ textarea {
   text-align: center;
 }
 
+.settings-footer {
+  margin-top: var(--md-space-xl);
+  text-align: center;
+}
+
+.settings-footer .settings-version {
+  margin-top: 0;
+}
+
+.settings-download-link {
+  display: inline-block;
+  margin-top: var(--md-space-sm);
+  font-size: 0.8125rem;
+  color: var(--md-primary);
+  text-decoration: none;
+}
+
+.settings-download-link:hover {
+  text-decoration: underline;
+}
+
 /* ===== Loading state ===== */
 
 .loading-text {
@@ -2361,6 +2382,17 @@ textarea {
   color: var(--md-on-surface-variant);
   margin: var(--md-space-sm) 0 var(--md-space-lg);
   font-size: 0.875rem;
+}
+
+.download-card-version {
+  display: inline-block;
+  background: var(--md-surface-variant);
+  color: var(--md-on-surface-variant);
+  padding: var(--md-space-xs) var(--md-space-sm);
+  border-radius: var(--md-radius-sm);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  margin-bottom: var(--md-space-md);
 }
 
 .download-button {

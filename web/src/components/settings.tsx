@@ -1,5 +1,6 @@
 import { h, Component } from "preact";
 import { api } from "../api";
+import { navigate } from "../router";
 import { Providers } from "./providers";
 import { Numbers } from "./numbers";
 import { Devices } from "./devices";
@@ -21,6 +22,13 @@ const tabs: TabDef[] = [
   { id: "account", label: "Account", icon: "⚙" },
 ];
 
+interface VersionInfo {
+  version: string;
+  gitRef: string | null;
+  buildRef: string | null;
+  buildDate: string | null;
+}
+
 /* ---------- Password form state ---------- */
 
 interface SettingsState {
@@ -31,7 +39,7 @@ interface SettingsState {
   error: string;
   success: string;
   loading: boolean;
-  serverVersion: string | null;
+  versionInfo: VersionInfo | null;
 }
 
 interface ChangePasswordErrorData {
@@ -48,7 +56,7 @@ export class Settings extends Component<Record<string, never>, SettingsState> {
     error: "",
     success: "",
     loading: false,
-    serverVersion: null,
+    versionInfo: null,
   };
 
   componentDidMount() {
@@ -64,9 +72,9 @@ export class Settings extends Component<Record<string, never>, SettingsState> {
     }
 
     // Fetch server version
-    api.get<{ version: string }>("/api/version").then((res) => {
+    api.get<VersionInfo>("/api/version").then((res) => {
       if (res.ok) {
-        this.setState({ serverVersion: res.data.version });
+        this.setState({ versionInfo: res.data });
       }
     });
   }
@@ -241,7 +249,17 @@ export class Settings extends Component<Record<string, never>, SettingsState> {
   }
 
   render() {
-    const { activeTab, serverVersion } = this.state;
+    const { activeTab, versionInfo } = this.state;
+
+    // Build tooltip with build metadata
+    let versionTooltip = "";
+    if (versionInfo) {
+      const parts: string[] = [];
+      if (versionInfo.gitRef) parts.push(`Git: ${versionInfo.gitRef}`);
+      if (versionInfo.buildRef) parts.push(`Build: ${versionInfo.buildRef}`);
+      if (versionInfo.buildDate) parts.push(`Date: ${versionInfo.buildDate}`);
+      versionTooltip = parts.join("\n");
+    }
 
     return (
       <div class="settings-container">
@@ -266,8 +284,25 @@ export class Settings extends Component<Record<string, never>, SettingsState> {
           {this.renderTabContent()}
         </div>
 
-        {serverVersion && (
-          <p class="settings-version">Server version {serverVersion}</p>
+        {versionInfo && (
+          <div class="settings-footer">
+            <p
+              class="settings-version"
+              title={versionTooltip || undefined}
+            >
+              Server version {versionInfo.version}
+            </p>
+            <a
+              href="#/download"
+              class="settings-download-link"
+              onClick={(e: Event) => {
+                e.preventDefault();
+                navigate("/download");
+              }}
+            >
+              📥 Download Android App
+            </a>
+          </div>
         )}
       </div>
     );
