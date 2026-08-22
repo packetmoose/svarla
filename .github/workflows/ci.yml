@@ -9,8 +9,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  node:
-    name: Node (lint, build, test)
+  svarla:
+    name: Svarla (lint, build, test)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -30,8 +30,8 @@ jobs:
 
       - run: npm test
 
-  go:
-    name: Go (build, test)
+  mediabridge:
+    name: Mediabridge (build, test)
     runs-on: ubuntu-latest
     defaults:
       run:
