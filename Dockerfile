@@ -36,7 +36,7 @@ COPY public/ ./public/
 
 # Generate version.json from build args
 RUN printf '{"version":"%s","gitRef":"%s","buildRef":"%s","buildDate":"%s"}\n' \
-    "${BUILD_VERSION:-0.0.0-dev}" \
+    "${BUILD_VERSION:-999.0.0-dev}" \
     "${GIT_REF:-}" \
     "${BUILD_REF:-}" \
     "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
