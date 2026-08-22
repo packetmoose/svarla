@@ -5,11 +5,16 @@ interface DownloadState {
   loading: boolean;
   available: boolean;
   apkUrl: string;
+  version: string | null;
 }
 
 interface DownloadStatusResponse {
   available: boolean;
   url: string;
+}
+
+interface VersionResponse {
+  version: string;
 }
 
 /**
@@ -24,10 +29,19 @@ export class Download extends Component<Record<string, never>, DownloadState> {
     loading: true,
     available: false,
     apkUrl: "/public/downloads/svarla.apk",
+    version: null,
   };
 
   componentDidMount() {
     this.checkAvailability();
+    this.fetchVersion();
+  }
+
+  private async fetchVersion() {
+    const result = await api.get<VersionResponse>("/api/version");
+    if (result.ok) {
+      this.setState({ version: result.data.version });
+    }
   }
 
   private async checkAvailability() {
@@ -46,7 +60,7 @@ export class Download extends Component<Record<string, never>, DownloadState> {
   }
 
   render() {
-    const { loading, available, apkUrl } = this.state;
+    const { loading, available, apkUrl, version } = this.state;
 
     return (
       <div class="download-page">
@@ -67,6 +81,9 @@ export class Download extends Component<Record<string, never>, DownloadState> {
               Distributed directly from your server — always compatible with
               your instance.
             </p>
+            {version && (
+              <p class="download-card-version">Version {version}</p>
+            )}
             {loading ? (
               <span class="download-button download-button-disabled">
                 Checking availability…

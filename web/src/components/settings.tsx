@@ -1,5 +1,6 @@
 import { h, Component } from "preact";
 import { api } from "../api";
+import { navigate } from "../router";
 import { Providers } from "./providers";
 import { Numbers } from "./numbers";
 import { Devices } from "./devices";
@@ -267,7 +268,19 @@ export class Settings extends Component<Record<string, never>, SettingsState> {
         </div>
 
         {serverVersion && (
-          <p class="settings-version">Server version {serverVersion}</p>
+          <div class="settings-footer">
+            <p class="settings-version">Server version {serverVersion}</p>
+            <a
+              href="#/download"
+              class="settings-download-link"
+              onClick={(e: Event) => {
+                e.preventDefault();
+                navigate("/download");
+              }}
+            >
+              📥 Download Android App
+            </a>
+          </div>
         )}
       </div>
     );

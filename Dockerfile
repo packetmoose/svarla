@@ -1,8 +1,13 @@
 FROM node:20-slim AS builder
 
+ARG BUILD_VERSION
+
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
+RUN if [ -n "$BUILD_VERSION" ]; then \
+      node -e "const p=require('./package.json'); p.version='$BUILD_VERSION'; require('fs').writeFileSync('./package.json', JSON.stringify(p, null, 2)+'\n')"; \
+    fi
 RUN npm ci
 
 COPY tsconfig.json ./
@@ -20,9 +25,14 @@ RUN npx tsc --project tsconfig.migrations.json
 # Production image
 FROM node:20-slim
 
+ARG BUILD_VERSION
+
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
+RUN if [ -n "$BUILD_VERSION" ]; then \
+      node -e "const p=require('./package.json'); p.version='$BUILD_VERSION'; require('fs').writeFileSync('./package.json', JSON.stringify(p, null, 2)+'\n')"; \
+    fi
 RUN npm ci --omit=dev
 
 COPY --from=builder /app/dist ./dist
