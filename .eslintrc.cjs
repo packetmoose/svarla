@@ -16,6 +16,16 @@ module.exports = {
   rules: {
     "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
     "@typescript-eslint/no-explicit-any": "warn",
+    "@typescript-eslint/ban-types": "warn",
+    "prefer-const": "warn",
   },
+  overrides: [
+    {
+      files: ["**/*.test.ts"],
+      rules: {
+        "@typescript-eslint/no-unused-vars": "off",
+      },
+    },
+  ],
   ignorePatterns: ["dist/", "node_modules/", "web/"],
 };
