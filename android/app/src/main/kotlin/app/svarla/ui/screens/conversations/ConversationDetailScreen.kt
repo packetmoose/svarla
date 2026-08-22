@@ -44,6 +44,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -87,6 +88,13 @@ fun ConversationDetailScreen(
     val focusManager = LocalFocusManager.current
     var showRemoveConfirmation by remember { mutableStateOf(false) }
     val context = LocalContext.current
+
+    // Dismiss keyboard when leaving this screen
+    DisposableEffect(Unit) {
+        onDispose {
+            keyboardController?.hide()
+        }
+    }
 
     // Mic permission gating for the call button
     var pendingCall by remember { mutableStateOf(false) }
@@ -140,7 +148,10 @@ fun ConversationDetailScreen(
                     }
                 },
                 navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
+                    IconButton(onClick = {
+                        keyboardController?.hide()
+                        onNavigateBack()
+                    }) {
                         Icon(
                             imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                             contentDescription = "Back"
