@@ -2,7 +2,6 @@ module.exports = {
   root: true,
   parser: "@typescript-eslint/parser",
   parserOptions: {
-    project: "./tsconfig.json",
     sourceType: "module",
   },
   plugins: ["@typescript-eslint"],
@@ -13,6 +12,10 @@ module.exports = {
   env: {
     node: true,
     es2022: true,
+  },
+  rules: {
+    "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
+    "@typescript-eslint/no-explicit-any": "warn",
   },
   ignorePatterns: ["dist/", "node_modules/", "web/"],
 };
