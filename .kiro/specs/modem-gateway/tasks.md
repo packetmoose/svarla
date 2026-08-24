@@ -2,7 +2,7 @@
 
 ## Overview
 
-This plan implements the modem-gateway telephony provider for Svarla, consisting of: (1) removal of the legacy ModemManager provider from the Svarla server, (2) a new Go binary (`modem-gateway/`) that communicates with a USB modem via AT commands and streams audio via ALSA/UAC, (3) a new `ModemGatewayTelephonyProvider` and WebSocket handler on the Svarla server, (4) build system integration for cross-compiled Go binary releases, and (5) provider documentation. The implementation uses TypeScript (Svarla server) and Go (modem-gateway binary).
+This plan implements the modem-gateway telephony provider for Svarla, consisting of: (1) removal of the legacy ModemManager provider from the Svarla server, (2) a new Go binary (`modem-gateway/`) that communicates with a USB modem via AT commands and streams audio via a dedicated PCM audio serial port, (3) a new `ModemGatewayTelephonyProvider` and WebSocket handler on the Svarla server, (4) build system integration for cross-compiled Go binary releases, and (5) provider documentation. The implementation uses TypeScript (Svarla server) and Go (modem-gateway binary).
 
 ## Tasks
 
@@ -202,13 +202,14 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - **Validates: Requirements 4.6, 21.3**
 
 - [ ] 10. Implement Go binary audio pipeline
-  - [ ] 10.1 Implement `internal/audio` package - ALSA capture and playback
-    - ALSA device manager: open capture and playback streams
-    - Sample rate detection: query device capabilities (8kHz or 16kHz)
-    - Capture goroutine: read PCM frames from ALSA, write to channel
-    - Playback goroutine: read from channel, write to ALSA
+  - [ ] 10.1 Implement `internal/audio` package - PCM serial capture and playback
+    - PCM audio serial port manager: opens the modem's dedicated PCM ttyUSB device
+    - Issues `AT+CPCMFRM=1` to negotiate 16kHz; falls back to 8kHz if unsupported
+    - Issues `AT+CPCMREG=1` to enable PCM streaming during call; `AT+CPCMREG=0` to disable on call end
+    - Serial port read goroutine: read PCM frames from ttyUSB, write to channel
+    - Serial port write goroutine: read from channel, write PCM frames to ttyUSB
     - Frame size: 640 bytes (320 samples × 16-bit = 20ms at 16kHz)
-    - _Requirements: 6.1, 6.2, 26.1_
+    - _Requirements: 6.1, 6.2, 26.1, 26.2, 26.5_
 
   - [ ] 10.2 Implement audio resampling (8kHz ↔ 16kHz)
     - Linear interpolation upsample 8→16kHz
@@ -291,7 +292,7 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
   - [ ] 14.1 Implement modem reconnection and error recovery
     - Detect USB disconnect / unresponsive modem (no response within 10s)
     - Exponential backoff retry (2s → 30s cap) until modem recovered
-    - Reinitialize serial port and ALSA on recovery
+    - Reinitialize serial port and PCM audio port on recovery
     - Report `modem_disconnected` / `modem_connected` status to Svarla
     - Reject operations while modem unavailable
     - Handle modem lost during call: close audio WS, report COMPLETED with `modem_lost` reason
@@ -414,10 +415,8 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
 - [ ] 19. Build system and release integration
   - [ ] 19.1 Create `modem-gateway/Dockerfile.build` for cross-compilation
     - Base image: `golang:1.22-bookworm`
-    - Install ALSA dev headers for amd64 and arm64
-    - Install `gcc-aarch64-linux-gnu` for cross-compilation
-    - Build with CGO_ENABLED=1, ldflags for version/commit/buildDate
-    - Cross-compile for arm64 with appropriate CC and PKG_CONFIG_PATH
+    - Build with CGO_ENABLED=0 (pure Go, no C dependencies), ldflags for version/commit/buildDate
+    - Cross-compile for arm64 via GOARCH=arm64
     - _Requirements: 29.1, 29.5_
 
   - [ ] 19.2 Extend `.github/workflows/release.yml` with modem-gateway build job
@@ -429,13 +428,13 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
 - [ ] 20. Documentation
   - [ ] 20.1 Create provider documentation page
     - Overview and architecture diagram
-    - Supported modems (Quectel EG25-G with UAC firmware as primary reference)
+    - Supported modems (SIMCom SIM7600G-H as primary reference; Quectel EG25-G with UAC firmware as future option)
     - Hardware setup requirements (Raspberry Pi, USB modem, SIM card)
     - Go binary installation and configuration (including `--generate-config`)
     - Pairing flow walkthrough
     - Troubleshooting common issues
     - Note about `EXPERIMENTAL_PROVIDERS=true` requirement for UI provider creation
-    - Required modem firmware features: UAC support and AT command interface
+    - Required modem firmware features: PCM audio over USB serial port (`AT+CPCMREG` support) and AT command interface
     - _Requirements: 27.1, 27.2, 27.3_
 
   - [ ] 20.2 Add systemd service documentation section
