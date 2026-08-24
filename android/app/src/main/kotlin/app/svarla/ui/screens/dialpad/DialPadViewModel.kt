@@ -46,6 +46,14 @@ class DialPadViewModel @Inject constructor(
 
     companion object {
         private const val MAX_SUGGESTIONS = 5
+
+        /**
+         * Sanitizes a pasted string by stripping everything except dial-valid characters.
+         * Returns only digits, +, *, and # characters.
+         */
+        internal fun sanitizeDialInput(text: String): String {
+            return text.filter { it.isDigit() || it == '+' || it == '*' || it == '#' }
+        }
     }
 
     /** The raw digits/characters entered by the user (unformatted). */
@@ -167,7 +175,7 @@ class DialPadViewModel @Inject constructor(
      * @return true if valid dial characters were found and pasted, false otherwise
      */
     fun pasteNumber(text: String): Boolean {
-        val sanitized = text.filter { it.isDigit() || it == '+' || it == '*' || it == '#' }
+        val sanitized = sanitizeDialInput(text)
         if (sanitized.isEmpty()) return false
         _rawInput.value = sanitized
         _formattedNumber.value = formatNumber(sanitized)

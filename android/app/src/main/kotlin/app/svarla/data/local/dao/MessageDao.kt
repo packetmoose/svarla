@@ -37,4 +37,23 @@ interface MessageDao {
 
     @Query("DELETE FROM messages WHERE id = :id")
     suspend fun deleteById(id: String)
+
+    /**
+     * Counts unread (received) messages per conversation where the message timestamp
+     * is after the conversation's lastReadAt. Returns a list of [UnreadCount] objects.
+     */
+    @Query("""
+        SELECT m.conversationNumber, COUNT(*) as count
+        FROM messages m
+        INNER JOIN conversations c ON m.conversationNumber = c.phoneNumber
+        WHERE m.direction = 'RECEIVED'
+        AND (c.lastReadAt IS NULL OR m.timestamp > c.lastReadAt)
+        GROUP BY m.conversationNumber
+    """)
+    suspend fun getUnreadCountsPerConversation(): List<UnreadCount>
 }
+
+data class UnreadCount(
+    val conversationNumber: String,
+    val count: Int
+)
