@@ -2,9 +2,9 @@
 
 ## Overview
 
-The modem-gateway feature introduces a new telephony provider for Svarla that enables SMS and voice calls through a physical USB modem (e.g., Quectel EG25-G with UAC firmware). It replaces the legacy ModemManager/D-Bus provider with a cleaner, portable architecture consisting of three communicating components:
+The modem-gateway feature introduces a new telephony provider for Svarla that enables SMS and voice calls through a physical USB modem (e.g., SIM7600G-H). It replaces the legacy ModemManager/D-Bus provider with a cleaner, portable architecture consisting of three communicating components:
 
-1. **Modem_Gateway_Binary** — A standalone Go binary running on a Raspberry Pi or similar SBC, communicating with the USB modem via AT commands and streaming audio via ALSA/UAC.
+1. **Modem_Gateway_Binary** — A standalone Go binary running on a Raspberry Pi or similar SBC, communicating with the USB modem via AT commands and streaming audio via PCM audio serial port.
 2. **Svarla_Server** — The Node.js backend that hosts the `ModemGatewayTelephonyProvider` implementing the `TelephonyProvider` interface, managing the signaling WebSocket endpoint.
 3. **MediaBridge** — The existing Go service that bridges audio between WebRTC clients and telephony providers (unchanged; the Go binary connects to its existing `/audio/{sessionId}` WebSocket endpoint).
 
@@ -20,9 +20,9 @@ This design maintains the existing `TelephonyProvider` interface contract and in
 graph TB
     subgraph "Raspberry Pi / SBC"
         MGB[Modem Gateway Binary<br/>Go]
-        MODEM[USB Modem<br/>AT + UAC Audio]
+        MODEM[USB Modem<br/>AT + PCM Audio Serial]
         MGB -->|AT Commands| MODEM
-        MGB -->|ALSA PCM| MODEM
+        MGB -->|PCM Serial| MODEM
     end
 
     subgraph "Svarla Server (Node.js)"
@@ -89,7 +89,7 @@ graph TB
         SIG[internal/signaling<br/>WS client, reconnect]
         ID[internal/identity<br/>Ed25519 keys]
         MDM[internal/modem<br/>AT manager, URCs]
-        AUD[internal/audio<br/>ALSA capture/play]
+        AUD[internal/audio<br/>PCM serial capture/play]
         BRG[internal/bridge<br/>Audio WS client]
         SMS[internal/sms<br/>Send/receive, PDU]
         USSD[internal/ussd<br/>Session state]
@@ -124,7 +124,7 @@ graph TB
 - YAML config file parsing and validation
 - Default generation for `--generate-config`
 - Required fields: `connection.endpoint` (Svarla WS URL), `modem.serialPort` (device path)
-- Optional: `connection.pairingSecret`, `modem.phoneNumber`, `modem.voiceEnabled`, `modem.networkRegistration`, `modem.simPin`, `modem.alsaDevice`, `tls.caCert`, `tls.skipVerify`, `log.level`, `log.file`
+- Optional: `connection.pairingSecret`, `modem.phoneNumber`, `modem.voiceEnabled`, `modem.networkRegistration`, `modem.simPin`, `modem.pcmAudioPort`, `tls.caCert`, `tls.skipVerify`, `log.level`, `log.file`
 
 ```go
 type Config struct {
@@ -143,7 +143,7 @@ type ModemConfig struct {
     SerialPort          string `yaml:"serialPort"`          // Default: /dev/ttyUSB2
     PhoneNumber         string `yaml:"phoneNumber"`         // E.164 override
     VoiceEnabled        bool   `yaml:"voiceEnabled"`        // Default: true
-    AlsaDevice          string `yaml:"alsaDevice"`          // Optional override
+    PcmAudioPort        string `yaml:"pcmAudioPort"`        // Optional override, auto-detected
     NetworkRegistration bool   `yaml:"networkRegistration"` // Default: false
     SimPin              string `yaml:"simPin"`              // Optional
 }
@@ -201,20 +201,23 @@ const (
 ```
 
 #### `internal/audio`
-- ALSA device manager: opens capture and playback streams
-- Sample rate detection: queries device capabilities (8kHz or 16kHz)
-- Resampling: linear interpolation upsample 8→16kHz, averaging downsample 16→8kHz
-- Capture goroutine: reads PCM frames from ALSA, writes to ring buffer
-- Playback goroutine: reads from ring buffer, writes to ALSA
-- Frame size: 640 bytes (320 samples × 16-bit = 20ms at 16kHz)
+- PCM audio serial port manager: opens the modem's dedicated PCM audio ttyUSB device (configurable, auto-detected from modem USB interfaces)
+- On initialization: issues `AT+CPCMFRM=1` to attempt 16kHz sample rate; falls back to 8kHz if command fails or is unsupported
+- During call: `AT+CPCMREG=1` enables PCM streaming on the serial port; `AT+CPCMREG=0` disables it
+- Re-issues `AT+CPCMFRM=1` after modem resets (setting does not persist across reboots)
+- Resampling: linear interpolation upsample 8→16kHz, averaging downsample 16→8kHz (only when operating at 8kHz)
+- Capture goroutine: reads raw PCM bytes from the serial port, assembles into frames
+- Playback goroutine: writes raw PCM bytes to the serial port
+- Frame size at 16kHz: 640 bytes (320 samples × 16-bit = 20ms); at 8kHz: 320 bytes (160 samples × 16-bit = 20ms)
+- No ALSA, no CGo, no libasound dependency
 
 ```go
 type AudioPipeline interface {
-    Start() error
-    Stop() error
-    NativeSampleRate() int
-    CaptureFrames() <-chan []byte  // 640-byte PCM frames at 16kHz
-    PlaybackFrames() chan<- []byte // 640-byte PCM frames at 16kHz
+    Start() error              // Opens PCM serial port, enables AT+CPCMREG=1
+    Stop() error               // Disables AT+CPCMREG=0, closes port
+    NativeSampleRate() int     // 8000 or 16000
+    CaptureFrames() <-chan []byte  // 640-byte (16kHz) or 320-byte (8kHz) PCM frames
+    PlaybackFrames() chan<- []byte // 640-byte PCM frames at 16kHz (resampled if needed)
 }
 ```
 
@@ -517,11 +520,11 @@ interface MakeCallMessage {
 ```mermaid
 graph LR
     subgraph "Go Binary"
-        ALSA_CAP[ALSA Capture<br/>8kHz or 16kHz]
+        SER_CAP[Serial PCM Capture<br/>8kHz or 16kHz]
         RS_UP[Resample↑<br/>8→16kHz]
         FRAME[Frame Pump<br/>640B / 20ms]
         RS_DOWN[Resample↓<br/>16→8kHz]
-        ALSA_PLAY[ALSA Playback<br/>8kHz or 16kHz]
+        SER_PLAY[Serial PCM Playback<br/>8kHz or 16kHz]
     end
 
     subgraph "MediaBridge"
@@ -529,22 +532,24 @@ graph LR
         BRIDGE[Bridge<br/>PCM↔RTP]
     end
 
-    ALSA_CAP -->|"PCM native rate"| RS_UP
+    SER_CAP -->|"PCM native rate"| RS_UP
     RS_UP -->|"PCM 16kHz"| FRAME
     FRAME -->|"640B binary WS frames"| AUDIOWS
     AUDIOWS -->|"PCM 16kHz"| BRIDGE
 
     BRIDGE -->|"PCM 16kHz"| AUDIOWS
     AUDIOWS -->|"640B binary WS frames"| RS_DOWN
-    RS_DOWN -->|"PCM native rate"| ALSA_PLAY
+    RS_DOWN -->|"PCM native rate"| SER_PLAY
 ```
 
 - **Wire format**: Binary WebSocket frames, 640 bytes each (320 samples × 16-bit signed LE = 20ms at 16kHz)
 - **Sample rate on wire**: Always 16kHz PCM mono (matching existing MediaBridge audio WS protocol)
-- **Local conversion**: If modem UAC is 8kHz, binary performs linear interpolation upsampling (capture) and averaging downsampling (playback)
-- **Timing**: Dedicated capture goroutine reads from ALSA at real-time rate; dedicated send goroutine uses 20ms timer for pacing
+- **Local conversion**: If modem PCM port is 8kHz (AT+CPCMFRM=1 failed), binary performs linear interpolation upsampling (capture) and averaging downsampling (playback)
+- **Sample rate negotiation**: On init, binary issues `AT+CPCMFRM=1`; if OK → 16kHz (no conversion needed); if ERROR → 8kHz (conversion active). Re-issued after modem resets.
+- **Timing**: Dedicated capture goroutine reads from serial port at real-time rate; dedicated send goroutine uses 20ms timer for pacing
 - **Jitter**: Small ring buffer (4-5 frames) between capture and WS send to absorb scheduling jitter
 - **Authentication**: Session ID in URL path (consistent with existing protocol in `audiows/handler.go`)
+- **Call lifecycle**: `AT+CPCMREG=1` enables PCM streaming at call start; `AT+CPCMREG=0` disables at call end
 
 ### 5. Identity and Pairing Flow
 
@@ -612,7 +617,7 @@ svarla/
 │   │   ├── ussd/
 │   │   ├── identity/
 │   │   └── buffer/
-│   └── Dockerfile.build     # Cross-compilation with ALSA headers
+│   └── Dockerfile.build     # Pure Go cross-compilation (CGO_ENABLED=0)
 ├── mediabridge/             # Existing
 ├── src/                     # Existing (Svarla server)
 └── .github/workflows/
@@ -625,27 +630,15 @@ svarla/
 # Dockerfile.build for modem-gateway
 FROM golang:1.22-bookworm AS builder
 
-# Install ALSA dev headers for both architectures
-RUN dpkg --add-architecture arm64 && \
-    apt-get update && \
-    apt-get install -y \
-      libasound2-dev \
-      libasound2-dev:arm64 \
-      gcc-aarch64-linux-gnu
-
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 ARG VERSION=dev
 ARG COMMIT=unknown
 ARG BUILD_DATE=unknown
 
-ENV CGO_ENABLED=1
+ENV CGO_ENABLED=0
 
-# Cross-compile for arm64
-RUN if [ "$TARGETARCH" = "arm64" ]; then \
-      export CC=aarch64-linux-gnu-gcc; \
-      export PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig; \
-    fi && \
+RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}" \
       -o /out/modem-gateway ./cmd/modem-gateway
 ```
@@ -764,7 +757,7 @@ modem:
   serialPort: "/dev/ttyUSB2"
   phoneNumber: "+46701234567"  # Optional E.164 override
   voiceEnabled: true
-  alsaDevice: ""               # Empty = auto-detect UAC device
+  pcmAudioPort: ""               # Optional override, auto-detected from modem USB interfaces
   networkRegistration: false
   simPin: ""
 
@@ -792,7 +785,8 @@ log:
 |----------|-----------|
 | AT command serialization via single goroutine + channel | Modems only support one command at a time; mutex-protected channel ensures strict ordering without deadlocks |
 | Modem state machine (5 states) | Clear lifecycle management; prevents invalid operations (e.g., DTMF when no call active) |
-| Separate capture/playback goroutines with ring buffers | Decouples ALSA timing from WebSocket timing; absorbs jitter without blocking audio |
+| Separate capture/playback goroutines with ring buffers | Decouples serial port timing from WebSocket timing; absorbs jitter without blocking audio |
+| PCM over serial port (no ALSA) | No C dependencies, fully static binary, simple cross-compilation, works on standard SIM7600 firmware without modification |
 | JSON Lines for buffer persistence | Append-only writes are crash-safe; simple to parse line-by-line; no external dependencies |
 | YAML config format | Consistent with existing `server-config.yaml` and `mediabridge-config.yaml` in the project |
 | Ed25519 for device auth | Compact keys (32 bytes), fast signing, no certificate management, Go stdlib support |
@@ -816,7 +810,7 @@ log:
 | DTMF send failure | Report failure with specific digit and error reason |
 | USSD timeout (30s) | Report timeout error, cancel USSD session on modem |
 | Invalid AT response | Log at debug level, retry once if appropriate, report error if persistent |
-| ALSA device unavailable | Disable voice capability, report only SMS, reject call operations |
+| PCM audio serial port unavailable | Disable voice capability, report only SMS, reject call operations |
 | Config file invalid | Print descriptive error, exit non-zero |
 | No config file found | Print suggestion to use `--generate-config`, exit non-zero |
 | SIM PIN rejected | Report error to Svarla, do NOT retry (avoid SIM lock) |
@@ -892,7 +886,7 @@ See Correctness Properties section below for formal property specifications.
 
 - **Property-based tests**: Minimum 100 iterations per property (Go: `rapid` library; TypeScript: `fast-check`)
 - **Tag format**: `Feature: modem-gateway, Property {N}: {description}`
-- Unit tests use mocks for external dependencies (serial port, WebSocket, ALSA)
+- Unit tests use mocks for external dependencies (serial port, WebSocket)
 - Integration tests use in-process servers and mock serial devices
 
 ## Correctness Properties
