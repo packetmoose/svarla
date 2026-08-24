@@ -6,7 +6,7 @@ A self-hosted softphone for making and receiving phone calls and SMS over a data
 
 **Components:** Node.js/Fastify server · Go MediaBridge (Pion WebRTC) · Kotlin/Compose Android app · Preact web interface
 
-Telephony providers (Vonage, 46elks, ModemManager) are managed at runtime — no restart needed to add or reconfigure numbers.
+Telephony providers (Vonage, 46elks) are managed at runtime — no restart needed to add or reconfigure numbers.
 
 ## Quick Start
 
@@ -76,7 +76,7 @@ Full documentation is available at **[svarla.app](https://svarla.app)**:
 - [MediaBridge configuration](https://svarla.app/config/mediabridge) — mediabridge-config.yaml reference
 - [Port requirements](https://svarla.app/config/ports) — Firewall and networking guide
 - [Android app](https://svarla.app/guide/android) — Installing, building, and connecting
-- [Providers](https://svarla.app/guide/providers-overview) — Setting up Vonage, 46elks, or ModemManager
+- [Providers](https://svarla.app/guide/providers-overview) — Setting up Vonage or 46elks
 
 ## Project Structure
 

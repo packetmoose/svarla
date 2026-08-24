@@ -47,10 +47,6 @@ describe('SECRET_FIELDS', () => {
     expect(SECRET_FIELDS['vonage']!.has('api_key')).toBe(false);
   });
 
-  it('should have no secret fields for modemmanager', () => {
-    expect(SECRET_FIELDS['modemmanager']!.size).toBe(0);
-  });
-
   it('should have no secret fields for dummy', () => {
     expect(SECRET_FIELDS['dummy']!.size).toBe(0);
   });
@@ -87,16 +83,6 @@ describe('maskProviderConfig', () => {
     maskProviderConfig('vonage', config);
 
     expect(config).toEqual(original);
-  });
-
-  it('should return config unchanged for modemmanager (no secret fields)', () => {
-    const config = {
-      number_overrides: { '+1234567890': 'My Modem' },
-    };
-
-    const result = maskProviderConfig('modemmanager', config);
-
-    expect(result).toEqual(config);
   });
 
   it('should return config unchanged for dummy (no secret fields)', () => {

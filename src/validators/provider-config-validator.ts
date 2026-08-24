@@ -25,14 +25,6 @@ export const vonageConfigSchema = z.object({
 );
 
 /**
- * Zod schema for ModemManager provider configuration.
- * Only has an optional number_overrides map.
- */
-export const modemmanagerConfigSchema = z.object({
-  number_overrides: z.record(z.string(), z.string()).optional(),
-});
-
-/**
  * Zod schema for Dummy provider configuration.
  * Minimal config with an optional name field.
  */
@@ -54,14 +46,29 @@ export const elks46ConfigSchema = z.object({
 });
 
 /**
+ * Zod schema for modem-gateway provider configuration.
+ * Permissive passthrough schema — modem-gateway requires no user-supplied config fields.
+ *
+ * Requirements: 1.1
+ */
+export const modemGatewayConfigSchema = z.object({}).passthrough();
+
+/**
  * Map of provider type to its corresponding Zod schema.
  */
 const schemasByType: Record<string, z.ZodSchema> = {
   vonage: vonageConfigSchema,
-  modemmanager: modemmanagerConfigSchema,
   dummy: dummyConfigSchema,
   '46elks': elks46ConfigSchema,
+  'modem-gateway': modemGatewayConfigSchema,
 };
+
+/**
+ * Returns the list of all supported provider type identifiers.
+ */
+export function getSupportedProviderTypes(): string[] {
+  return Object.keys(schemasByType);
+}
 
 /**
  * Validates a provider configuration against the schema for the given provider type.

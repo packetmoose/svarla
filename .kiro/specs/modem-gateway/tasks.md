@@ -6,14 +6,14 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
 
 ## Tasks
 
-- [ ] 1. Remove legacy ModemManager provider
-  - [ ] 1.1 Create database migration `012_remove_modemmanager.ts` that deletes numbers and provider rows with type "modemmanager"
+- [x] 1. Remove legacy ModemManager provider
+  - [x] 1.1 Create database migration `012_remove_modemmanager.ts` that deletes numbers and provider rows with type "modemmanager"
     - Add migration file under `src/migrations/` with sequential number after 011
     - `up`: delete from `numbers` where provider_id in modemmanager providers, then delete provider rows
     - `down`: no-op
     - _Requirements: 13.5_
 
-  - [ ] 1.2 Remove ModemManager provider files and references
+  - [x] 1.2 Remove ModemManager provider files and references
     - Delete `src/providers/modemmanager-telephony-provider.ts` and `src/providers/modemmanager-telephony-provider.test.ts`
     - Remove `modemmanagerConfigSchema` export and `modemmanager` entry from `schemasByType` in `src/validators/provider-config-validator.ts`
     - Remove `modemmanager` from `SENSITIVE_FIELDS` in `src/services/config-encryption.ts`
@@ -22,28 +22,28 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Remove all import statements referencing ModemManager from other source files
     - _Requirements: 13.1, 13.2, 13.3, 13.4_
 
-  - [ ] 1.3 Remove `dbus-next` dependency from `package.json` and regenerate lock file
+  - [x] 1.3 Remove `dbus-next` dependency from `package.json` and regenerate lock file
     - Run `npm uninstall dbus-next` (and `@types/dbus-next` if present)
     - Verify no other code references dbus-next
     - _Requirements: 13.3_
 
-  - [ ] 1.4 Verify build and tests pass after ModemManager removal
+  - [x] 1.4 Verify build and tests pass after ModemManager removal
     - Run `npm run build` and `npm run test`
     - Fix any remaining broken imports or references
     - _Requirements: 13.6_
 
-- [ ] 2. Checkpoint - Ensure all tests pass
+- [x] 2. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 3. Set up Go binary project scaffolding
-  - [ ] 3.1 Initialize Go module and directory structure
+- [x] 3. Set up Go binary project scaffolding
+  - [x] 3.1 Initialize Go module and directory structure
     - Create `modem-gateway/` at project root with `go.mod` (module name `github.com/packetmoose/svarla/modem-gateway`)
     - Create directory structure: `cmd/modem-gateway/`, `internal/config/`, `internal/modem/`, `internal/audio/`, `internal/signaling/`, `internal/bridge/`, `internal/sms/`, `internal/ussd/`, `internal/identity/`, `internal/buffer/`
     - Create `cmd/modem-gateway/main.go` entry point with `--version` and `--generate-config` flags, signal handling (SIGTERM, SIGINT)
     - Embed version/commit/buildDate variables with ldflags support
     - _Requirements: 15.2, 24.1, 29.4_
 
-  - [ ] 3.2 Implement `internal/config` package
+  - [x] 3.2 Implement `internal/config` package
     - Define `Config`, `ConnectionConfig`, `ModemConfig`, `TLSConfig`, `LogConfig` structs with YAML tags
     - Implement YAML parsing and validation (required fields: endpoint, serialPort)
     - Implement `--generate-config` default file generation
@@ -57,8 +57,8 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Test all optional fields with defaults
     - _Requirements: 15.1, 15.3, 15.4, 15.5_
 
-- [ ] 4. Implement Go binary identity and authentication
-  - [ ] 4.1 Implement `internal/identity` package
+- [x] 4. Implement Go binary identity and authentication
+  - [x] 4.1 Implement `internal/identity` package
     - Ed25519 keypair generation on first run
     - PEM file storage for private key (e.g., `modem-gateway.key` in config directory)
     - Load existing key from PEM file
@@ -72,22 +72,22 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Use `pgregory.net/rapid` library
     - **Validates: Requirements 2.3, 2.4, 2.5**
 
-- [ ] 5. Implement Go binary modem communication
-  - [ ] 5.1 Implement `internal/modem` package - AT command manager
+- [x] 5. Implement Go binary modem communication
+  - [x] 5.1 Implement `internal/modem` package - AT command manager
     - Open serial port at configured path (115200 baud, 8N1)
     - Single-goroutine command queue (channel + mutex serialized, one AT command at a time)
     - Command timeout handling (30s default, 5s for VTS, 60s for CMGS)
     - Final result code parsing (OK, ERROR, +CME ERROR, +CMS ERROR)
     - _Requirements: 14.1, 14.5, 14.6_
 
-  - [ ] 5.2 Implement URC parser and modem state machine
+  - [x] 5.2 Implement URC parser and modem state machine
     - Background goroutine reading serial port for URCs
     - Parse and dispatch: RING, +CLIP, +CMTI, +CUSD, +DTMF, +CREG, +CDS
     - State machine: Disconnected → Initializing → Ready → InCall → Error
     - State transitions based on command results and URCs (ATD<number>;/ATA success → InCall, ATH/NO CARRIER → Ready)
     - _Requirements: 14.3, 11.1_
 
-  - [ ] 5.3 Implement modem initialization sequence
+  - [x] 5.3 Implement modem initialization sequence
     - `ATE0` (disable echo), verbose results, `+CLIP` enable, `+DDET` enable (DTMF detection), `+CNMI` configure (SMS arrival notifications)
     - `AT+CMGF=1` (text mode, fallback to PDU if unsupported)
     - Modem detection with exponential backoff (2s → 30s) on USB disconnect/unresponsive
@@ -107,8 +107,8 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Test initialization sequence
     - _Requirements: 14.3, 14.4, 14.5_
 
-- [ ] 6. Implement Go binary signaling WebSocket client
-  - [ ] 6.1 Implement `internal/signaling` package - WebSocket client
+- [x] 6. Implement Go binary signaling WebSocket client
+  - [x] 6.1 Implement `internal/signaling` package - WebSocket client
     - Persistent WebSocket connection to Svarla server
     - JSON message send/receive with `type` field dispatch
     - Ping/pong handling (respond to server pings)
@@ -116,14 +116,14 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - TLS configuration support (custom CA cert, skip-verify)
     - _Requirements: 3.1, 3.2, 3.5, 22.1, 22.2, 22.3_
 
-  - [ ] 6.2 Implement authentication flow in signaling client
+  - [x] 6.2 Implement authentication flow in signaling client
     - Initial pairing: send `auth_pair` with publicKey (base64) and pairingSecret
     - Reconnection: receive `auth_challenge`, sign nonce with Ed25519, send `auth_response`
     - Handle `auth_success` and `auth_error` messages
     - Remove pairing secret from config note after successful pairing
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 3.4_
 
-  - [ ] 6.3 Implement exponential backoff reconnection
+  - [x] 6.3 Implement exponential backoff reconnection
     - Backoff: 1s → 2s → 4s → ... → 60s cap, indefinite retries
     - Re-authenticate on each reconnect
     - Track connection state (connected/disconnected)
@@ -141,11 +141,11 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Use `pgregory.net/rapid` library
     - **Validates: Requirements 3.1, 3.2**
 
-- [ ] 7. Checkpoint - Ensure all tests pass
+- [x] 7. Checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 8. Implement Go binary SMS handling
-  - [ ] 8.1 Implement `internal/sms` package - send and receive
+- [x] 8. Implement Go binary SMS handling
+  - [x] 8.1 Implement `internal/sms` package - send and receive
     - SMS send via `AT+CMGS` (text mode default, PDU fallback)
     - SMS receive via `+CMTI` URC → `AT+CMGR` to read
     - Extract sender, recipient, body, timestamp from received messages
@@ -153,7 +153,7 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Report success with message reference or failure with error reason
     - _Requirements: 4.1, 4.2, 4.3_
 
-  - [ ] 8.2 Implement concatenated SMS reassembly and UCS-2 encoding
+  - [x] 8.2 Implement concatenated SMS reassembly and UCS-2 encoding
     - Multi-part SMS reassembly: track parts by reference number, assemble when complete
     - UCS-2 detection: scan body for characters outside GSM-7, switch encoding
     - UCS-2 decoding for received messages
@@ -173,8 +173,8 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Use `pgregory.net/rapid` library
     - **Validates: Requirements 18.3**
 
-- [ ] 9. Implement Go binary persistent buffer
-  - [ ] 9.1 Implement `internal/buffer` package - disk-persisted ring buffer
+- [x] 9. Implement Go binary persistent buffer
+  - [x] 9.1 Implement `internal/buffer` package - disk-persisted ring buffer
     - JSON Lines format (one JSON object per line, append-only)
     - Max capacity: 1000 entries (shared SMS + missed calls)
     - FIFO eviction when full (discard oldest)
@@ -202,8 +202,8 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Use `pgregory.net/rapid` library
     - **Validates: Requirements 4.6, 21.3**
 
-- [ ] 10. Implement Go binary audio pipeline
-  - [ ] 10.1 Implement `internal/audio` package - PCM serial capture and playback
+- [x] 10. Implement Go binary audio pipeline
+  - [x] 10.1 Implement `internal/audio` package - PCM serial capture and playback
     - PCM audio serial port manager: opens the modem's dedicated PCM ttyUSB device
     - Issues `AT+CPCMFRM=1` to negotiate 16kHz; falls back to 8kHz if unsupported
     - Issues `AT+CPCMREG=1` to enable PCM streaming during call; `AT+CPCMREG=0` to disable on call end
@@ -212,13 +212,13 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Frame size: 640 bytes (320 samples × 16-bit = 20ms at 16kHz)
     - _Requirements: 6.1, 6.2, 26.1, 26.2, 26.5_
 
-  - [ ] 10.2 Implement audio resampling (8kHz ↔ 16kHz)
+  - [x] 10.2 Implement audio resampling (8kHz ↔ 16kHz)
     - Linear interpolation upsample 8→16kHz
     - Averaging downsample 16→8kHz
     - Conditional: only resample if native rate differs from 16kHz wire rate
     - _Requirements: 26.2, 26.3, 26.4_
 
-  - [ ] 10.3 Implement `internal/bridge` package - Audio WebSocket client
+  - [x] 10.3 Implement `internal/bridge` package - Audio WebSocket client
     - Per-call WebSocket connection to MediaBridge (`/audio/{sessionId}`)
     - Bidirectional PCM frame pump: capture → WS send; WS receive → playback
     - 20ms timer-driven send interval
@@ -239,8 +239,8 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Use `pgregory.net/rapid` library
     - **Validates: Requirements 26.2, 26.3, 6.1**
 
-- [ ] 11. Implement Go binary voice call handling and DTMF
-  - [ ] 11.1 Implement voice call state management in signaling client
+- [x] 11. Implement Go binary voice call handling and DTMF
+  - [x] 11.1 Implement voice call state management in signaling client
     - Handle `make_call` message: dial with `ATD<number>;` (trailing semicolon for voice call), report state transitions (RINGING, ANSWERED, COMPLETED, FAILED, BUSY)
     - Handle `answer_call` message: answer with `ATA`, open audio WS
     - Handle `end_call` message: hang up with `ATH`, close audio WS
@@ -250,7 +250,7 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Call duration tracking: record answer timestamp, calculate duration on end
     - _Requirements: 5.1, 5.2, 5.3, 5.4, 5.5, 5.6, 5.7, 5.8, 5.10, 5.11, 5.12, 20.1, 20.2, 20.3_
 
-  - [ ] 11.2 Implement DTMF send and receive
+  - [x] 11.2 Implement DTMF send and receive
     - Send DTMF via `AT+VTS` (5s timeout) on Svarla request
     - Receive DTMF via `+DTMF` URC, forward to Svarla
     - Reject DTMF when no call active
@@ -263,8 +263,8 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Use `pgregory.net/rapid` library
     - **Validates: Requirements 20.1, 20.2, 20.3**
 
-- [ ] 12. Implement Go binary USSD support
-  - [ ] 12.1 Implement `internal/ussd` package
+- [x] 12. Implement Go binary USSD support
+  - [x] 12.1 Implement `internal/ussd` package
     - USSD session state machine: idle → pending → active → idle
     - Execute via `AT+CUSD=1,"code"`
     - Multi-step session support: forward intermediate responses, accept follow-up inputs
@@ -273,15 +273,15 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Reject during active call
     - _Requirements: 8.1, 8.2, 8.3, 8.4, 8.5, 8.6_
 
-- [ ] 13. Implement Go binary status reporting and number discovery
-  - [ ] 13.1 Implement periodic status reporting
+- [x] 13. Implement Go binary status reporting and number discovery
+  - [x] 13.1 Implement periodic status reporting
     - Query `AT+CSQ`, `AT+CREG`, `AT+COPS` every 30 seconds
     - Send status immediately on connect/reconnect before periodic cycle
     - Report stale values if modem unresponsive within 5s
     - Include modem model, manufacturer, firmware in initial status
     - _Requirements: 9.1, 9.2, 9.3, 9.4, 25.1, 25.2_
 
-  - [ ] 13.2 Implement number discovery and reporting
+  - [x] 13.2 Implement number discovery and reporting
     - Attempt `AT+CNUM` at startup for SIM phone number
     - Fall back to `phone_number` config field
     - Report discovered number (E.164) on connect/reconnect
@@ -290,7 +290,7 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - _Requirements: 10.1, 10.2, 10.3, 5.13, 14.8, 14.9_
 
 - [ ] 14. Implement Go binary resilience features
-  - [ ] 14.1 Implement modem reconnection and error recovery
+  - [x] 14.1 Implement modem reconnection and error recovery
     - Detect USB disconnect / unresponsive modem (no response within 10s)
     - Exponential backoff retry (2s → 30s cap) until modem recovered
     - Reinitialize serial port and PCM audio port on recovery
@@ -299,14 +299,14 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Handle modem lost during call: close audio WS, report COMPLETED with `modem_lost` reason
     - _Requirements: 11.1, 11.2, 11.3, 11.4, 11.5_
 
-  - [ ] 14.2 Implement network registration mode
+  - [x] 14.2 Implement network registration mode
     - Passive mode (default): no network registration management
     - Self-registration mode: `AT+COPS=0`, monitor `AT+CREG`
     - SIM PIN unlock: `AT+CPIN=<pin>` when SIM requires PIN
     - Error handling: report failure if PIN missing or rejected, never retry rejected PIN
     - _Requirements: 16.1, 16.2, 16.3, 16.4, 16.5_
 
-  - [ ] 14.3 Implement graceful shutdown
+  - [x] 14.3 Implement graceful shutdown
     - Handle SIGTERM/SIGINT signals
     - If call active: ATH, close audio WS, notify Svarla
     - Flush SMS/missed call buffer to disk
@@ -314,24 +314,24 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Force-exit after 10 seconds if not complete
     - _Requirements: 24.1, 24.2, 24.3, 24.4, 24.5_
 
-  - [ ] 14.4 Implement missed call buffering
+  - [x] 14.4 Implement missed call buffering
     - Buffer missed calls when signaling WS disconnected (reject call with ATH, store caller + timestamp)
     - Share persistence mechanism with SMS buffer (same `internal/buffer` package)
     - Deliver buffered missed calls on reconnect in chronological order
     - _Requirements: 21.1, 21.2, 21.3, 21.4_
 
-  - [ ] 14.5 Implement logging and diagnostics
+  - [x] 14.5 Implement logging and diagnostics
     - Configurable log levels: error, warn, info, debug, verbose
     - Default to stdout; optional file output
     - Redact sensitive info (pairing secrets, private keys, SIM PINs, message contents) at non-verbose levels
     - Verbose: log raw AT command exchanges
     - _Requirements: 23.1, 23.2, 23.3, 23.4, 23.5_
 
-- [ ] 15. Checkpoint - Ensure all Go binary tests pass
+- [x] 15. Checkpoint - Ensure all Go binary tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 16. Implement Svarla server ModemGatewayTelephonyProvider
-  - [ ] 16.1 Create `src/providers/modem-gateway-telephony-provider.ts`
+- [x] 16. Implement Svarla server ModemGatewayTelephonyProvider
+  - [x] 16.1 Create `src/providers/modem-gateway-telephony-provider.ts`
     - Implement `TelephonyProvider` interface with `providerId = 'modem-gateway'`
     - `makeCall`: send `make_call` message via WS handler with audioWsUrl, return CallInitResult
     - `endCall`: send `end_call` message via WS handler
@@ -346,7 +346,7 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Pending operation rejection on disconnect with `ProviderUnavailableError`
     - _Requirements: 12.1, 12.2, 12.3, 12.4, 12.5, 12.6, 12.7, 12.8, 12.9, 12.10, 12.11_
 
-  - [ ] 16.2 Create `src/providers/modem-gateway-ws-handler.ts`
+  - [x] 16.2 Create `src/providers/modem-gateway-ws-handler.ts`
     - Manage signaling WebSocket endpoint for a single modem-gateway provider
     - Pairing flow: validate pairing secret (not expired <24h, not used, no existing key), store public key, invalidate secret
     - Challenge-response auth: issue 32-byte nonce (expires 30s), verify Ed25519 signature
@@ -376,8 +376,8 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Test message routing
     - _Requirements: 2.1, 2.2, 2.3, 2.4, 2.5, 2.6, 2.7, 2.8_
 
-- [ ] 17. Implement Svarla server integration (config, factory, feature flag, API)
-  - [ ] 17.1 Add modem-gateway provider config validation and factory
+- [x] 17. Implement Svarla server integration (config, factory, feature flag, API)
+  - [x] 17.1 Add modem-gateway provider config validation and factory
     - Add `modemGatewayConfigSchema` to `src/validators/provider-config-validator.ts` (empty passthrough schema)
     - Add `'modem-gateway'` to `schemasByType` map
     - Add `'modem-gateway': []` to `SENSITIVE_FIELDS` in `config-encryption.ts`
@@ -385,20 +385,20 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Add `case 'modem-gateway'` to provider factory in `src/server.ts`
     - _Requirements: 1.1, 1.4, 1.5_
 
-  - [ ] 17.2 Implement feature flag for EXPERIMENTAL_PROVIDERS
+  - [x] 17.2 Implement feature flag for EXPERIMENTAL_PROVIDERS
     - Check `process.env.EXPERIMENTAL_PROVIDERS === 'true'` in provider types listing endpoint
     - Exclude "modem-gateway" from UI list unless flag is set
     - Do NOT gate API creation or operation of existing providers
     - Existing modem-gateway providers operate regardless of flag
     - _Requirements: 17.1, 17.2, 17.3, 17.4_
 
-  - [ ] 17.3 Implement provider API endpoints for modem-gateway
+  - [x] 17.3 Implement provider API endpoints for modem-gateway
     - POST `/api/providers` with type "modem-gateway": generate pairing_secret and ws_endpoint in response
     - POST `/api/providers/:id/reset`: close WS, delete stored key, generate new pairing secret
     - GET `/api/providers/:id/status`: return modem status JSON (signal, network, operator, modem info, modemUnsupportedWarning if present)
     - _Requirements: 1.2, 1.3, 2.6, 9.3, 25.3, 30.6_
 
-  - [ ] 17.4 Implement WebSocket route for signaling endpoint
+  - [x] 17.4 Implement WebSocket route for signaling endpoint
     - Register WS upgrade handler at `/ws/providers/:id/signaling`
     - Route incoming WS connections to the appropriate `ModemGatewayWsHandler` instance
     - Handle provider not found, provider not modem-gateway type
@@ -410,24 +410,24 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Test provider factory new case
     - _Requirements: 17.1, 17.2, 17.3, 17.4_
 
-- [ ] 18. Checkpoint - Ensure all Svarla server tests pass
+- [x] 18. Checkpoint - Ensure all Svarla server tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
-- [ ] 19. Build system and release integration
-  - [ ] 19.1 Create `modem-gateway/Dockerfile.build` for cross-compilation
+- [x] 19. Build system and release integration
+  - [x] 19.1 Create `modem-gateway/Dockerfile.build` for cross-compilation
     - Base image: `golang:1.22-bookworm`
     - Build with CGO_ENABLED=0 (pure Go, no C dependencies), ldflags for version/commit/buildDate
     - Cross-compile for arm64 via GOARCH=arm64
     - _Requirements: 29.1, 29.5_
 
-  - [ ] 19.2 Extend `.github/workflows/release.yml` with modem-gateway build job
+  - [x] 19.2 Extend `.github/workflows/release.yml` with modem-gateway build job
     - New `modem-gateway` job that builds for both amd64 and arm64 via matrix strategy
     - Upload artifacts: `modem-gateway-linux-amd64`, `modem-gateway-linux-arm64`
     - Attach binaries to draft release in `create-draft-release` job
     - _Requirements: 29.2, 29.3, 29.4_
 
-- [ ] 20. Documentation
-  - [ ] 20.1 Create provider documentation page
+- [x] 20. Documentation
+  - [x] 20.1 Create provider documentation page
     - Overview and architecture diagram
     - Supported modems (SIMCom SIM7600G-H as primary reference; Quectel EG25-G with UAC firmware as future option)
     - Hardware setup requirements (Raspberry Pi, USB modem, SIM card)
@@ -438,7 +438,7 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Required modem firmware features: PCM audio over USB serial port (`AT+CPCMREG` support) and AT command interface
     - _Requirements: 27.1, 27.2, 27.3_
 
-  - [ ] 20.2 Add systemd service documentation section
+  - [x] 20.2 Add systemd service documentation section
     - Complete example systemd unit file with inline comments
     - Step-by-step installation instructions (copy, daemon-reload, enable, start)
     - Common management commands (status, logs, restart, stop)
@@ -446,7 +446,7 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Restart on failure with 5-second delay
     - _Requirements: 28.1, 28.2, 28.3, 28.4, 28.5_
 
-- [ ] 21. Final checkpoint - Ensure all tests pass
+- [x] 21. Final checkpoint - Ensure all tests pass
   - Ensure all tests pass, ask the user if questions arise.
 
 ## Notes

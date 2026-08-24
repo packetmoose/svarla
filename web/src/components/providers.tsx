@@ -47,7 +47,6 @@ const CONFIG_FIELDS: Record<string, ConfigFieldDef[]> = {
     { name: "api_password", label: "API Password", type: "password", required: true },
     { name: "websocket_number", label: "WebSocket Number", type: "text", required: false },
   ],
-  modemmanager: [],
   dummy: [],
 };
 

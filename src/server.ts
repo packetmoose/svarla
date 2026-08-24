@@ -27,9 +27,10 @@ import { registerProviderRoutes } from './routes/provider-routes.js';
 import { ProviderRegistry } from './services/provider-registry.js';
 import type { TelephonyProvider } from './providers/telephony-provider.js';
 import { VonageTelephonyProvider } from './providers/vonage-telephony-provider.js';
-import { ModemManagerTelephonyProvider } from './providers/modemmanager-telephony-provider.js';
 import { DummyTelephonyProvider } from './providers/dummy-telephony-provider.js';
 import { Elks46TelephonyProvider } from './providers/elks46-telephony-provider.js';
+import { ModemGatewayTelephonyProvider } from './providers/modem-gateway-telephony-provider.js';
+import { registerModemGatewaySignalingRoute } from './routes/modem-gateway-signaling-route.js';
 import { WakeSignalPublisher } from './notifications/wake-signal-publisher.js';
 import { MediaBridgeClient } from './services/media-bridge-client.js';
 import { MediaBridgeEventListener } from './services/media-bridge-event-listener.js';
@@ -55,10 +56,6 @@ function createProviderFactory(serverWebhookBaseUrl: string) {
           webhookBaseUrl: (config.webhook_base_url as string) || serverWebhookBaseUrl,
           supportsSips: config.supports_sips != null ? Boolean(config.supports_sips) : undefined,
         });
-      case 'modemmanager':
-        return new ModemManagerTelephonyProvider({
-          numberOverrides: config.number_overrides as Record<string, string> | undefined,
-        });
       case '46elks':
         return new Elks46TelephonyProvider({
           apiUsername: (config.api_username as string) ?? '',
@@ -70,6 +67,10 @@ function createProviderFactory(serverWebhookBaseUrl: string) {
       case 'dummy':
         return new DummyTelephonyProvider({
           numbers: config.numbers as string[] | undefined,
+        });
+      case 'modem-gateway':
+        return new ModemGatewayTelephonyProvider({
+          registryId: config._registryId as string,
         });
       default:
         throw new Error(`Unknown telephony provider type: ${type}`);
@@ -503,6 +504,9 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
 
   // WebSocket endpoint for real-time sync
   await wsBroadcaster.register(server);
+
+  // Modem-gateway signaling WebSocket endpoint
+  registerModemGatewaySignalingRoute(server, registry);
 
   // Routes
   registerAuthRoutes(server, authService, wsTicketService, wsBroadcaster, wakeSignalPublisher, () =>
