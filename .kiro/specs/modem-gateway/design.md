@@ -70,7 +70,7 @@ sequenceDiagram
 
     Note over MGB,App: Outbound Call
     Svarla->>MGB: make_call {to, audioWsUrl}
-    MGB->>MGB: ATD {number}
+    MGB->>MGB: ATD {number};
     MGB->>Svarla: call_state {state: RINGING}
     Note over MGB: Remote answers
     MGB->>Svarla: call_state {state: ANSWERED}
@@ -170,7 +170,7 @@ stateDiagram-v2
     [*] --> Disconnected
     Disconnected --> Initializing: Serial port opened
     Initializing --> Ready: Init sequence complete
-    Ready --> InCall: ATD/ATA success
+    Ready --> InCall: ATD<number>;/ATA success
     InCall --> Ready: Call ended (ATH/NO CARRIER)
     Ready --> Error: Command timeout / port error
     InCall --> Error: Modem lost during call
@@ -178,7 +178,7 @@ stateDiagram-v2
     Initializing --> Error: Init failed
 ```
 
-- Initialization sequence: `ATE0`, verbose results, `+CLIP` enable, `+CMTI` enable, `AT+CMGF=1` (text mode, fallback to PDU)
+- Initialization sequence: `ATE0`, verbose results, `+CLIP` enable, `+DDET` enable (DTMF detection), `+CNMI` configure (SMS arrival notifications), `AT+CMGF=1` (text mode, fallback to PDU)
 - Modem detection: exponential backoff (2s → 30s) on USB disconnect/unresponsive
 - Command timeout: 30s default (5s for VTS, 60s for CMGS)
 

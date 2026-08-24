@@ -84,11 +84,11 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - Background goroutine reading serial port for URCs
     - Parse and dispatch: RING, +CLIP, +CMTI, +CUSD, +DTMF, +CREG, +CDS
     - State machine: Disconnected → Initializing → Ready → InCall → Error
-    - State transitions based on command results and URCs (ATD/ATA success → InCall, ATH/NO CARRIER → Ready)
+    - State transitions based on command results and URCs (ATD<number>;/ATA success → InCall, ATH/NO CARRIER → Ready)
     - _Requirements: 14.3, 11.1_
 
   - [ ] 5.3 Implement modem initialization sequence
-    - `ATE0` (disable echo), verbose results, `+CLIP` enable, `+CMTI` enable
+    - `ATE0` (disable echo), verbose results, `+CLIP` enable, `+DDET` enable (DTMF detection), `+CNMI` configure (SMS arrival notifications)
     - `AT+CMGF=1` (text mode, fallback to PDU if unsupported)
     - Modem detection with exponential backoff (2s → 30s) on USB disconnect/unresponsive
     - Query modem model (`AT+CGMM`), manufacturer (`AT+CGMI`), firmware (`AT+CGMR`)
@@ -240,7 +240,7 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
 
 - [ ] 11. Implement Go binary voice call handling and DTMF
   - [ ] 11.1 Implement voice call state management in signaling client
-    - Handle `make_call` message: dial with `ATD`, report state transitions (RINGING, ANSWERED, COMPLETED, FAILED, BUSY)
+    - Handle `make_call` message: dial with `ATD<number>;` (trailing semicolon for voice call), report state transitions (RINGING, ANSWERED, COMPLETED, FAILED, BUSY)
     - Handle `answer_call` message: answer with `ATA`, open audio WS
     - Handle `end_call` message: hang up with `ATH`, close audio WS
     - Detect incoming calls (RING + +CLIP), send `incoming_call` message

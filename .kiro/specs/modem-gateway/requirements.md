@@ -92,7 +92,7 @@ The modem-gateway feature introduces a new telephony provider type for Svarla th
 
 #### Acceptance Criteria
 
-1. WHEN the Svarla_Server instructs the Modem_Gateway_Binary to initiate an outbound call, THE Modem_Gateway_Binary SHALL dial the number using the AT command (`ATD`) and report call state transitions (RINGING, ANSWERED, COMPLETED, FAILED, BUSY) over the Signaling_WebSocket as the modem signals them.
+1. WHEN the Svarla_Server instructs the Modem_Gateway_Binary to initiate an outbound call, THE Modem_Gateway_Binary SHALL dial the number using the AT command (`ATD<number>;` where the trailing semicolon indicates a voice call) and report call state transitions (RINGING, ANSWERED, COMPLETED, FAILED, BUSY) over the Signaling_WebSocket as the modem signals them.
 2. WHEN the Svarla_Server instructs the Modem_Gateway_Binary to initiate a call, THE Svarla_Server SHALL include the MediaBridge Audio_WebSocket URL (containing the session ID) in the call setup message.
 3. WHEN an outbound call is answered by the remote party, THE Modem_Gateway_Binary SHALL open the Audio_WebSocket connection to the MediaBridge URL provided during call setup.
 4. WHEN the modem detects an incoming call (RING URC and +CLIP), THE Modem_Gateway_Binary SHALL notify the Svarla_Server via the Signaling_WebSocket with the caller number.
@@ -103,7 +103,7 @@ The modem-gateway feature introduces a new telephony provider type for Svarla th
 9. IF an incoming call arrives while the Signaling_WebSocket is disconnected, THEN THE Modem_Gateway_Binary SHALL reject the call via AT command (`ATH`) so the caller receives a network-level rejection.
 10. THE Modem_Gateway_Binary SHALL support only one concurrent voice call at a time.
 11. IF the Modem_Gateway_Binary receives a call initiation or answer instruction while a call is already active, THEN THE Modem_Gateway_Binary SHALL reject the instruction and report a FAILED state with a reason indicating a call is already in progress over the Signaling_WebSocket.
-12. IF the ATD or ATA command fails or the modem returns an ERROR response, THEN THE Modem_Gateway_Binary SHALL report FAILED state with the modem error reason over the Signaling_WebSocket and close any Audio_WebSocket connection that was opened for that call.
+12. IF the ATD<number>; or ATA command fails or the modem returns an ERROR response, THEN THE Modem_Gateway_Binary SHALL report FAILED state with the modem error reason over the Signaling_WebSocket and close any Audio_WebSocket connection that was opened for that call.
 13. IF voice capability is unavailable (due to modem or firmware limitations, voice being disabled in configuration, or the PCM audio serial port being unavailable), THEN the phone number reported to the Svarla_Server SHALL NOT include VOICE capability, and THE Modem_Gateway_Binary SHALL only report capabilities that are actually available on the device.
 
 ### Requirement 6: Voice Audio Streaming
@@ -218,7 +218,7 @@ The modem-gateway feature introduces a new telephony provider type for Svarla th
 1. THE Modem_Gateway_Binary SHALL open the AT serial port at a user-configured device path (defaulting to `/dev/ttyUSB2`) using 115200 baud, 8N1 framing, and communicate with the modem using Hayes-compatible AT commands. THE Modem_Gateway_Binary SHALL also open the PCM audio serial port (a separate ttyUSB device, auto-detected or user-configured) for voice audio streaming during calls.
 2. THE Modem_Gateway_Binary SHALL NOT depend on ModemManager, NetworkManager, or any D-Bus service for modem communication.
 3. THE Modem_Gateway_Binary SHALL parse URC notifications from the modem asynchronously, supporting at minimum: RING, +CLIP, +CMTI, +CUSD, +DTMF, and +CREG.
-4. WHEN the Modem_Gateway_Binary opens the serial port, THE Modem_Gateway_Binary SHALL send an initialization sequence that disables echo (`ATE0`), enables verbose result codes, enables caller ID reporting, enables SMS arrival notifications, and configures SMS mode (text mode via `AT+CMGF=1` as the default, falling back to PDU mode if text mode is not supported by the modem).
+4. WHEN the Modem_Gateway_Binary opens the serial port, THE Modem_Gateway_Binary SHALL send an initialization sequence that disables echo (`ATE0`), enables verbose result codes, enables caller ID reporting (`AT+CLIP=1`), enables DTMF detection (`AT+DDET=1`), enables SMS arrival notifications (`AT+CNMI`), and configures SMS mode (text mode via `AT+CMGF=1` as the default, falling back to PDU mode if text mode is not supported by the modem).
 5. IF an AT command does not receive a final result code (OK, ERROR, +CME ERROR, or +CMS ERROR) within 30 seconds, THEN THE Modem_Gateway_Binary SHALL treat the command as failed and report the timeout.
 6. IF the serial port cannot be opened or becomes unreadable, THEN THE Modem_Gateway_Binary SHALL report a modem communication error and retry opening the port with periodic retries.
 7. THE Modem_Gateway_Binary SHALL be portable to Linux environments including Raspberry Pi OS and OpenWrt without requiring additional system services beyond a working serial port, compiled as a statically-linked binary with no CGo dependencies.
