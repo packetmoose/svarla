@@ -50,7 +50,8 @@ export default defineConfig({
           items: [
             { text: 'Overview', link: '/guide/providers-overview' },
             { text: 'Vonage', link: '/guide/provider-vonage' },
-            { text: '46elks', link: '/guide/provider-46elks' }
+            { text: '46elks', link: '/guide/provider-46elks' },
+            { text: 'Modem Gateway', link: '/guide/provider-modem-gateway' }
           ]
         },
         {

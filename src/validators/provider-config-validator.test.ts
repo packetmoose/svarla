@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest';
 import {
   validateProviderConfig,
   vonageConfigSchema,
-  modemmanagerConfigSchema,
   dummyConfigSchema,
 } from './provider-config-validator.js';
 
@@ -111,27 +110,6 @@ describe('provider-config-validator', () => {
     });
   });
 
-  describe('validateProviderConfig - modemmanager', () => {
-    it('accepts empty config', () => {
-      const result = validateProviderConfig('modemmanager', {});
-      expect(result).toEqual({ valid: true });
-    });
-
-    it('accepts config with number_overrides', () => {
-      const result = validateProviderConfig('modemmanager', {
-        number_overrides: { '+15551234567': '+15559876543' },
-      });
-      expect(result).toEqual({ valid: true });
-    });
-
-    it('rejects invalid number_overrides type', () => {
-      const result = validateProviderConfig('modemmanager', {
-        number_overrides: 'not-an-object',
-      });
-      expect(result.valid).toBe(false);
-    });
-  });
-
   describe('validateProviderConfig - dummy', () => {
     it('accepts empty config', () => {
       const result = validateProviderConfig('dummy', {});
@@ -169,10 +147,6 @@ describe('provider-config-validator', () => {
   describe('exported schemas', () => {
     it('vonageConfigSchema is a valid zod schema', () => {
       expect(vonageConfigSchema.parse).toBeDefined();
-    });
-
-    it('modemmanagerConfigSchema is a valid zod schema', () => {
-      expect(modemmanagerConfigSchema.parse).toBeDefined();
     });
 
     it('dummyConfigSchema is a valid zod schema', () => {

@@ -28,7 +28,6 @@
     "@fastify/websocket": "^10.0.0",
     "@vonage/server-sdk": "^3.14.0",
     "bcrypt": "^5.1.1",
-    "dbus-next": "^0.10.2",
     "fastify": "^4.28.0",
     "jsonwebtoken": "^9.0.2",
     "kysely": "^0.27.4",
