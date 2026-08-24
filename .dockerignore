@@ -5,3 +5,4 @@ android
 .git
 *.md
 .env
+version.json

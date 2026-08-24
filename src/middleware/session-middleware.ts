@@ -25,6 +25,7 @@ export function registerSessionMiddleware(
   const publicPaths = new Set([
     '/health',
     '/api/auth/login',
+    '/api/version',
   ]);
 
   const publicPrefixes = [

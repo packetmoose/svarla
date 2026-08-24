@@ -7,7 +7,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Scaffold
 import androidx.compose.runtime.Composable
@@ -216,32 +218,37 @@ fun AppNavigation(
             )
         }
         composable(Screen.Home.route) {
-            Column(modifier = Modifier.fillMaxSize()) {
+            Box(modifier = Modifier.fillMaxSize()) {
+                HomeScreen(
+                    currentRoute = Screen.Home.route,
+                    initialTab = when {
+                        initialRoute == "home?tab=calls" -> BottomNavDestination.CALLS
+                        initialRoute == "home?tab=settings" -> BottomNavDestination.SETTINGS
+                        else -> null
+                    },
+                    onNavigate = { dest ->
+                        // Navigation between tabs — for now just stay on home
+                    },
+                    onConversationClick = { providerNumber, phoneNumber ->
+                        navController.navigate(Screen.ConversationDetail.createRoute(providerNumber, phoneNumber))
+                    },
+                    contactResolver = contactResolver,
+                    voiceCallManager = voiceCallManager,
+                    audioRouter = audioRouter
+                )
                 if (!versionBannerDismissed) {
-                    VersionBanner(
-                        versionCheckResult = versionCheckResult,
-                        authManager = authManager,
-                        onDismiss = { versionBannerDismissed = true }
-                    )
-                }
-                Box(modifier = Modifier.weight(1f)) {
-                    HomeScreen(
-                        currentRoute = Screen.Home.route,
-                        initialTab = when {
-                            initialRoute == "home?tab=calls" -> BottomNavDestination.CALLS
-                            initialRoute == "home?tab=settings" -> BottomNavDestination.SETTINGS
-                            else -> null
-                        },
-                        onNavigate = { dest ->
-                            // Navigation between tabs — for now just stay on home
-                        },
-                        onConversationClick = { providerNumber, phoneNumber ->
-                            navController.navigate(Screen.ConversationDetail.createRoute(providerNumber, phoneNumber))
-                        },
-                        contactResolver = contactResolver,
-                        voiceCallManager = voiceCallManager,
-                        audioRouter = audioRouter
-                    )
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .statusBarsPadding()
+                            .align(Alignment.TopCenter)
+                    ) {
+                        VersionBanner(
+                            versionCheckResult = versionCheckResult,
+                            authManager = authManager,
+                            onDismiss = { versionBannerDismissed = true }
+                        )
+                    }
                 }
             }
         }

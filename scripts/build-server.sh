@@ -42,9 +42,19 @@ echo ""
 
 cd "$REPO_ROOT"
 
+# Derive the version string from the image tag (strip leading 'v' if present)
+BUILD_VERSION=""
+if [[ "$IMAGE_TAG" =~ ^v[0-9] ]]; then
+    BUILD_VERSION="${IMAGE_TAG#v}"
+fi
+
 # Build command
 DOCKER_CMD="docker build"
 DOCKER_ARGS="-t $FULL_IMAGE -f Dockerfile ."
+
+if [ -n "$BUILD_VERSION" ]; then
+    DOCKER_ARGS="--build-arg BUILD_VERSION=$BUILD_VERSION $DOCKER_ARGS"
+fi
 
 if [ -n "$PLATFORM" ]; then
     DOCKER_ARGS="--platform $PLATFORM $DOCKER_ARGS"

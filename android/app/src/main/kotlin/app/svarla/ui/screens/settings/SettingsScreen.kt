@@ -47,8 +47,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import app.svarla.BuildConfig
 import app.svarla.data.local.entity.ProviderNumber
 import app.svarla.data.remote.dto.DeviceDto
 import app.svarla.domain.notifications.NotificationDeliveryMode
@@ -163,6 +165,19 @@ fun SettingsScreen(
                     Text(if (isLoggingOut) "Logging out…" else "Log out")
                 }
                 Spacer(modifier = Modifier.height(24.dp))
+            }
+
+            // App version
+            item {
+                Text(
+                    text = "Version ${BuildConfig.VERSION_NAME}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 8.dp),
+                    textAlign = TextAlign.Center
+                )
             }
         }
     }

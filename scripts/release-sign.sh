@@ -62,7 +62,7 @@ fi
 REPO_ROOT="$(git rev-parse --show-toplevel)"
 OUTPUT_DIR="$REPO_ROOT/build-output"
 KEYSTORE_PATH="${KEYSTORE_PATH:-$HOME/.android/svarla-release.p12}"
-KEY_ALIAS="${KEY_ALIAS:-release}"
+KEY_ALIAS="${KEY_ALIAS:-svarla-release}"
 COSIGN_KEY="${COSIGN_KEY:-}"
 
 GH_REPO="$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "")"
@@ -90,7 +90,21 @@ command -v gh >/dev/null 2>&1 || die "gh CLI is required"
 command -v cosign >/dev/null 2>&1 || die "cosign is required (https://docs.sigstore.dev/cosign/installation/)"
 command -v docker >/dev/null 2>&1 || die "docker is required (for apksigner)"
 
+# Elevate sudo early and verify Docker daemon is running
+sudo true || die "sudo is required for Docker operations"
+sudo docker info >/dev/null 2>&1 || die "Docker daemon is not running. Start it with: sudo systemctl start docker"
+
 gh auth status >/dev/null 2>&1 || die "gh CLI is not authenticated. Run: gh auth login"
+
+# Verify gh token has write:packages scope (required for pushing cosign signatures to GHCR)
+GH_SCOPES="$(gh auth status 2>&1)"
+if ! echo "$GH_SCOPES" | grep -q "write:packages"; then
+    echo "WARNING: gh token is missing 'write:packages' scope (required for cosign)."
+    echo ""
+    confirm "Refresh token to add write:packages scope?" || die "Cannot continue without write:packages scope. Run manually: gh auth refresh -s write:packages"
+    gh auth refresh -s write:packages || die "Failed to refresh gh auth scope"
+    echo ""
+fi
 
 if [ -z "$GH_REPO" ]; then
     die "Could not determine GitHub repository."
@@ -99,6 +113,18 @@ fi
 if [ ! -f "$KEYSTORE_PATH" ]; then
     die "Android keystore not found at $KEYSTORE_PATH"
 fi
+
+# Prompt for passwords upfront so the script can run unattended after this point
+if [ -z "${KEYSTORE_PASSWORD:-}" ]; then
+    read -r -s -p "Keystore password: " KEYSTORE_PASSWORD
+    echo ""
+fi
+
+if [ -z "$KEYSTORE_PASSWORD" ]; then
+    die "Keystore password is required"
+fi
+
+KEY_PASSWORD="${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
 
 # ─── Find the draft release ──────────────────────────────────────────────────
 
@@ -122,89 +148,17 @@ fi
 RELEASE_ID="$(echo "$RELEASE_JSON" | jq -r '.id')"
 echo "Found draft release ID: $RELEASE_ID"
 
-# ─── Download unsigned APK ────────────────────────────────────────────────────
-
-info "Downloading unsigned APK"
-
-mkdir -p "$OUTPUT_DIR"
-
-APK_ASSET_NAME="svarla-${VERSION}-unsigned.apk"
-APK_ASSET_URL="$(echo "$RELEASE_JSON" | jq -r ".assets[] | select(.name == \"${APK_ASSET_NAME}\") | .url")"
-
-if [ -z "$APK_ASSET_URL" ] || [ "$APK_ASSET_URL" = "null" ]; then
-    die "Unsigned APK asset '${APK_ASSET_NAME}' not found in draft release"
-fi
-
-UNSIGNED_APK="$OUTPUT_DIR/app-release-unsigned.apk"
-gh api "$APK_ASSET_URL" -H "Accept: application/octet-stream" > "$UNSIGNED_APK"
-
-if [ ! -s "$UNSIGNED_APK" ]; then
-    die "Downloaded APK is empty"
-fi
-
-echo "Downloaded: $UNSIGNED_APK ($(wc -c < "$UNSIGNED_APK") bytes)"
-
-# ─── Sign APK ────────────────────────────────────────────────────────────────
-
-info "Signing APK"
-
-if [ -z "${KEYSTORE_PASSWORD:-}" ]; then
-    read -r -s -p "Keystore password: " KEYSTORE_PASSWORD
-    echo ""
-fi
-
-if [ -z "$KEYSTORE_PASSWORD" ]; then
-    die "Keystore password is required"
-fi
-
-KEY_PASSWORD="${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
-
-SIGNED_APK="$OUTPUT_DIR/svarla-${VERSION}.apk"
-
-# Use the Android build Docker image for apksigner
-IMAGE_NAME="svarla-android-build"
-ANDROID_DIR="$REPO_ROOT/android"
-
-# Ensure the build image exists (it should from previous builds, but build if needed)
-if ! docker image inspect "$IMAGE_NAME:release" >/dev/null 2>&1; then
-    echo "Building Android toolchain image..."
-    sudo docker build \
-        --build-arg BUILD_TYPE=release \
-        -t "$IMAGE_NAME:release" \
-        -f "$ANDROID_DIR/Dockerfile.build" \
-        "$ANDROID_DIR"
-fi
-
-sudo docker run --rm \
-    -v "$KEYSTORE_PATH:/keystore/svarla-release.p12:ro" \
-    -v "$OUTPUT_DIR:/work" \
-    --entrypoint /bin/bash \
-    "$IMAGE_NAME:release" \
-    -c "
-        apksigner sign \
-            --ks /keystore/svarla-release.p12 \
-            --ks-pass 'pass:${KEYSTORE_PASSWORD}' \
-            --ks-key-alias '${KEY_ALIAS}' \
-            --key-pass 'pass:${KEY_PASSWORD}' \
-            --out '/work/$(basename "$SIGNED_APK")' \
-            '/work/$(basename "$UNSIGNED_APK")' && \
-        apksigner verify --print-certs '/work/$(basename "$SIGNED_APK")'
-    "
-
-if [ ! -f "$SIGNED_APK" ]; then
-    die "Signed APK not found at $SIGNED_APK"
-fi
-
-APK_SHA256="$(sha256sum "$SIGNED_APK" | awk '{print $1}')"
-echo "Signed APK: $SIGNED_APK"
-echo "SHA-256:    $APK_SHA256"
-
-# Write checksum file
-echo "$APK_SHA256  $(basename "$SIGNED_APK")" > "$SIGNED_APK.sha256"
-
 # ─── Sign container images with Cosign ────────────────────────────────────────
+# Done first because keyless signing requires browser interaction (OIDC login).
 
 info "Signing container images"
+
+# Authenticate Docker with GHCR using the gh token
+GH_TOKEN="$(gh auth token)"
+# Login for cosign (runs without sudo, uses current user's ~/.docker/config.json)
+echo "$GH_TOKEN" | docker login ghcr.io -u "$(gh api user --jq .login 2>/dev/null || echo "token")" --password-stdin 2>/dev/null
+# Login for sudo docker (used by pull/inspect)
+echo "$GH_TOKEN" | sudo docker login ghcr.io -u "$(gh api user --jq .login 2>/dev/null || echo "token")" --password-stdin 2>/dev/null
 
 # Get container image digests
 SERVER_IMAGE="${REGISTRY}/${GH_REPO%/*}/svarla-server:${VERSION}"
@@ -213,20 +167,27 @@ MEDIABRIDGE_IMAGE="${REGISTRY}/${GH_REPO%/*}/svarla-mediabridge:${VERSION}"
 # Get the digest for each image
 echo "Resolving image digests..."
 
-SERVER_DIGEST="$(docker manifest inspect "$SERVER_IMAGE" 2>/dev/null | jq -r '.digest // empty')"
-if [ -z "$SERVER_DIGEST" ]; then
-    SERVER_DIGEST="$(cosign triangulate "$SERVER_IMAGE" 2>/dev/null | grep -oP 'sha256:[a-f0-9]+' || echo "")"
-fi
+resolve_digest() {
+    local image="$1"
+    local digest=""
 
+    # Pull the image and get its repo digest
+    digest="$(sudo docker pull "$image" 2>/dev/null | grep -oP 'Digest: \Ksha256:[a-f0-9]+' || echo "")"
+
+    # Fallback: inspect already-pulled image
+    if [ -z "$digest" ]; then
+        digest="$(sudo docker inspect --format='{{index .RepoDigests 0}}' "$image" 2>/dev/null | grep -oP 'sha256:[a-f0-9]+' || echo "")"
+    fi
+
+    echo "$digest"
+}
+
+SERVER_DIGEST="$(resolve_digest "$SERVER_IMAGE")"
 if [ -z "$SERVER_DIGEST" ]; then
     die "Could not resolve digest for $SERVER_IMAGE. Has CI pushed the image?"
 fi
 
-MEDIABRIDGE_DIGEST="$(docker manifest inspect "$MEDIABRIDGE_IMAGE" 2>/dev/null | jq -r '.digest // empty')"
-if [ -z "$MEDIABRIDGE_DIGEST" ]; then
-    MEDIABRIDGE_DIGEST="$(cosign triangulate "$MEDIABRIDGE_IMAGE" 2>/dev/null | grep -oP 'sha256:[a-f0-9]+' || echo "")"
-fi
-
+MEDIABRIDGE_DIGEST="$(resolve_digest "$MEDIABRIDGE_IMAGE")"
 if [ -z "$MEDIABRIDGE_DIGEST" ]; then
     die "Could not resolve digest for $MEDIABRIDGE_IMAGE. Has CI pushed the image?"
 fi
@@ -247,32 +208,108 @@ if [ -n "$COSIGN_KEY" ] && [ -f "$COSIGN_KEY" ]; then
     export COSIGN_PASSWORD
 else
     echo "Using keyless signing (Sigstore OIDC — will open browser for auth)"
+    export COSIGN_YES=true
     COSIGN_SIGN_ARGS="--yes"
 fi
 
 echo "Signing server image..."
-cosign sign $COSIGN_SIGN_ARGS "${REGISTRY}/${GH_REPO%/*}/svarla-server@${SERVER_DIGEST}"
+yes | cosign sign $COSIGN_SIGN_ARGS "${REGISTRY}/${GH_REPO%/*}/svarla-server@${SERVER_DIGEST}"
 
 echo "Signing mediabridge image..."
-cosign sign $COSIGN_SIGN_ARGS "${REGISTRY}/${GH_REPO%/*}/svarla-mediabridge@${MEDIABRIDGE_DIGEST}"
+yes | cosign sign $COSIGN_SIGN_ARGS "${REGISTRY}/${GH_REPO%/*}/svarla-mediabridge@${MEDIABRIDGE_DIGEST}"
 
 echo "Container images signed."
+
+# ─── Download unsigned APK ────────────────────────────────────────────────────
+
+info "Downloading unsigned APK"
+
+mkdir -p "$OUTPUT_DIR"
+
+APK_ASSET_NAME="svarla-${VERSION}-unsigned.apk"
+APK_ASSET_URL="$(echo "$RELEASE_JSON" | jq -r ".assets[] | select(.label == \"${APK_ASSET_NAME}\" or .name == \"${APK_ASSET_NAME}\") | .url")"
+
+if [ -z "$APK_ASSET_URL" ] || [ "$APK_ASSET_URL" = "null" ]; then
+    die "Unsigned APK asset '${APK_ASSET_NAME}' not found in draft release"
+fi
+
+UNSIGNED_APK="$OUTPUT_DIR/app-release-unsigned.apk"
+gh api "$APK_ASSET_URL" -H "Accept: application/octet-stream" > "$UNSIGNED_APK"
+
+if [ ! -s "$UNSIGNED_APK" ]; then
+    die "Downloaded APK is empty"
+fi
+
+echo "Downloaded: $UNSIGNED_APK ($(wc -c < "$UNSIGNED_APK") bytes)"
+
+# ─── Sign APK ────────────────────────────────────────────────────────────────
+
+info "Signing APK"
+
+SIGNED_APK="$OUTPUT_DIR/svarla-${VERSION}.apk"
+
+# Use a lightweight image with just apksigner
+IMAGE_NAME="svarla-android-sign"
+ANDROID_DIR="$REPO_ROOT/android"
+
+# Ensure the signing image exists
+if ! docker image inspect "$IMAGE_NAME:latest" >/dev/null 2>&1; then
+    echo "Building Android signing image..."
+    sudo docker build \
+        -t "$IMAGE_NAME:latest" \
+        -f "$ANDROID_DIR/Dockerfile.sign" \
+        "$ANDROID_DIR"
+fi
+
+sudo docker run --rm \
+    -v "$KEYSTORE_PATH:/keystore/svarla-release.p12:ro" \
+    -v "$OUTPUT_DIR:/work" \
+    "$IMAGE_NAME:latest" \
+    sign \
+    --ks /keystore/svarla-release.p12 \
+    --ks-pass "pass:${KEYSTORE_PASSWORD}" \
+    --ks-key-alias "${KEY_ALIAS}" \
+    --key-pass "pass:${KEY_PASSWORD}" \
+    --out "/work/$(basename "$SIGNED_APK")" \
+    "/work/$(basename "$UNSIGNED_APK")"
+
+sudo docker run --rm \
+    -v "$OUTPUT_DIR:/work" \
+    "$IMAGE_NAME:latest" \
+    verify --print-certs "/work/$(basename "$SIGNED_APK")"
+
+if [ ! -f "$SIGNED_APK" ]; then
+    die "Signed APK not found at $SIGNED_APK"
+fi
+
+APK_SHA256="$(sha256sum "$SIGNED_APK" | awk '{print $1}')"
+echo "Signed APK: $SIGNED_APK"
+echo "SHA-256:    $APK_SHA256"
+
+# Write checksum file
+echo "$APK_SHA256  $(basename "$SIGNED_APK")" > "$SIGNED_APK.sha256"
 
 # ─── Upload signed APK to release ────────────────────────────────────────────
 
 info "Uploading signed APK to release"
 
 # Delete the unsigned APK asset from the release
-UNSIGNED_ASSET_ID="$(echo "$RELEASE_JSON" | jq -r ".assets[] | select(.name == \"${APK_ASSET_NAME}\") | .id")"
+UNSIGNED_ASSET_ID="$(echo "$RELEASE_JSON" | jq -r ".assets[] | select(.label == \"${APK_ASSET_NAME}\" or .name == \"${APK_ASSET_NAME}\") | .id")"
 if [ -n "$UNSIGNED_ASSET_ID" ] && [ "$UNSIGNED_ASSET_ID" != "null" ]; then
     gh api "repos/${GH_REPO}/releases/assets/${UNSIGNED_ASSET_ID}" -X DELETE
     echo "Removed unsigned APK from release"
 fi
 
+# Delete checksum file assets (SHA-256 is included in the release body)
+CHECKSUM_ASSET_IDS="$(echo "$RELEASE_JSON" | jq -r '.assets[] | select(.name | test("checksums?\\.sha256")) | .id')"
+for asset_id in $CHECKSUM_ASSET_IDS; do
+    gh api "repos/${GH_REPO}/releases/assets/${asset_id}" -X DELETE
+    echo "Removed checksum file from release"
+done
+
 # Upload signed APK and checksum
 gh release upload "$VERSION" \
     "$SIGNED_APK#svarla-${VERSION}.apk" \
-    "$SIGNED_APK.sha256#checksums.sha256" \
     --clobber
 
 echo "Signed APK uploaded"
@@ -281,8 +318,8 @@ echo "Signed APK uploaded"
 
 info "Updating release body"
 
-# Get current release body
-CURRENT_BODY="$(echo "$RELEASE_JSON" | jq -r '.body')"
+# Get current release body and strip the draft status section added by CI
+CURRENT_BODY="$(echo "$RELEASE_JSON" | jq -r '.body' | awk '/^## Status$/{skip=1; next} /^## /{skip=0} !skip')"
 
 SIGNING_INFO="
 
@@ -317,7 +354,9 @@ confirm "Everything looks good. Publish release $VERSION?" || { echo "Aborted. R
 
 gh api "repos/${GH_REPO}/releases/${RELEASE_ID}" \
     -X PATCH \
-    -f draft=false
+    -f tag_name="$VERSION" \
+    -F draft=false \
+    -f make_latest=true
 
 # ─── Done ────────────────────────────────────────────────────────────────────
 

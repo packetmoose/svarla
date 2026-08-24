@@ -1,9 +1,10 @@
 import Fastify from 'fastify';
 import type { FastifyInstance } from 'fastify';
-import { readFileSync, existsSync, statSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import type { AppConfig } from './config.js';
 import { createDatabase } from './database.js';
+import { getVersionInfo } from './version.js';
 import { AuthService } from './services/auth-service.js';
 import { DeviceRegistryManager } from './services/device-registry-manager.js';
 import { NumberManagementService } from './services/number-management-service.js';
@@ -90,9 +91,6 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
           : undefined,
     },
   });
-
-  // Load package.json for version info (used by /api/version endpoint)
-  const pkg = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf-8'));
 
   // --- Security plugins ---
 
@@ -604,7 +602,8 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
 
   // Version endpoint — used by the mobile app to check compatibility
   server.get('/api/version', async () => {
-    return { version: pkg.version };
+    const versionInfo = getVersionInfo();
+    return versionInfo;
   });
 
   // Global error handler

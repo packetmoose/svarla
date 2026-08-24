@@ -4,6 +4,9 @@ node_modules/
 # Build output
 dist/
 
+# Version file (generated at Docker build time)
+version.json
+
 # Environment files
 .env
 .env.local

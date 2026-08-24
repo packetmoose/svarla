@@ -4,6 +4,7 @@ import { bootstrap } from './bootstrap.js';
 import { createDatabase } from './database.js';
 import { StartupCleanupService } from './services/startup-cleanup-service.js';
 import { ApkProvisioningService } from './services/apk-provisioning-service.js';
+import { getVersionInfo } from './version.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -31,8 +32,8 @@ async function main(): Promise<void> {
   const server = await buildServer(config);
 
   // Provision APK for the download endpoint (non-blocking — server starts regardless)
-  const pkg = await import('../package.json', { assert: { type: 'json' } });
-  const apkConfig = ApkProvisioningService.loadConfig(pkg.default.version);
+  const { version: apkVersion } = getVersionInfo();
+  const apkConfig = ApkProvisioningService.loadConfig(apkVersion);
   const apkService = new ApkProvisioningService(apkConfig, server.log);
   apkService.provision().then((available) => {
     if (available) {

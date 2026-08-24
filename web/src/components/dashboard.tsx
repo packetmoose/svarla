@@ -22,6 +22,12 @@ const items: DashboardItem[] = [
     path: "/call-history",
   },
   {
+    icon: "📥",
+    title: "Download App",
+    description: "Get the Svarla Android app",
+    path: "/download",
+  },
+  {
     icon: "⚙",
     title: "Settings",
     description: "Providers, numbers, devices, and account",

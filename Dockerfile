@@ -20,6 +20,10 @@ RUN npx tsc --project tsconfig.migrations.json
 # Production image
 FROM node:20-slim
 
+ARG BUILD_VERSION
+ARG GIT_REF
+ARG BUILD_REF
+
 WORKDIR /app
 
 COPY package.json package-lock.json* ./
@@ -29,6 +33,14 @@ COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/dist/migrations ./migrations-compiled
 COPY server-config.yaml ./
 COPY public/ ./public/
+
+# Generate version.json from build args
+RUN printf '{"version":"%s","gitRef":"%s","buildRef":"%s","buildDate":"%s"}\n' \
+    "${BUILD_VERSION:-999.0.0-dev}" \
+    "${GIT_REF:-}" \
+    "${BUILD_REF:-}" \
+    "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    > version.json
 
 # APK downloads directory.
 # The APK is provisioned at runtime by ApkProvisioningService:
