@@ -92,7 +92,8 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
     - `AT+CMGF=1` (text mode, fallback to PDU if unsupported)
     - Modem detection with exponential backoff (2s → 30s) on USB disconnect/unresponsive
     - Query modem model (`AT+CGMM`), manufacturer (`AT+CGMI`), firmware (`AT+CGMR`)
-    - _Requirements: 14.4, 11.1, 25.1_
+    - Modem compatibility check: compare `AT+CGMM` response against known-supported patterns (`SIM7600*`, `SIM7500*`, `A7600*`); log warning if unrecognized, include `modemUnsupportedWarning` in status reports, but continue operation
+    - _Requirements: 14.4, 11.1, 25.1, 30.1, 30.2, 30.3, 30.4, 30.5_
 
   - [ ]* 5.4 Write property test for AT command serialization order (Property 10)
     - **Property 10: AT Command Serialization Order**
@@ -394,8 +395,8 @@ This plan implements the modem-gateway telephony provider for Svarla, consisting
   - [ ] 17.3 Implement provider API endpoints for modem-gateway
     - POST `/api/providers` with type "modem-gateway": generate pairing_secret and ws_endpoint in response
     - POST `/api/providers/:id/reset`: close WS, delete stored key, generate new pairing secret
-    - GET `/api/providers/:id/status`: return modem status JSON (signal, network, operator, modem info)
-    - _Requirements: 1.2, 1.3, 2.6, 9.3, 25.3_
+    - GET `/api/providers/:id/status`: return modem status JSON (signal, network, operator, modem info, modemUnsupportedWarning if present)
+    - _Requirements: 1.2, 1.3, 2.6, 9.3, 25.3, 30.6_
 
   - [ ] 17.4 Implement WebSocket route for signaling endpoint
     - Register WS upgrade handler at `/ws/providers/:id/signaling`

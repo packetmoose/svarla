@@ -179,6 +179,7 @@ stateDiagram-v2
 ```
 
 - Initialization sequence: `ATE0`, verbose results, `+CLIP` enable, `+DDET` enable (DTMF detection), `+CNMI` configure (SMS arrival notifications), `AT+CMGF=1` (text mode, fallback to PDU)
+- Modem compatibility check: after `AT+CGMM` query, compare model against known-supported patterns (`SIM7600*`, `SIM7500*`, `A7600*`); log warning and include `modem_unsupported_warning` in status if unrecognized (continue operation regardless)
 - Modem detection: exponential backoff (2s → 30s) on USB disconnect/unresponsive
 - Command timeout: 30s default (5s for VTS, 60s for CMGS)
 
@@ -450,7 +451,7 @@ All messages are JSON text frames with a `type` field identifying the message ki
 |------|---------|------------|
 | `auth_pair` | Initial pairing | `publicKey` (base64), `pairingSecret` |
 | `auth_response` | Challenge reply | `signature` (base64) |
-| `status` | Periodic status | `signal` (0-31, 99=unknown), `network` (registered/searching/denied/unknown), `operator`, `modemModel`, `modemManufacturer`, `firmware`, `stale` (fields list) |
+| `status` | Periodic status | `signal` (0-31, 99=unknown), `network` (registered/searching/denied/unknown), `operator`, `modemModel`, `modemManufacturer`, `firmware`, `stale` (fields list), `modemUnsupportedWarning?` (string) |
 | `number_report` | Phone number | `number` (E.164), `capabilities` (["SMS", "VOICE"]) |
 | `incoming_call` | RING detected | `callId`, `from` (CLIP number) |
 | `call_state` | State transition | `callId`, `state` (RINGING/ANSWERED/COMPLETED/FAILED/BUSY), `reason?`, `durationSeconds?` |
@@ -505,6 +506,7 @@ interface StatusMessage {
   modemManufacturer?: string;
   firmware?: string;
   stale?: string[];            // field names with stale values
+  modemUnsupportedWarning?: string; // Human-readable warning if modem model is not in known-supported list
 }
 
 interface MakeCallMessage {
@@ -741,6 +743,7 @@ interface ModemGatewayStatus {
   number: string | null;   // E.164
   capabilities: NumberCapability[];
   staleFields: string[];   // Fields with stale data (modem unresponsive)
+  modemUnsupportedWarning: string | null; // Warning if modem not in known-supported list
 }
 ```
 

@@ -394,3 +394,16 @@ The modem-gateway feature introduces a new telephony provider type for Svarla th
 3. THE release assets SHALL follow a naming convention that clearly identifies the architecture: e.g., `modem-gateway-linux-amd64` and `modem-gateway-linux-arm64`.
 4. THE build process SHALL produce reproducible builds with version information embedded in the binary (git tag/commit hash and build date), queryable via a `--version` flag on the binary.
 5. THE Go binary build SHALL NOT require CGO (no ALSA or other C dependencies), enabling straightforward static compilation and cross-compilation for arm64 from an amd64 build host without a cross-compilation toolchain.
+
+### Requirement 30: Modem Compatibility Check
+
+**User Story:** As a user connecting a USB modem to the gateway, I want the binary to verify that the modem is a known-supported model so that I am warned early if my hardware may not work correctly with SIMCom-proprietary AT commands.
+
+#### Acceptance Criteria
+
+1. THE Modem_Gateway_Binary SHALL maintain an internal list of known-supported modem model patterns (initially: `SIM7600*`, `SIM7500*`, `A7600*`) matched against the response from `AT+CGMM`.
+2. WHEN the Modem_Gateway_Binary completes modem identification during initialization (after querying `AT+CGMM` and `AT+CGMI`), THE Modem_Gateway_Binary SHALL compare the reported model against the known-supported list.
+3. IF the modem model does NOT match any entry in the known-supported list, THEN THE Modem_Gateway_Binary SHALL log a warning message at the "warn" level indicating the modem model is not recognized as supported, listing the detected model and manufacturer, and noting that SIMCom-proprietary commands (AT+CPCMREG, AT+CPCMFRM, AT+DDET) may not function correctly.
+4. IF the modem model does NOT match any entry in the known-supported list AND the Signaling_WebSocket is connected, THEN THE Modem_Gateway_Binary SHALL include a `modem_unsupported_warning` field in the status report sent to the Svarla_Server, containing the detected model and a human-readable warning message.
+5. THE Modem_Gateway_Binary SHALL NOT refuse to operate when an unsupported modem is detected; it SHALL continue initialization and attempt all commands normally, relying on per-command error handling (ERROR responses, timeouts) to gracefully degrade individual features.
+6. THE Svarla_Server SHALL display the `modem_unsupported_warning` (when present) in the provider status view in the web UI so that the user is informed of potential compatibility issues.
