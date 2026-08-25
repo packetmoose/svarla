@@ -34,6 +34,10 @@ type ModemInfo struct {
 type InitResult struct {
 	Info     ModemInfo
 	TextMode bool // true if AT+CMGF=1 succeeded
+	// CNMIDeliveryStatus indicates which <ds> parameter succeeded for AT+CNMI.
+	// 1 = direct +CDS push, 2 = +CDSI index notification, 0 = no notification (needs polling),
+	// -1 = AT+CNMI failed entirely.
+	CNMIDeliveryStatus int
 }
 
 // RunInitSequence performs the modem initialization sequence:
@@ -60,7 +64,6 @@ func RunInitSequence(ctx context.Context, m *Modem) (*InitResult, error) {
 		{"ATV1", "verbose result codes", false},
 		{"AT+CLIP=1", "caller ID presentation", false},
 		{"AT+DDET=1", "DTMF detection", true},
-		{"AT+CNMI=2,1,0,1,0", "SMS notification routing", true},
 	}
 
 	for _, c := range configCmds {
@@ -73,6 +76,31 @@ func RunInitSequence(ctx context.Context, m *Modem) (*InitResult, error) {
 			m.SetState(StateError)
 			return nil, fmt.Errorf("modem init: %s (%s) failed: %w", c.cmd, c.desc, err)
 		}
+	}
+
+	// Configure SMS notification routing (AT+CNMI).
+	// Try preferred parameters first, then fall back to alternatives.
+	// SIM7600 series doesn't support <ds>=1 (direct +CDS routing) in some
+	// firmware versions, so we try <ds>=2 and finally <ds>=0 as fallbacks.
+	type cnmiVariant struct {
+		cmd string
+		ds  int
+	}
+	cnmiVariants := []cnmiVariant{
+		{"AT+CNMI=2,1,0,1,0", 1}, // preferred: +CMTI for new SMS, +CDS for delivery reports
+		{"AT+CNMI=2,1,0,2,0", 2}, // fallback 1: +CMTI for new SMS, +CDSI for delivery reports
+		{"AT+CNMI=2,1,0,0,0", 0}, // fallback 2: +CMTI for new SMS, no delivery report routing
+	}
+	cnmiDS := -1
+	for _, v := range cnmiVariants {
+		if _, err := m.SendCommand(v.cmd, 0); err == nil {
+			slog.Info("SMS notification routing configured", "cmd", v.cmd)
+			cnmiDS = v.ds
+			break
+		}
+	}
+	if cnmiDS == -1 {
+		slog.Warn("AT+CNMI configuration failed with all variants — incoming SMS notifications may not work")
 	}
 
 	// Phase 3: SMS mode — prefer text mode, fallback to PDU.
@@ -110,8 +138,9 @@ func RunInitSequence(ctx context.Context, m *Modem) (*InitResult, error) {
 	)
 
 	return &InitResult{
-		Info:     info,
-		TextMode: textMode,
+		Info:               info,
+		TextMode:           textMode,
+		CNMIDeliveryStatus: cnmiDS,
 	}, nil
 }
 
