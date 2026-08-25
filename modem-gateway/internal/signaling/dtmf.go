@@ -46,19 +46,27 @@ type DTMFReceivedPayload struct {
 	Digit  string `json:"digit"`
 }
 
+// DTMFClient is the interface required by DTMFHandler for sending messages
+// and registering message handlers. Both *Client and *ReconnectingClient
+// satisfy this interface.
+type DTMFClient interface {
+	Send(msg Message) error
+	OnMessage(handler func(msg Message))
+}
+
 // DTMFHandler manages DTMF send and receive operations. It handles
 // send_dtmf messages from Svarla (sending AT+VTS to the modem) and
 // forwards +DTMF URCs received from the modem back to Svarla.
 type DTMFHandler struct {
 	modem      *modem.Modem
-	client     *Client
+	client     DTMFClient
 	callState  CallStateProvider
 }
 
 // NewDTMFHandler creates a new DTMFHandler. It registers:
 //   - A message handler on the signaling client for send_dtmf messages.
 //   - A URC handler on the modem for +DTMF URCs.
-func NewDTMFHandler(m *modem.Modem, client *Client, callState CallStateProvider) *DTMFHandler {
+func NewDTMFHandler(m *modem.Modem, client DTMFClient, callState CallStateProvider) *DTMFHandler {
 	h := &DTMFHandler{
 		modem:     m,
 		client:    client,

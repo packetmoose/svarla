@@ -22,7 +22,7 @@ type NumberReportPayload struct {
 // server on each connection or reconnection.
 type NumberReporter struct {
 	modem  *modem.Modem
-	client *Client
+	client MessageSender
 	config *config.Config
 
 	// cachedNumber stores the last discovered number to avoid re-querying.
@@ -30,7 +30,7 @@ type NumberReporter struct {
 }
 
 // NewNumberReporter creates a new NumberReporter.
-func NewNumberReporter(m *modem.Modem, client *Client, cfg *config.Config) *NumberReporter {
+func NewNumberReporter(m *modem.Modem, client MessageSender, cfg *config.Config) *NumberReporter {
 	return &NumberReporter{
 		modem:  m,
 		client: client,

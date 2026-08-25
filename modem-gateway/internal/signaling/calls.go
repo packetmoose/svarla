@@ -546,6 +546,11 @@ func (cm *CallManager) HasActiveCall() bool {
 	return cm.call != nil
 }
 
+// IsCallActive is an alias for HasActiveCall, satisfying the CallStateProvider interface.
+func (cm *CallManager) IsCallActive() bool {
+	return cm.HasActiveCall()
+}
+
 // ActiveCallID returns the call ID of the active call, or empty string if none.
 func (cm *CallManager) ActiveCallID() string {
 	cm.mu.Lock()
