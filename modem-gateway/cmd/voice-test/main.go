@@ -19,6 +19,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"os"
 	"os/signal"
 	"sync"
@@ -47,8 +48,23 @@ Flags:
 
 	atPort := flag.String("port", "/dev/ttyUSB2", "Modem AT command serial port")
 	pcmPort := flag.String("pcm-port", "/dev/ttyUSB1", "Modem PCM audio serial port")
+	baudRate := flag.Int("baud", 9600, "AT command port baud rate")
+	pcmBaud := flag.Int("pcm-baud", 115200, "PCM audio port baud rate")
+	audioDevice := flag.Int("audio-device", -1, "PortAudio device index for speaker/mic (-1 = system default)")
+	gain := flag.Float64("gain", 4.0, "Audio gain multiplier for modem->speaker (1.0 = no boost)")
 	ringDelay := flag.Duration("ring-delay", 3*time.Second, "Delay before answering incoming call")
+	initTimeout := flag.Duration("init-timeout", 60*time.Second, "Timeout for modem initialization (0 = no timeout)")
+	debug := flag.Bool("debug", false, "Enable debug logging (shows all AT commands and responses)")
 	flag.Parse()
+
+	// Configure slog level based on -debug flag.
+	logLevel := slog.LevelInfo
+	if *debug {
+		logLevel = slog.LevelDebug
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: logLevel,
+	})))
 
 	phoneNumber := flag.Arg(0)
 
@@ -70,21 +86,24 @@ Flags:
 		cancel()
 	}()
 
-	if err := run(ctx, *atPort, *pcmPort, phoneNumber, *ringDelay); err != nil {
+	if err := run(ctx, *atPort, *pcmPort, *baudRate, *pcmBaud, *audioDevice, *gain, phoneNumber, *ringDelay, *initTimeout, *debug); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, atPortPath, pcmPortPath, phoneNumber string, ringDelay time.Duration) error {
+func run(ctx context.Context, atPortPath, pcmPortPath string, baudRate, pcmBaud, audioDeviceIdx int, gain float64, phoneNumber string, ringDelay, initTimeout time.Duration, debug bool) error {
 	// --- Open AT command port and initialize modem ---
-	log.Printf("Opening AT port %s...", atPortPath)
-	sp, err := modem.OpenSerialPort(atPortPath)
+	log.Printf("Opening AT port %s (baud %d)...", atPortPath, baudRate)
+	sp, err := modem.OpenSerialPortWithTimeout(atPortPath, baudRate, 1*time.Second)
 	if err != nil {
 		return fmt.Errorf("open AT port: %w", err)
 	}
 
 	mdm := modem.New(sp)
+	if debug {
+		mdm.SetLogger(slog.Default())
+	}
 	mdm.Open()
 	defer func() {
 		log.Println("Closing modem...")
@@ -93,9 +112,27 @@ func run(ctx context.Context, atPortPath, pcmPortPath, phoneNumber string, ringD
 		_ = mdm.Close()
 	}()
 
-	// Run init sequence.
+	// Reset modem state from any previous session. If the modem was left
+	// with PCM streaming active or a call in progress, these commands
+	// clear it. Errors are ignored (the modem may not be in that state).
+	// First, send a bare AT to flush any partial command the modem may
+	// have buffered from a previously killed process.
+	log.Println("Resetting modem state...")
+	_, _ = mdm.SendCommand("AT", 2*time.Second)
+	_, _ = mdm.SendCommand("AT+CPCMREG=0", 3*time.Second)
+	_, _ = mdm.SendCommand("ATH", 3*time.Second)
+	// Small pause to let the modem settle after reset commands.
+	time.Sleep(200 * time.Millisecond)
+
+	// Run init sequence with timeout.
+	initCtx := ctx
+	if initTimeout > 0 {
+		var initCancel context.CancelFunc
+		initCtx, initCancel = context.WithTimeout(ctx, initTimeout)
+		defer initCancel()
+	}
 	log.Println("Initializing modem...")
-	initResult, err := modem.RunInitSequence(ctx, mdm)
+	initResult, err := modem.RunInitSequence(initCtx, mdm)
 	if err != nil {
 		return fmt.Errorf("modem init: %w", err)
 	}
@@ -119,9 +156,18 @@ func run(ctx context.Context, atPortPath, pcmPortPath, phoneNumber string, ringD
 		}
 	}
 
+	// Brief delay to let the modem's audio subsystem come online after
+	// call is established. Without this, AT+CPCMREG=1 can fail.
+	log.Println("Waiting for call audio path to settle...")
+	select {
+	case <-time.After(1 * time.Second):
+	case <-ctx.Done():
+		return fmt.Errorf("cancelled while waiting for audio path")
+	}
+
 	// --- Open PCM port and start audio pipeline ---
-	log.Printf("Opening PCM port %s...", pcmPortPath)
-	pcmSP, err := modem.OpenSerialPort(pcmPortPath)
+	log.Printf("Opening PCM port %s (baud %d)...", pcmPortPath, pcmBaud)
+	pcmSP, err := modem.OpenSerialPort(pcmPortPath, pcmBaud)
 	if err != nil {
 		return fmt.Errorf("open PCM port: %w", err)
 	}
@@ -139,7 +185,7 @@ func run(ctx context.Context, atPortPath, pcmPortPath, phoneNumber string, ringD
 	log.Println("Audio pipeline started, bridging to local sound device...")
 
 	// --- Bridge PCM audio to PortAudio ---
-	if err := bridgeAudio(ctx, mdm, pipeline, sampleRate); err != nil {
+	if err := bridgeAudio(ctx, mdm, pipeline, sampleRate, audioDeviceIdx, gain); err != nil {
 		return fmt.Errorf("audio bridge: %w", err)
 	}
 
@@ -236,7 +282,7 @@ func extractCLIPNumber(data string) string {
 // bridgeAudio connects the modem's PCM pipeline to the local sound card
 // via PortAudio. It runs until the context is cancelled or the remote
 // party hangs up (NO CARRIER).
-func bridgeAudio(ctx context.Context, mdm *modem.Modem, pipeline *audio.Pipeline, sampleRate int) error {
+func bridgeAudio(ctx context.Context, mdm *modem.Modem, pipeline *audio.Pipeline, sampleRate int, audioDeviceIdx int, gain float64) error {
 	// Detect call termination via NO CARRIER.
 	callEnded := make(chan struct{})
 	var callEndOnce sync.Once
@@ -252,32 +298,141 @@ func bridgeAudio(ctx context.Context, mdm *modem.Modem, pipeline *audio.Pipeline
 	}
 	defer portaudio.Terminate()
 
-	// PortAudio operates at the modem's native sample rate.
-	// Frame size: 20ms of audio.
-	samplesPerFrame := sampleRate / 50 // 50 frames/sec = 20ms each
-	frameBytes := samplesPerFrame * 2  // 16-bit samples
-
-	// Open a full-duplex PortAudio stream.
-	inputBuf := make([]int16, samplesPerFrame)
-	outputBuf := make([]int16, samplesPerFrame)
-
-	stream, err := portaudio.OpenDefaultStream(
-		1, // input channels (mono mic)
-		1, // output channels (mono speaker)
-		float64(sampleRate),
-		samplesPerFrame,
-		inputBuf,
-		outputBuf,
-	)
+	// Print available audio devices and identify defaults.
+	defaultIn, err := portaudio.DefaultInputDevice()
 	if err != nil {
-		return fmt.Errorf("portaudio open stream: %w", err)
+		return fmt.Errorf("portaudio: no default input device: %w", err)
 	}
-	defer stream.Close()
+	defaultOut, err := portaudio.DefaultOutputDevice()
+	if err != nil {
+		return fmt.Errorf("portaudio: no default output device: %w", err)
+	}
 
-	if err := stream.Start(); err != nil {
-		return fmt.Errorf("portaudio start stream: %w", err)
+	// List all devices for debugging.
+	devices, _ := portaudio.Devices()
+	for i, d := range devices {
+		dir := ""
+		if d.MaxInputChannels > 0 {
+			dir += "IN"
+		}
+		if d.MaxOutputChannels > 0 {
+			if dir != "" {
+				dir += "/"
+			}
+			dir += "OUT"
+		}
+		log.Printf("  Audio device %d: [%s] %s (%s, %.0f Hz)", i, d.HostApi.Name, d.Name, dir, d.DefaultSampleRate)
 	}
-	defer stream.Stop()
+
+	// Select audio device: use -audio-device if specified, otherwise system default.
+	var inDev, outDev *portaudio.DeviceInfo
+	if audioDeviceIdx >= 0 {
+		if audioDeviceIdx >= len(devices) {
+			return fmt.Errorf("audio device index %d out of range (have %d devices)", audioDeviceIdx, len(devices))
+		}
+		dev := devices[audioDeviceIdx]
+		if dev.MaxInputChannels > 0 {
+			inDev = dev
+		}
+		if dev.MaxOutputChannels > 0 {
+			outDev = dev
+		}
+		if inDev == nil && outDev == nil {
+			return fmt.Errorf("audio device %d (%s) has no input or output channels", audioDeviceIdx, dev.Name)
+		}
+		log.Printf("Using audio device %d: [%s] %s", audioDeviceIdx, dev.HostApi.Name, dev.Name)
+	} else {
+		inDev = defaultIn
+		outDev = defaultOut
+	}
+
+	if inDev == nil {
+		inDev = defaultIn
+	}
+	if outDev == nil {
+		outDev = defaultOut
+	}
+
+	// Determine the audio stream sample rate. Try to open at the modem's native
+	// rate first (lets ALSA/PortAudio handle resampling internally which is
+	// much better quality than our simple linear interpolation). Only fall back
+	// to the device's native rate with manual resampling for raw hw: devices.
+	streamRate := sampleRate
+	needResample := false
+	modemSamplesPerFrame := sampleRate / 50 // 50 frames/sec = 20ms each
+	frameBytes := modemSamplesPerFrame * 2  // 16-bit samples
+	deviceSamplesPerFrame := modemSamplesPerFrame
+
+	log.Printf("Input device:  [%s] %s (max channels: %d, default sample rate: %.0f Hz)",
+		inDev.HostApi.Name, inDev.Name, inDev.MaxInputChannels, inDev.DefaultSampleRate)
+	log.Printf("Output device: [%s] %s (max channels: %d, default sample rate: %.0f Hz)",
+		outDev.HostApi.Name, outDev.Name, outDev.MaxOutputChannels, outDev.DefaultSampleRate)
+
+	// Buffers at stream sample rate for PortAudio.
+	inputBuf := make([]int16, deviceSamplesPerFrame)
+	outputBuf := make([]int16, deviceSamplesPerFrame)
+
+	// Try opening at modem's native rate first.
+	inParams := portaudio.StreamParameters{
+		Input: portaudio.StreamDeviceParameters{
+			Device:   inDev,
+			Channels: 1,
+			Latency:  inDev.DefaultHighInputLatency,
+		},
+		SampleRate:      float64(streamRate),
+		FramesPerBuffer: deviceSamplesPerFrame,
+	}
+	inStream, err := portaudio.OpenStream(inParams, inputBuf)
+	if err != nil {
+		// Fall back to device native rate with manual resampling.
+		log.Printf("Cannot open input at %d Hz, falling back to device rate %d Hz with resampling",
+			streamRate, int(inDev.DefaultSampleRate))
+		streamRate = int(inDev.DefaultSampleRate)
+		needResample = true
+		deviceSamplesPerFrame = streamRate / 50
+
+		inputBuf = make([]int16, deviceSamplesPerFrame)
+		outputBuf = make([]int16, deviceSamplesPerFrame)
+
+		inParams.SampleRate = float64(streamRate)
+		inParams.FramesPerBuffer = deviceSamplesPerFrame
+		inStream, err = portaudio.OpenStream(inParams, inputBuf)
+		if err != nil {
+			return fmt.Errorf("portaudio open input stream: %w", err)
+		}
+	}
+	defer inStream.Close()
+
+	outParams := portaudio.StreamParameters{
+		Output: portaudio.StreamDeviceParameters{
+			Device:   outDev,
+			Channels: 1,
+			Latency:  outDev.DefaultHighOutputLatency,
+		},
+		SampleRate:      float64(streamRate),
+		FramesPerBuffer: deviceSamplesPerFrame,
+	}
+	outStream, err := portaudio.OpenStream(outParams, outputBuf)
+	if err != nil {
+		return fmt.Errorf("portaudio open output stream: %w", err)
+	}
+	defer outStream.Close()
+
+	if needResample {
+		log.Printf("Resampling: modem %d Hz <-> device %d Hz", sampleRate, streamRate)
+	} else {
+		log.Printf("Streaming at modem native rate: %d Hz (no resampling needed)", streamRate)
+	}
+
+	if err := inStream.Start(); err != nil {
+		return fmt.Errorf("portaudio start input stream: %w", err)
+	}
+	defer inStream.Stop()
+
+	if err := outStream.Start(); err != nil {
+		return fmt.Errorf("portaudio start output stream: %w", err)
+	}
+	defer outStream.Stop()
 
 	log.Println("Audio bridge active. Press Ctrl+C to hang up.")
 
@@ -291,6 +446,15 @@ func bridgeAudio(ctx context.Context, mdm *modem.Modem, pipeline *audio.Pipeline
 			bridgeCancel()
 		case <-bridgeCtx.Done():
 		}
+	}()
+
+	// When context is cancelled, abort the PortAudio streams to unblock
+	// any in-progress Read()/Write() calls. Without this, Ctrl+C hangs
+	// because the mic Read() blocks in a C call indefinitely.
+	go func() {
+		<-bridgeCtx.Done()
+		_ = inStream.Abort()
+		_ = outStream.Abort()
 	}()
 
 	var wg sync.WaitGroup
@@ -307,14 +471,44 @@ func bridgeAudio(ctx context.Context, mdm *modem.Modem, pipeline *audio.Pipeline
 				if !ok {
 					return
 				}
-				// Convert bytes to int16 samples for PortAudio output.
+				// Convert bytes to int16 samples.
 				samples := bytesToInt16(frame)
-				if len(samples) != samplesPerFrame {
-					// Frame size mismatch, skip.
+				if len(samples) != modemSamplesPerFrame {
 					continue
 				}
-				copy(outputBuf, samples)
-				if err := stream.Write(); err != nil {
+
+				// Apply gain to boost modem audio volume.
+				if gain != 1.0 {
+					for i, s := range samples {
+						amplified := float64(s) * gain
+						if amplified > 32767 {
+							amplified = 32767
+						} else if amplified < -32768 {
+							amplified = -32768
+						}
+						samples[i] = int16(amplified)
+					}
+				}
+
+				// Resample from modem rate to device rate if needed.
+				var outSamples []int16
+				if needResample {
+					outSamples = upsample(samples, deviceSamplesPerFrame)
+				} else {
+					outSamples = samples
+				}
+
+				copy(outputBuf, outSamples)
+				if err := outStream.Write(); err != nil {
+					select {
+					case <-bridgeCtx.Done():
+						return
+					default:
+					}
+					// Output underflow is non-fatal (buffer wasn't ready in time).
+					if err == portaudio.OutputUnderflowed {
+						continue
+					}
 					log.Printf("Speaker write error: %v", err)
 					return
 				}
@@ -327,19 +521,37 @@ func bridgeAudio(ctx context.Context, mdm *modem.Modem, pipeline *audio.Pipeline
 	go func() {
 		defer wg.Done()
 		for {
+			if err := inStream.Read(); err != nil {
+				select {
+				case <-bridgeCtx.Done():
+					return
+				default:
+				}
+				// Input overflow is non-fatal (we didn't read fast enough).
+				if err == portaudio.InputOverflowed {
+					continue
+				}
+				log.Printf("Mic read error: %v", err)
+				return
+			}
+
 			select {
 			case <-bridgeCtx.Done():
 				return
 			default:
 			}
 
-			if err := stream.Read(); err != nil {
-				log.Printf("Mic read error: %v", err)
-				return
+			// Resample from device rate to modem rate if needed.
+			var modemSamples []int16
+			if needResample {
+				modemSamples = downsample(inputBuf, modemSamplesPerFrame)
+			} else {
+				modemSamples = make([]int16, len(inputBuf))
+				copy(modemSamples, inputBuf)
 			}
 
 			// Convert int16 samples to bytes for the modem.
-			frame := int16ToBytes(inputBuf)
+			frame := int16ToBytes(modemSamples)
 			if len(frame) != frameBytes {
 				continue
 			}
@@ -373,4 +585,67 @@ func int16ToBytes(samples []int16) []byte {
 		binary.LittleEndian.PutUint16(data[2*i:2*i+2], uint16(s))
 	}
 	return data
+}
+
+// upsample resamples from a lower rate to a higher rate.
+// For integer ratios (e.g. 3x), uses sample repetition which avoids
+// the timing artifacts of linear interpolation for voice audio.
+func upsample(in []int16, outLen int) []int16 {
+	out := make([]int16, outLen)
+	if len(in) == 0 {
+		return out
+	}
+	// For integer ratios, repeat each sample.
+	ratio := outLen / len(in)
+	if ratio*len(in) == outLen && ratio > 0 {
+		for i, s := range in {
+			for j := 0; j < ratio; j++ {
+				out[i*ratio+j] = s
+			}
+		}
+		return out
+	}
+	// Non-integer ratio: linear interpolation fallback.
+	r := float64(len(in)-1) / float64(outLen-1)
+	for i := range out {
+		pos := float64(i) * r
+		idx := int(pos)
+		frac := pos - float64(idx)
+		if idx+1 < len(in) {
+			out[i] = int16(float64(in[idx])*(1-frac) + float64(in[idx+1])*frac)
+		} else {
+			out[i] = in[idx]
+		}
+	}
+	return out
+}
+
+// downsample resamples from a higher rate to a lower rate.
+// For integer ratios (e.g. 3x), uses simple decimation (take every Nth sample).
+func downsample(in []int16, outLen int) []int16 {
+	out := make([]int16, outLen)
+	if len(in) == 0 {
+		return out
+	}
+	// For integer ratios, take every Nth sample.
+	ratio := len(in) / outLen
+	if ratio*outLen == len(in) && ratio > 0 {
+		for i := range out {
+			out[i] = in[i*ratio]
+		}
+		return out
+	}
+	// Non-integer ratio: linear interpolation fallback.
+	r := float64(len(in)-1) / float64(outLen-1)
+	for i := range out {
+		pos := float64(i) * r
+		idx := int(pos)
+		frac := pos - float64(idx)
+		if idx+1 < len(in) {
+			out[i] = int16(float64(in[idx])*(1-frac) + float64(in[idx+1])*frac)
+		} else {
+			out[i] = in[idx]
+		}
+	}
+	return out
 }

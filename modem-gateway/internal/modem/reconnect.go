@@ -43,6 +43,7 @@ type ReconnectCallbacks struct {
 type ReconnectManager struct {
 	serialPortPath string
 	pcmPortPath    string
+	baudRate       int
 	callbacks      ReconnectCallbacks
 
 	mu        sync.RWMutex
@@ -61,10 +62,11 @@ type ReconnectManager struct {
 // reopened on reconnection (the actual PCM port management is handled by
 // the audio pipeline, but the reconnect manager needs to know the path
 // for validation).
-func NewReconnectManager(serialPortPath, pcmPortPath string, callbacks ReconnectCallbacks) *ReconnectManager {
+func NewReconnectManager(serialPortPath, pcmPortPath string, baudRate int, callbacks ReconnectCallbacks) *ReconnectManager {
 	return &ReconnectManager{
 		serialPortPath: serialPortPath,
 		pcmPortPath:    pcmPortPath,
+		baudRate:       baudRate,
 		callbacks:      callbacks,
 		done:           make(chan struct{}),
 	}
@@ -190,7 +192,7 @@ func (rm *ReconnectManager) handleDisconnect(ctx context.Context) {
 // connect performs the initial connection: open serial port, initialize modem,
 // set up state machine. If it fails, it enters the reconnection loop.
 func (rm *ReconnectManager) connect(ctx context.Context) {
-	port, err := OpenSerialPort(rm.serialPortPath)
+	port, err := OpenSerialPortWithTimeout(rm.serialPortPath, rm.baudRate, 1*time.Second)
 	if err != nil {
 		slog.Warn("Failed to open serial port, entering reconnection loop",
 			"path", rm.serialPortPath,
@@ -274,7 +276,7 @@ func (rm *ReconnectManager) reconnectLoop(ctx context.Context) {
 		}
 
 		// Attempt to open the serial port.
-		port, err := OpenSerialPort(rm.serialPortPath)
+		port, err := OpenSerialPortWithTimeout(rm.serialPortPath, rm.baudRate, 1*time.Second)
 		if err != nil {
 			slog.Debug("Reconnection attempt failed: cannot open serial port",
 				"error", err,
