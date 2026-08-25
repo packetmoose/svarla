@@ -3,6 +3,7 @@ module github.com/packetmoose/svarla/modem-gateway
 go 1.25.0
 
 require (
+	github.com/gordonklaus/portaudio v0.0.0-20260203164431-765aa7dfa631
 	github.com/gorilla/websocket v1.5.3
 	go.bug.st/serial v1.8.0
 	gopkg.in/yaml.v3 v3.0.1
