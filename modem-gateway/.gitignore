@@ -1,3 +1,4 @@
 # Built binaries
 /modem-gateway
 /voice-test
+/bin/*

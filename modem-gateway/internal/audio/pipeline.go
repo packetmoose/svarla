@@ -2,8 +2,11 @@ package audio
 
 import (
 	"errors"
+	"fmt"
 	"io"
+	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/packetmoose/svarla/modem-gateway/internal/modem"
@@ -69,6 +72,10 @@ type Pipeline struct {
 	running bool
 	stopCh  chan struct{}
 	wg      sync.WaitGroup
+
+	// Debug counters for diagnosing audio flow.
+	captureBytes  atomic.Int64
+	captureFrames atomic.Int64
 }
 
 // New creates a new audio Pipeline.
@@ -124,10 +131,29 @@ func (p *Pipeline) Start() error {
 		return ErrAlreadyRunning
 	}
 
+	// Set PCM format right before enabling streaming, in case a previous
+	// AT+CPCMREG=0 or modem reset changed it.
+	if p.sampleRate == 16000 {
+		_, _ = p.modemCtrl.SendCommand("AT+CPCMFRM=1", 5*time.Second)
+	} else {
+		_, _ = p.modemCtrl.SendCommand("AT+CPCMFRM=0", 5*time.Second)
+	}
+
 	// Enable PCM audio streaming on the modem's serial port.
-	_, err := p.modemCtrl.SendCommand("AT+CPCMREG=1", 5*time.Second)
+	// Retry once after a brief delay — the modem audio subsystem may
+	// not be ready immediately after the call is established.
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		_, err = p.modemCtrl.SendCommand("AT+CPCMREG=1", 10*time.Second)
+		if err == nil {
+			break
+		}
+		if attempt == 0 {
+			time.Sleep(1 * time.Second)
+		}
+	}
 	if err != nil {
-		return err
+		return fmt.Errorf("AT+CPCMREG=1: %w", err)
 	}
 
 	p.stopCh = make(chan struct{})
@@ -151,6 +177,11 @@ func (p *Pipeline) Stop() error {
 	p.running = false
 	close(p.stopCh)
 	p.mu.Unlock()
+
+	// Close the PCM port to unblock any Read()/Write() calls in the
+	// capture/playback goroutines. Without this, Stop() hangs forever
+	// because Read() blocks with no timeout on the streaming port.
+	_ = p.pcmPort.Close()
 
 	// Wait for goroutines to exit.
 	p.wg.Wait()
@@ -176,6 +207,8 @@ func (p *Pipeline) captureLoop() {
 	buf := make([]byte, frameSize)
 	offset := 0
 
+	log.Printf("[PCM capture] starting, frame size=%d bytes", frameSize)
+
 	for {
 		select {
 		case <-p.stopCh:
@@ -193,6 +226,7 @@ func (p *Pipeline) captureLoop() {
 			}
 			// On read errors (e.g., port closed, EOF), exit the loop.
 			if errors.Is(err, io.EOF) {
+				log.Printf("[PCM capture] EOF, exiting")
 				return
 			}
 			// Brief pause before retrying on transient errors.
@@ -200,7 +234,20 @@ func (p *Pipeline) captureLoop() {
 			continue
 		}
 
+		p.captureBytes.Add(int64(n))
 		offset += n
+
+		// Log first data received and periodically.
+		totalBytes := p.captureBytes.Load()
+		if totalBytes == int64(n) {
+			log.Printf("[PCM capture] first data received: %d bytes", n)
+			// Dump first 32 bytes for format diagnosis.
+			dumpLen := 32
+			if n < dumpLen {
+				dumpLen = n
+			}
+			log.Printf("[PCM capture] first bytes (hex): %x", buf[:dumpLen])
+		}
 
 		// Emit complete frames.
 		for offset >= frameSize {
@@ -213,6 +260,11 @@ func (p *Pipeline) captureLoop() {
 				copy(buf, buf[frameSize:offset])
 			}
 			offset = remaining
+
+			frames := p.captureFrames.Add(1)
+			if frames == 1 || frames%500 == 0 {
+				log.Printf("[PCM capture] frame %d emitted (total bytes: %d)", frames, p.captureBytes.Load())
+			}
 
 			// Send frame, dropping it if channel is full (back-pressure).
 			select {

@@ -5,6 +5,7 @@ package modem
 import (
 	"bufio"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,10 @@ type Modem struct {
 	pendingMu    sync.Mutex
 	pendingCmd   *command
 	pendingLines []string
+
+	// logger is used for debug-level AT command tracing. When nil, no
+	// command-level logging is emitted.
+	logger *slog.Logger
 }
 
 // New creates a new Modem instance using the given serial port.
@@ -52,6 +57,14 @@ func New(port SerialPort) *Modem {
 		cmdQueue: make(chan *command, 64),
 		done:     make(chan struct{}),
 	}
+}
+
+// SetLogger enables debug logging of AT commands and responses.
+// Pass a configured *slog.Logger to see all serial traffic. Pass nil to disable.
+func (m *Modem) SetLogger(l *slog.Logger) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.logger = l
 }
 
 // Open starts the serial reader and command dispatcher goroutines.
@@ -189,6 +202,9 @@ func (m *Modem) executeCommand(cmd *command) {
 
 	// Write command to serial port.
 	line := cmd.cmd + "\r\n"
+	if m.logger != nil {
+		m.logger.Debug("AT TX", "cmd", cmd.cmd)
+	}
 	if _, err := m.port.Write([]byte(line)); err != nil {
 		cmd.response <- commandResult{err: fmt.Errorf("modem: write failed: %w", err)}
 		return
@@ -204,10 +220,23 @@ func (m *Modem) executeCommand(cmd *command) {
 	case <-timer.C:
 		// Timeout. Try to deliver timeout error. The reader might
 		// deliver at the same moment, so use non-blocking send.
+		if m.logger != nil {
+			m.logger.Debug("AT TIMEOUT", "cmd", cmd.cmd, "timeout", cmd.timeout)
+		}
 		select {
 		case cmd.response <- commandResult{err: ErrTimeout}:
 		default:
 		}
+		// Drain: wait briefly for the reader to close cmd.completed so it
+		// doesn't accidentally deliver a stale result to the next command.
+		// This prevents the "every other command fails" cascade.
+		drain := time.NewTimer(500 * time.Millisecond)
+		select {
+		case <-cmd.completed:
+		case <-drain.C:
+		case <-m.done:
+		}
+		drain.Stop()
 	case <-m.done:
 		select {
 		case cmd.response <- commandResult{err: ErrPortClosed}:
@@ -220,6 +249,7 @@ func (m *Modem) executeCommand(cmd *command) {
 // to either the pending command or URC handlers.
 func (m *Modem) readLoop() {
 	scanner := bufio.NewScanner(m.port)
+	scanner.Split(scanATLines)
 	for scanner.Scan() {
 		select {
 		case <-m.done:
@@ -231,6 +261,10 @@ func (m *Modem) readLoop() {
 		// Skip empty lines (common in AT responses).
 		if strings.TrimSpace(line) == "" {
 			continue
+		}
+
+		if m.logger != nil {
+			m.logger.Debug("AT RX", "line", line)
 		}
 
 		// Check if this line is a final result code for a pending command.
@@ -255,8 +289,22 @@ func (m *Modem) readLoop() {
 			continue
 		}
 
+		// Filter out command echo (modem may echo back the command we sent).
+		m.pendingMu.Lock()
+		pendingCmd := m.pendingCmd
+		m.pendingMu.Unlock()
+		if pendingCmd != nil && strings.EqualFold(strings.TrimSpace(line), strings.TrimSpace(pendingCmd.cmd)) {
+			if m.logger != nil {
+				m.logger.Debug("AT ECHO (filtered)", "line", line)
+			}
+			continue
+		}
+
 		// Known URCs are dispatched even during command execution.
 		if isKnownURC(line) {
+			if m.logger != nil {
+				m.logger.Debug("AT URC", "line", line)
+			}
 			m.dispatchURC(line)
 			continue
 		}
@@ -328,4 +376,45 @@ func isKnownURC(line string) bool {
 		}
 	}
 	return false
+}
+
+// scanATLines is a bufio.SplitFunc that splits on \r\n, bare \r, or bare \n.
+// AT modems commonly use \r\n but may also use bare \r as a line delimiter,
+// which the default bufio.ScanLines does not handle. This ensures every
+// response token is delivered promptly regardless of the modem's line ending style.
+func scanATLines(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+
+	// Look for the first \r or \n.
+	for i := 0; i < len(data); i++ {
+		if data[i] == '\n' {
+			// Bare \n or the \n in a \r\n pair (the \r was already consumed).
+			return i + 1, data[:i], nil
+		}
+		if data[i] == '\r' {
+			// Check if followed by \n (i.e. \r\n).
+			if i+1 < len(data) {
+				if data[i+1] == '\n' {
+					return i + 2, data[:i], nil
+				}
+				// Bare \r — treat as line ending.
+				return i + 1, data[:i], nil
+			}
+			// \r at end of buffer — need more data to decide if \r\n follows.
+			if atEOF {
+				return len(data), data[:i], nil
+			}
+			// Request more data.
+			return 0, nil, nil
+		}
+	}
+
+	// No line ending found.
+	if atEOF {
+		return len(data), data, nil
+	}
+	// Request more data.
+	return 0, nil, nil
 }

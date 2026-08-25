@@ -19,6 +19,7 @@ var knownModemPatterns = []string{
 	"SIM7600",
 	"SIM7500",
 	"A7600",
+	"SIMCOM_SIM7600",
 }
 
 // ModemInfo holds identification data queried from the modem during initialization.
@@ -52,17 +53,23 @@ func RunInitSequence(ctx context.Context, m *Modem) (*InitResult, error) {
 
 	// Phase 2: Configure modem.
 	configCmds := []struct {
-		cmd  string
-		desc string
+		cmd      string
+		desc     string
+		optional bool // if true, failure is logged but not fatal
 	}{
-		{"ATV1", "verbose result codes"},
-		{"AT+CLIP=1", "caller ID presentation"},
-		{"AT+DDET=1", "DTMF detection"},
-		{"AT+CNMI=2,1,0,1,0", "SMS notification routing"},
+		{"ATV1", "verbose result codes", false},
+		{"AT+CLIP=1", "caller ID presentation", false},
+		{"AT+DDET=1", "DTMF detection", true},
+		{"AT+CNMI=2,1,0,1,0", "SMS notification routing", true},
 	}
 
 	for _, c := range configCmds {
 		if _, err := m.SendCommand(c.cmd, 0); err != nil {
+			if c.optional {
+				slog.Warn("Optional modem config command failed (continuing)",
+					"cmd", c.cmd, "desc", c.desc, "error", err)
+				continue
+			}
 			m.SetState(StateError)
 			return nil, fmt.Errorf("modem init: %s (%s) failed: %w", c.cmd, c.desc, err)
 		}
