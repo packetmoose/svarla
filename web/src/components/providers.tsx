@@ -48,6 +48,7 @@ const CONFIG_FIELDS: Record<string, ConfigFieldDef[]> = {
     { name: "websocket_number", label: "WebSocket Number", type: "text", required: false },
   ],
   dummy: [],
+  "modem-gateway": [],
 };
 
 /* ---------- State ---------- */
@@ -509,6 +510,7 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
           >
             <option value="vonage">Vonage</option>
             <option value="46elks">46elks</option>
+            <option value="modem-gateway">Modem Gateway</option>
             <option value="dummy">Dummy</option>
           </select>
           {getFieldError("type") && (

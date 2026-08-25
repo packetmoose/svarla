@@ -39,6 +39,7 @@ services:
       CORS_ORIGIN: ""
       MEDIA_BRIDGE_URL: http://mediabridge:9090
       APK_SOURCE: local
+      EXPERIMENTAL_PROVIDERS: true
     depends_on:
       db:
         condition: service_healthy
