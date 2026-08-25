@@ -213,6 +213,30 @@ func run(ctx context.Context, configPath string) error {
 		log.Printf("WARNING: delivery report configuration failed: %v", err)
 	}
 
+	// If CNMI <ds>=0 or CNMI failed entirely, delivery reports won't be pushed.
+	// Start a periodic poll to check for stored delivery reports.
+	var deliveryPollCancel context.CancelFunc
+	if initResult.CNMIDeliveryStatus <= 0 {
+		var deliveryPollCtx context.Context
+		deliveryPollCtx, deliveryPollCancel = context.WithCancel(ctx)
+		go func() {
+			ticker := time.NewTicker(60 * time.Second)
+			defer ticker.Stop()
+			// Do an initial poll after a short delay.
+			time.Sleep(5 * time.Second)
+			smsMgr.PollDeliveryReports()
+			for {
+				select {
+				case <-deliveryPollCtx.Done():
+					return
+				case <-ticker.C:
+					smsMgr.PollDeliveryReports()
+				}
+			}
+		}()
+		log.Printf("Delivery report polling enabled (CNMI ds=%d)", initResult.CNMIDeliveryStatus)
+	}
+
 	// Forward received SMS to Svarla or buffer when disconnected.
 	smsMgr.OnReceived(func(incoming sms.IncomingSMS) {
 		if sigClient.IsConnected() {
@@ -407,6 +431,11 @@ func run(ctx context.Context, configPath string) error {
 	// Perform graceful shutdown with the remaining time before force-exit.
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 9*time.Second)
 	defer shutdownCancel()
+
+	// Stop delivery report polling if active.
+	if deliveryPollCancel != nil {
+		deliveryPollCancel()
+	}
 
 	statusReporter.Stop()
 

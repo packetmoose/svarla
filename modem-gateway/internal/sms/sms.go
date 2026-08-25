@@ -219,6 +219,8 @@ func (mgr *Manager) RegisterURCHandlers() {
 			mgr.handleCMTI(urc)
 		case "+CDS":
 			mgr.handleCDS(urc)
+		case "+CDSI":
+			mgr.handleCDSI(urc)
 		}
 	})
 }
@@ -674,4 +676,178 @@ func decodeUCS2HexString(hexStr string) string {
 	}
 
 	return DecodeUCS2(data)
+}
+
+// handleCDSI processes a +CDSI URC (delivery status report stored notification).
+// This is used when AT+CNMI <ds>=2: the modem stores the delivery report and
+// sends a +CDSI notification with the storage location. We read it from storage
+// and process it like a +CDS.
+// Format: +CDSI: "<storage>",<index>
+func (mgr *Manager) handleCDSI(urc modem.URC) {
+	// +CDSI has the same format as +CMTI: "<storage>",<index>
+	info, err := modem.ParseCMTI(urc.Data)
+	if err != nil {
+		slog.Error("Failed to parse +CDSI URC", "error", err, "data", urc.Data)
+		return
+	}
+
+	slog.Debug("Delivery report stored notification", "storage", info.Storage, "index", info.Index)
+
+	// Read the delivery report from storage using AT+CMGR.
+	resp, err := mgr.modem.SendCommand(fmt.Sprintf("AT+CMGR=%d", info.Index), 0)
+	if err != nil {
+		slog.Error("Failed to read stored delivery report", "error", err, "index", info.Index)
+		return
+	}
+
+	// Delete from storage after reading.
+	if _, err := mgr.modem.SendCommand(fmt.Sprintf("AT+CMGD=%d", info.Index), 0); err != nil {
+		slog.Warn("Failed to delete stored delivery report", "error", err, "index", info.Index)
+	}
+
+	// Parse the delivery report from the CMGR response.
+	// The response contains the status report data similar to +CDS format.
+	report, err := parseDeliveryReportFromCMGR(resp)
+	if err != nil {
+		slog.Error("Failed to parse stored delivery report", "error", err, "resp", resp)
+		return
+	}
+
+	// Notify all registered handlers.
+	mgr.mu.RLock()
+	handlers := make([]func(DeliveryReport), len(mgr.deliveryHandlers))
+	copy(handlers, mgr.deliveryHandlers)
+	mgr.mu.RUnlock()
+
+	for _, h := range handlers {
+		h(report)
+	}
+}
+
+// parseDeliveryReportFromCMGR extracts a delivery report from an AT+CMGR response
+// that contains a status report. The response typically looks like:
+// +CMGR: "REC READ",6,3,"+15551234567",129,"24/01/15,10:30:00+00","24/01/15,10:30:05+00",0
+// or has the data on a second line after the +CMGR header.
+func parseDeliveryReportFromCMGR(resp string) (DeliveryReport, error) {
+	// Try to find delivery report data in the response.
+	// First try parsing the full response as a delivery report directly.
+	lines := strings.Split(resp, "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "+CMGR:") {
+			// For status reports, the +CMGR header itself may contain the data
+			// after the status field. Try extracting from after "REC READ"/"REC UNREAD".
+			if strings.HasPrefix(line, "+CMGR:") {
+				// Strip the +CMGR: "STATUS", prefix and try to parse remainder as report.
+				idx := strings.Index(line, ",")
+				if idx > 0 {
+					// Skip the first field (status string) to get the report data.
+					afterStatus := line[idx+1:]
+					report, err := parseDeliveryReport(afterStatus)
+					if err == nil {
+						return report, nil
+					}
+				}
+			}
+			continue
+		}
+		// Try parsing non-header lines as delivery report data.
+		report, err := parseDeliveryReport(line)
+		if err == nil {
+			return report, nil
+		}
+	}
+
+	return DeliveryReport{}, fmt.Errorf("sms: no delivery report data found in CMGR response: %q", resp)
+}
+
+// PollDeliveryReports reads all stored status reports from modem storage and
+// processes them. This is used when AT+CNMI <ds>=0 (no notification) as a
+// periodic polling fallback. It lists status reports with AT+CMGL, processes
+// each one, and deletes them from storage.
+//
+// In text mode, AT+CMGL="ALL" with the modem in status report aware mode
+// returns stored delivery reports. We filter for status report entries.
+func (mgr *Manager) PollDeliveryReports() {
+	if !mgr.textMode {
+		// PDU mode polling not implemented.
+		return
+	}
+
+	// List all stored messages — status reports are stored as "REC READ" or "REC UNREAD".
+	// Use AT+CPMS to check the status report storage first, then list.
+	resp, err := mgr.modem.SendCommand("AT+CMGL=\"ALL\"", 30*time.Second)
+	if err != nil {
+		slog.Debug("Delivery report poll AT+CMGL failed", "error", err)
+		return
+	}
+
+	if strings.TrimSpace(resp) == "" {
+		return
+	}
+
+	// Parse the response for status report entries.
+	// Format: +CMGL: <index>,<stat>,<fo>,<mr>,<ra>,<tora>,<scts>,<dt>,<st>
+	// followed by potential body lines.
+	lines := strings.Split(resp, "\n")
+	var indicesToDelete []int
+
+	for i, line := range lines {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "+CMGL:") {
+			continue
+		}
+
+		// Extract index from +CMGL header.
+		afterPrefix := strings.TrimPrefix(line, "+CMGL:")
+		parts := strings.SplitN(strings.TrimSpace(afterPrefix), ",", 2)
+		if len(parts) < 2 {
+			continue
+		}
+		index, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+		if err != nil {
+			continue
+		}
+
+		// Check if this is a status report by looking at the stat field.
+		// Status reports have stat containing "STATUS REPORT" or specific patterns.
+		// On SIM7600, status reports mixed with regular SMS in CMGL.
+		// We attempt to parse as delivery report; if it succeeds, it's a status report.
+		remainder := parts[1]
+		report, err := parseDeliveryReport(remainder)
+		if err != nil {
+			// Not a status report — might be a regular SMS. Try next line as data.
+			if i+1 < len(lines) {
+				nextLine := strings.TrimSpace(lines[i+1])
+				report, err = parseDeliveryReport(nextLine)
+			}
+		}
+		if err != nil {
+			continue
+		}
+
+		// Successfully parsed a delivery report.
+		indicesToDelete = append(indicesToDelete, index)
+
+		// Notify handlers.
+		mgr.mu.RLock()
+		handlers := make([]func(DeliveryReport), len(mgr.deliveryHandlers))
+		copy(handlers, mgr.deliveryHandlers)
+		mgr.mu.RUnlock()
+
+		for _, h := range handlers {
+			h(report)
+		}
+	}
+
+	// Delete processed status reports from storage.
+	for _, idx := range indicesToDelete {
+		if _, err := mgr.modem.SendCommand(fmt.Sprintf("AT+CMGD=%d", idx), 0); err != nil {
+			slog.Warn("Failed to delete polled delivery report", "error", err, "index", idx)
+		}
+	}
+
+	if len(indicesToDelete) > 0 {
+		slog.Debug("Polled delivery reports", "count", len(indicesToDelete))
+	}
 }

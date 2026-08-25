@@ -359,6 +359,7 @@ var knownURCPrefixes = []string{
 	"RING",
 	"+CLIP:",
 	"+CMTI:",
+	"+CDSI:",
 	"+CUSD:",
 	"+DTMF:",
 	"+CREG:",
