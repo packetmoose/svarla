@@ -8,6 +8,7 @@ interface ProviderSummary {
   type: string;
   displayName: string;
   enabled: boolean;
+  connected?: boolean;
 }
 
 interface ProviderDetail extends ProviderSummary {
@@ -18,6 +19,18 @@ interface ProviderDetail extends ProviderSummary {
 interface FieldError {
   field: string;
   message: string;
+}
+
+interface ModemStatus {
+  connected: boolean;
+  signal: number | null;
+  network: string | null;
+  operator: string | null;
+  modemModel: string | null;
+  modemManufacturer: string | null;
+  firmware: string | null;
+  stale: string[] | null;
+  modemUnsupportedWarning: string | null;
 }
 
 interface Notification {
@@ -51,6 +64,26 @@ const CONFIG_FIELDS: Record<string, ConfigFieldDef[]> = {
   "modem-gateway": [],
 };
 
+/* ---------- Pairing secret generation (client-side) ---------- */
+
+/**
+ * Generate a pairing secret: 6-8 case-insensitive alphanumeric characters.
+ * Uses crypto.getRandomValues() for secure generation in the browser.
+ */
+function generatePairingSecret(): string {
+  const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const randomByte = new Uint8Array(1);
+  crypto.getRandomValues(randomByte);
+  const length = 6 + (randomByte[0] % 3);
+  const bytes = new Uint8Array(length);
+  crypto.getRandomValues(bytes);
+  let secret = "";
+  for (let i = 0; i < length; i++) {
+    secret += chars[bytes[i] % chars.length];
+  }
+  return secret;
+}
+
 /* ---------- State ---------- */
 
 interface ProvidersState {
@@ -67,6 +100,15 @@ interface ProvidersState {
   formErrors: FieldError[];
   formSubmitting: boolean;
 
+  // Pairing secret display (shown after creation or reset)
+  showPairingSecret: string | null;
+  pairingSecretWsEndpoint: string | null;
+
+  // Reset pairing state
+  resetTarget: ProviderSummary | null;
+  resetLoading: boolean;
+  resetSecret: string | null;
+
   // Edit form state
   editingProvider: ProviderDetail | null;
   editDisplayName: string;
@@ -77,6 +119,10 @@ interface ProvidersState {
   // Delete confirmation
   deleteTarget: ProviderSummary | null;
   deleteLoading: boolean;
+
+  // Modem status (for modem-gateway providers)
+  modemStatus: ModemStatus | null;
+  modemStatusLoading: boolean;
 
   // Sync state
   syncingProviderId: string | null;
@@ -90,6 +136,8 @@ let notificationCounter = 0;
 /* ---------- Component ---------- */
 
 export class Providers extends Component<Record<string, never>, ProvidersState> {
+  private statusPollTimer: ReturnType<typeof setInterval> | null = null;
+
   state: ProvidersState = {
     providers: [],
     loading: true,
@@ -101,6 +149,11 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
     formConfig: {},
     formErrors: [],
     formSubmitting: false,
+    showPairingSecret: null,
+    pairingSecretWsEndpoint: null,
+    resetTarget: null,
+    resetLoading: false,
+    resetSecret: null,
     editingProvider: null,
     editDisplayName: "",
     editConfig: {},
@@ -108,12 +161,18 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
     editSubmitting: false,
     deleteTarget: null,
     deleteLoading: false,
+    modemStatus: null,
+    modemStatusLoading: false,
     syncingProviderId: null,
     notifications: [],
   };
 
   componentDidMount() {
     this.fetchProviders();
+  }
+
+  componentWillUnmount() {
+    this.stopStatusPolling();
   }
 
   /* ---------- Data fetching ---------- */
@@ -130,15 +189,46 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
   };
 
   private fetchProviderDetail = async (id: string) => {
-    this.setState({ detailLoading: true });
+    this.setState({ detailLoading: true, modemStatus: null });
     const result = await api.get<ProviderDetail>(`/api/providers/${id}`);
     if (result.ok) {
       this.setState({ selectedProvider: result.data, detailLoading: false });
+      // Start polling modem status for modem-gateway providers
+      if (result.data.type === "modem-gateway") {
+        this.fetchModemStatus(result.data.id);
+        this.startStatusPolling(result.data.id);
+      } else {
+        this.stopStatusPolling();
+      }
     } else {
       this.setState({ detailLoading: false });
       this.showNotification("Failed to load provider details", "error");
     }
   };
+
+  private fetchModemStatus = async (id: string) => {
+    this.setState({ modemStatusLoading: true });
+    const result = await api.get<ModemStatus>(`/api/providers/${id}/status`);
+    if (result.ok) {
+      this.setState({ modemStatus: result.data, modemStatusLoading: false });
+    } else {
+      this.setState({ modemStatusLoading: false });
+    }
+  };
+
+  private startStatusPolling(id: string) {
+    this.stopStatusPolling();
+    this.statusPollTimer = setInterval(() => {
+      this.fetchModemStatus(id);
+    }, 10_000);
+  }
+
+  private stopStatusPolling() {
+    if (this.statusPollTimer) {
+      clearInterval(this.statusPollTimer);
+      this.statusPollTimer = null;
+    }
+  }
 
   /* ---------- Notifications ---------- */
 
@@ -376,12 +466,20 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
 
     this.setState({ formSubmitting: true, formErrors: [] });
 
-    const result = await api.post<{ providerId: string; webhookUrls: string[] }>(
+    // For modem-gateway, generate a pairing secret client-side
+    const config = { ...formConfig } as Record<string, string>;
+    let generatedSecret: string | undefined;
+    if (formType === "modem-gateway") {
+      generatedSecret = generatePairingSecret();
+      config.pairing_secret = generatedSecret;
+    }
+
+    const result = await api.post<{ providerId: string; webhookUrls: string[]; wsEndpoint?: string }>(
       "/api/providers",
       {
         type: formType,
         displayName: formDisplayName,
-        config: formConfig,
+        config,
       }
     );
 
@@ -395,7 +493,16 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
         formConfig: {},
         formErrors: [],
       });
-      this.showNotification("Provider added successfully", "success");
+
+      // For modem-gateway, show the pairing secret prominently
+      if (formType === "modem-gateway" && generatedSecret) {
+        this.setState({
+          showPairingSecret: generatedSecret,
+          pairingSecretWsEndpoint: result.data.wsEndpoint || null,
+        });
+      } else {
+        this.showNotification("Provider added successfully", "success");
+      }
     } else {
       const errorData = result.data as { error?: string; fieldErrors?: FieldError[] };
       this.setState({
@@ -414,7 +521,51 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
   };
 
   private handleCloseDetail = () => {
-    this.setState({ selectedProvider: null });
+    this.stopStatusPolling();
+    this.setState({ selectedProvider: null, modemStatus: null });
+  };
+
+  /* ---------- Pairing secret display ---------- */
+
+  private handleDismissPairingSecret = () => {
+    this.setState({ showPairingSecret: null, pairingSecretWsEndpoint: null });
+    this.showNotification("Provider added successfully", "success");
+  };
+
+  /* ---------- Reset pairing ---------- */
+
+  private handleResetPairingClick = (provider: ProviderSummary) => {
+    this.setState({ resetTarget: provider, resetSecret: null });
+  };
+
+  private handleResetPairingCancel = () => {
+    this.setState({ resetTarget: null, resetSecret: null });
+  };
+
+  private handleResetPairingConfirm = async () => {
+    const { resetTarget } = this.state;
+    if (!resetTarget) return;
+
+    this.setState({ resetLoading: true });
+
+    const newSecret = generatePairingSecret();
+    const result = await api.post<{ wsEndpoint: string }>(
+      `/api/providers/${resetTarget.id}/reset`,
+      { pairingSecret: newSecret }
+    );
+
+    if (result.ok) {
+      this.setState({
+        resetTarget: null,
+        resetLoading: false,
+        showPairingSecret: newSecret,
+        pairingSecretWsEndpoint: result.data.wsEndpoint || null,
+      });
+    } else {
+      const errorData = result.data as { error?: string };
+      this.setState({ resetTarget: null, resetLoading: false });
+      this.showNotification(errorData.error || "Failed to reset pairing", "error");
+    }
   };
 
   /* ---------- Render helpers ---------- */
@@ -466,6 +617,78 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
               aria-busy={deleteLoading ? "true" : undefined}
             >
               {deleteLoading ? "Removing..." : "Remove"}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  private renderPairingSecretDialog() {
+    const { showPairingSecret, pairingSecretWsEndpoint } = this.state;
+    if (!showPairingSecret) return null;
+
+    return (
+      <div class="modal-overlay" role="dialog" aria-modal="true" aria-label="Pairing secret">
+        <div class="modal-content card">
+          <h3>Modem Gateway Pairing Secret</h3>
+          <p>
+            Copy this secret into your modem-gateway configuration file under{" "}
+            <code>connection.pairingSecret</code>. It will only be shown once.
+          </p>
+          <div class="pairing-secret-display" aria-label="Pairing secret value">
+            <code class="pairing-secret-value">{showPairingSecret}</code>
+          </div>
+          {pairingSecretWsEndpoint && (
+            <p class="form-hint">
+              WebSocket endpoint: <code>{pairingSecretWsEndpoint}</code>
+            </p>
+          )}
+          <p class="form-hint">
+            The secret expires after 24 hours. If you lose it, use "Reset Pairing" to generate a new one.
+          </p>
+          <div class="modal-actions">
+            <button
+              type="button"
+              onClick={this.handleDismissPairingSecret}
+            >
+              I've copied the secret
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  private renderResetPairingDialog() {
+    const { resetTarget, resetLoading } = this.state;
+    if (!resetTarget) return null;
+
+    return (
+      <div class="modal-overlay" role="dialog" aria-modal="true" aria-label="Confirm pairing reset">
+        <div class="modal-content card">
+          <h3>Reset Pairing</h3>
+          <p>
+            This will disconnect <strong>{resetTarget.displayName}</strong>, delete its stored key,
+            and generate a new pairing secret. The modem-gateway binary will need to re-pair.
+          </p>
+          <div class="modal-actions">
+            <button
+              type="button"
+              class="btn-secondary"
+              onClick={this.handleResetPairingCancel}
+              disabled={resetLoading}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              class="btn-warning"
+              onClick={this.handleResetPairingConfirm}
+              disabled={resetLoading}
+              aria-busy={resetLoading ? "true" : undefined}
+            >
+              {resetLoading ? "Resetting..." : "Reset Pairing"}
             </button>
           </div>
         </div>
@@ -682,6 +905,96 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
     );
   }
 
+  private renderModemStatus() {
+    const { modemStatus, modemStatusLoading } = this.state;
+
+    if (modemStatusLoading && !modemStatus) {
+      return (
+        <div class="modem-status-section">
+          <h4>Modem Status</h4>
+          <p class="form-hint">Loading status...</p>
+        </div>
+      );
+    }
+
+    if (!modemStatus) return null;
+
+    const signalBars = modemStatus.signal != null ? Math.min(Math.max(Math.round(modemStatus.signal / 20), 0), 5) : 0;
+    const signalLabel = modemStatus.signal != null ? `${modemStatus.signal}%` : "Unknown";
+
+    return (
+      <div class="modem-status-section">
+        <h4>Modem Status</h4>
+
+        <div class="modem-connection-indicator">
+          <span class={`connection-dot ${modemStatus.connected ? "connected" : "disconnected"}`}
+                aria-hidden="true" />
+          <span class={modemStatus.connected ? "text-connected" : "text-disconnected"}>
+            {modemStatus.connected ? "Connected" : "Disconnected"}
+          </span>
+        </div>
+
+        {modemStatus.connected && (
+          <Fragment>
+            {modemStatus.modemUnsupportedWarning && (
+              <div class="modem-warning" role="alert">
+                {modemStatus.modemUnsupportedWarning}
+              </div>
+            )}
+
+            <div class="modem-signal">
+              <span class="signal-bars" aria-label={`Signal strength: ${signalLabel}`}>
+                {[1, 2, 3, 4, 5].map((bar) => (
+                  <span
+                    key={bar}
+                    class={`signal-bar ${bar <= signalBars ? "active" : ""}`}
+                  />
+                ))}
+              </span>
+              <span class="signal-label">{signalLabel}</span>
+            </div>
+
+            <dl class="detail-list modem-detail-list">
+              {modemStatus.network && (
+                <Fragment>
+                  <dt>Network</dt>
+                  <dd>{modemStatus.network}</dd>
+                </Fragment>
+              )}
+              {modemStatus.operator && (
+                <Fragment>
+                  <dt>Operator</dt>
+                  <dd>{modemStatus.operator}</dd>
+                </Fragment>
+              )}
+              {modemStatus.modemModel && (
+                <Fragment>
+                  <dt>Modem</dt>
+                  <dd>
+                    {modemStatus.modemManufacturer && `${modemStatus.modemManufacturer} `}
+                    {modemStatus.modemModel}
+                  </dd>
+                </Fragment>
+              )}
+              {modemStatus.firmware && (
+                <Fragment>
+                  <dt>Firmware</dt>
+                  <dd class="monospace">{modemStatus.firmware}</dd>
+                </Fragment>
+              )}
+            </dl>
+
+            {modemStatus.stale && modemStatus.stale.length > 0 && (
+              <p class="form-hint modem-stale-warning">
+                Stale data: {modemStatus.stale.join(", ")}
+              </p>
+            )}
+          </Fragment>
+        )}
+      </div>
+    );
+  }
+
   private renderProviderDetail() {
     const { selectedProvider, detailLoading } = this.state;
 
@@ -722,6 +1035,8 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
           <dd class="monospace">{selectedProvider.id}</dd>
         </dl>
 
+        {selectedProvider.type === "modem-gateway" && this.renderModemStatus()}
+
         {Object.keys(selectedProvider.config).length > 0 && (
           <Fragment>
             <h4>Configuration</h4>
@@ -747,6 +1062,19 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
               ))}
             </ul>
           </Fragment>
+        )}
+
+        {selectedProvider.type === "modem-gateway" && (
+          <div class="detail-section">
+            <button
+              type="button"
+              class="btn-warning btn-sm"
+              onClick={() => this.handleResetPairingClick(selectedProvider)}
+              aria-label={`Reset pairing for ${selectedProvider.displayName}`}
+            >
+              Reset Pairing
+            </button>
+          </div>
         )}
       </div>
     );
@@ -785,6 +1113,13 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
               <span class={`provider-status badge ${provider.enabled ? "badge-success" : "badge-muted"}`}>
                 {provider.enabled ? "Enabled" : "Disabled"}
               </span>
+              {provider.type === "modem-gateway" && provider.connected !== undefined && (
+                <span class={`provider-connection badge ${provider.connected ? "badge-connected" : "badge-disconnected"}`}>
+                  <span class={`connection-dot-sm ${provider.connected ? "connected" : "disconnected"}`}
+                        aria-hidden="true" />
+                  {provider.connected ? "Connected" : "Disconnected"}
+                </span>
+              )}
             </div>
             <div class="provider-actions">
               <button
@@ -835,6 +1170,8 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
         </div>
 
         {this.renderNotifications()}
+        {this.renderPairingSecretDialog()}
+        {this.renderResetPairingDialog()}
         {this.renderAddForm()}
         {this.renderEditForm()}
         {this.renderProviderDetail()}

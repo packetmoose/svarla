@@ -102,12 +102,19 @@ func (c *Client) Connect(ctx context.Context) error {
 
 	c.setConnected(true)
 
-	// Start background goroutines.
-	c.wg.Add(2)
-	go c.readLoop()
+	// Start the write loop immediately so sends can be queued.
+	c.wg.Add(1)
 	go c.writeLoop()
 
 	return nil
+}
+
+// StartReading starts the read loop goroutine. This must be called after all
+// message handlers are registered to avoid losing messages dispatched before
+// handlers exist. It is safe to call only once per Connect.
+func (c *Client) StartReading() {
+	c.wg.Add(1)
+	go c.readLoop()
 }
 
 // Send queues a message for sending over the WebSocket. It is non-blocking;

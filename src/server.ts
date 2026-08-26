@@ -30,6 +30,8 @@ import { VonageTelephonyProvider } from './providers/vonage-telephony-provider.j
 import { DummyTelephonyProvider } from './providers/dummy-telephony-provider.js';
 import { Elks46TelephonyProvider } from './providers/elks46-telephony-provider.js';
 import { ModemGatewayTelephonyProvider } from './providers/modem-gateway-telephony-provider.js';
+import { ModemGatewayWsHandler } from './providers/modem-gateway-ws-handler.js';
+import { ModemGatewayDbPersistence } from './providers/modem-gateway-persistence.js';
 import { registerModemGatewaySignalingRoute } from './routes/modem-gateway-signaling-route.js';
 import { WakeSignalPublisher } from './notifications/wake-signal-publisher.js';
 import { MediaBridgeClient } from './services/media-bridge-client.js';
@@ -154,6 +156,16 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
 
   // Load all enabled providers from the database
   await registry.loadAll();
+
+  // Wire up ModemGatewayWsHandler for each active modem-gateway provider
+  for (const entry of registry.listProviders()) {
+    if (entry.type === 'modem-gateway' && entry.status === 'active' && entry.instance) {
+      const persistence = new ModemGatewayDbPersistence(db, entry.id);
+      const wsHandler = new ModemGatewayWsHandler(persistence, server.log);
+      (entry.instance as ModemGatewayTelephonyProvider).setWsHandler(wsHandler);
+      server.log.info(`WsHandler attached to modem-gateway provider "${entry.displayName}" (${entry.id})`);
+    }
+  }
 
   // Get the first active provider instance for services that still need a single provider
   // (ConversationService, legacy webhook routes, call routes)

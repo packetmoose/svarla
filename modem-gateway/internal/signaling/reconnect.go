@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"log"
 	"math"
 	"sync"
 	"time"
@@ -76,12 +77,12 @@ func NewReconnectingClient(url string, tlsConfig *tls.Config, authenticator Auth
 }
 
 // Start establishes the initial connection (with authentication) and then
-// monitors for disconnection, reconnecting with exponential backoff as needed.
-// It blocks until the initial connection and authentication succeed, or
-// the context is cancelled.
+// Start begins the connection process in the background and returns immediately.
+// It retries with exponential backoff until successful or the context is cancelled.
+// Once connected, it monitors for disconnection and reconnects automatically.
 //
-// After Start returns nil, a background goroutine monitors the connection
-// and handles reconnection automatically.
+// Callers should register message handlers and callbacks before calling Start
+// to ensure no messages are missed on initial connection.
 func (rc *ReconnectingClient) Start(ctx context.Context) error {
 	rc.mu.Lock()
 	if rc.closed {
@@ -90,20 +91,84 @@ func (rc *ReconnectingClient) Start(ctx context.Context) error {
 	}
 	rc.mu.Unlock()
 
-	// Create a cancellable context for the reconnection loop.
+	// Create a cancellable context for the connection/reconnection loop.
 	loopCtx, cancel := context.WithCancel(ctx)
 	rc.cancel = cancel
 
-	// Perform initial connection.
-	if err := rc.connect(loopCtx); err != nil {
-		cancel()
-		return err
-	}
+	log.Printf("[signaling] starting connection to %s (background)", rc.url)
 
-	// Start background reconnection monitor.
-	go rc.monitorLoop(loopCtx)
+	// Run the initial connection and monitor loop in the background.
+	go rc.connectAndMonitor(loopCtx)
 
 	return nil
+}
+
+// connectAndMonitor performs the initial connection with retry, then monitors
+// for disconnection. Runs as a background goroutine started by Start().
+func (rc *ReconnectingClient) connectAndMonitor(ctx context.Context) {
+	defer close(rc.done)
+
+	log.Println("[signaling] connect-and-monitor goroutine started")
+
+	// Initial connection with retry and backoff.
+	failures := 0
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+
+		if err := rc.connect(ctx); err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			failures++
+			backoff := CalculateBackoff(failures, rc.initialBackoff, rc.maxBackoff)
+			log.Printf("[signaling] connection failed (%v), retrying in %v", err, backoff)
+
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(backoff):
+				continue
+			}
+		}
+		// Connected — fire reconnect handlers on initial connect too
+		// so that number/status reports are sent.
+		rc.fireReconnectHandlers()
+		break
+	}
+
+	// Monitor loop: watch for disconnection and reconnect.
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		// Wait for disconnection.
+		rc.waitForDisconnect(ctx)
+
+		if ctx.Err() != nil {
+			return
+		}
+
+		// Mark as disconnected and notify.
+		rc.setConnected(false)
+		log.Println("[signaling] disconnected from Svarla server")
+		rc.fireDisconnectHandlers()
+
+		// Close the old client.
+		rc.clientMu.Lock()
+		if rc.client != nil {
+			_ = rc.client.Close()
+			rc.client = nil
+		}
+		rc.clientMu.Unlock()
+
+		// Reconnect with exponential backoff.
+		rc.reconnectLoop(ctx)
+	}
 }
 
 // Send queues a message for sending over the WebSocket. Returns an error
@@ -211,6 +276,8 @@ func CalculateBackoff(failures int, initial, maxBackoff time.Duration) time.Dura
 
 // connect creates a new Client, connects, and authenticates.
 func (rc *ReconnectingClient) connect(ctx context.Context) error {
+	log.Printf("[signaling] connecting to %s", rc.url)
+
 	client := NewClient(rc.url, rc.tlsConfig)
 
 	if err := client.Connect(ctx); err != nil {
@@ -224,12 +291,16 @@ func (rc *ReconnectingClient) connect(ctx context.Context) error {
 	}
 	rc.handlersMu.RUnlock()
 
-	// Authenticate the new connection.
+	// Authenticate the new connection. The authenticator registers its own
+	// handler before we start reading, so no server messages are lost.
 	if rc.authenticator != nil {
 		if err := rc.authenticator.Authenticate(ctx, client); err != nil {
 			_ = client.Close()
 			return err
 		}
+	} else {
+		// No authenticator — start reading immediately.
+		client.StartReading()
 	}
 
 	// Store the new client.
@@ -238,45 +309,9 @@ func (rc *ReconnectingClient) connect(ctx context.Context) error {
 	rc.clientMu.Unlock()
 
 	rc.setConnected(true)
+	log.Println("[signaling] connected to Svarla server")
 
 	return nil
-}
-
-// monitorLoop watches for disconnection and performs reconnection with
-// exponential backoff. It runs until the context is cancelled.
-func (rc *ReconnectingClient) monitorLoop(ctx context.Context) {
-	defer close(rc.done)
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		default:
-		}
-
-		// Wait for disconnection.
-		rc.waitForDisconnect(ctx)
-
-		// Check if we should stop.
-		if ctx.Err() != nil {
-			return
-		}
-
-		// Mark as disconnected and notify.
-		rc.setConnected(false)
-		rc.fireDisconnectHandlers()
-
-		// Close the old client.
-		rc.clientMu.Lock()
-		if rc.client != nil {
-			_ = rc.client.Close()
-			rc.client = nil
-		}
-		rc.clientMu.Unlock()
-
-		// Reconnect with exponential backoff.
-		rc.reconnectLoop(ctx)
-	}
 }
 
 // waitForDisconnect blocks until the underlying client reports disconnected
@@ -323,10 +358,12 @@ func (rc *ReconnectingClient) reconnectLoop(ctx context.Context) {
 		// Attempt to connect and authenticate.
 		if err := rc.connect(ctx); err != nil {
 			failures++
+			log.Printf("[signaling] reconnection failed (%v), retrying in %v", err, CalculateBackoff(failures, rc.initialBackoff, rc.maxBackoff))
 			continue
 		}
 
 		// Success — reset backoff and notify.
+		log.Println("[signaling] reconnected to Svarla server")
 		rc.fireReconnectHandlers()
 		return
 	}

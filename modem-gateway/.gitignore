@@ -2,3 +2,9 @@
 /modem-gateway
 /voice-test
 /bin/*
+
+# Private key
+*.key
+
+# Generated config
+modem-gateway.yaml
