@@ -356,26 +356,10 @@ export class ModemGatewayWsHandler {
   }
 
   /**
-   * Generate a new pairing secret: 6-8 case-insensitive alphanumeric characters.
-   * Uses crypto.randomBytes for secure generation.
+   * Reset pairing: delete stored key, store provided secret, close active WS.
+   * The secret is provided by the caller (generated client-side).
    */
-  generatePairingSecret(): string {
-    const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    // Random length between 6 and 8
-    const length = 6 + (randomBytes(1)[0] % 3);
-    const bytes = randomBytes(length);
-    let secret = '';
-    for (let i = 0; i < length; i++) {
-      secret += chars[bytes[i] % chars.length];
-    }
-    return secret;
-  }
-
-  /**
-   * Reset pairing: delete stored key, generate new secret, close active WS.
-   * Returns the new pairing secret.
-   */
-  async resetPairing(): Promise<string> {
+  async resetPairing(secret: string): Promise<void> {
     this.logger.info('Resetting pairing');
 
     // Close any active connection
@@ -384,12 +368,10 @@ export class ModemGatewayWsHandler {
     // Delete stored public key
     await this.persistence.deletePublicKey();
 
-    // Generate and store new pairing secret
-    const secret = this.generatePairingSecret();
+    // Store the client-provided pairing secret
     await this.persistence.setPairingSecret(secret, new Date());
 
-    this.logger.info('Pairing reset complete, new secret generated');
-    return secret;
+    this.logger.info('Pairing reset complete, new secret stored');
   }
 
   // --- Private methods ---

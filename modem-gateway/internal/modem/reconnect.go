@@ -27,8 +27,8 @@ var ErrModemUnavailable = errors.New("modem: device unavailable")
 // ReconnectCallbacks holds the callbacks invoked on modem connect/disconnect events.
 type ReconnectCallbacks struct {
 	// OnConnected is called when the modem is recovered and reinitialized.
-	// It should notify Svarla of "modem_connected" status.
-	OnConnected func()
+	// The InitResult contains modem info and configuration details from initialization.
+	OnConnected func(result *InitResult)
 	// OnDisconnected is called when the modem is detected as unavailable.
 	// It should notify Svarla of "modem_disconnected" status.
 	OnDisconnected func()
@@ -216,7 +216,7 @@ func (rm *ReconnectManager) connect(ctx context.Context) {
 		return
 	}
 
-	_, err = RunInitSequence(ctx, m)
+	initResult, err := RunInitSequence(ctx, m)
 	if err != nil {
 		slog.Warn("Modem initialization failed, entering reconnection loop",
 			"error", err,
@@ -245,7 +245,7 @@ func (rm *ReconnectManager) connect(ctx context.Context) {
 	slog.Info("Modem connected and initialized")
 
 	if rm.callbacks.OnConnected != nil {
-		rm.callbacks.OnConnected()
+		rm.callbacks.OnConnected(initResult)
 	}
 }
 
@@ -300,7 +300,7 @@ func (rm *ReconnectManager) reconnectLoop(ctx context.Context) {
 			continue
 		}
 
-		_, err = RunInitSequence(ctx, m)
+		initResult, err := RunInitSequence(ctx, m)
 		if err != nil {
 			slog.Debug("Reconnection attempt failed: init sequence error",
 				"error", err,
@@ -328,7 +328,7 @@ func (rm *ReconnectManager) reconnectLoop(ctx context.Context) {
 		slog.Info("Modem reconnected and reinitialized")
 
 		if rm.callbacks.OnConnected != nil {
-			rm.callbacks.OnConnected()
+			rm.callbacks.OnConnected(initResult)
 		}
 		return
 	}

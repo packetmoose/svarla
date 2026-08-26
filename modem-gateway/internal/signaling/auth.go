@@ -108,6 +108,10 @@ func (a *PairingAuthenticator) Authenticate(ctx context.Context, client *Client)
 		}
 	})
 
+	// Start reading now that all handlers (including auth) are registered.
+	// This ensures the server's auth_challenge is never lost to a race.
+	client.StartReading()
+
 	// Initiate the appropriate auth flow.
 	if a.pairingSecret != "" {
 		if err := a.sendPairRequest(client); err != nil {

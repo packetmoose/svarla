@@ -1,5 +1,4 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import { randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import type { ProviderRegistry } from '../services/provider-registry.js';
 import {
@@ -18,7 +17,18 @@ const SECRET_FIELDS: Record<string, string[]> = {
   vonage: ['api_secret', 'private_key', 'private_key_path'],
   '46elks': ['api_password'],
   dummy: [],
-  'modem-gateway': ['pairing_secret'],
+  'modem-gateway': [],
+};
+
+/**
+ * Fields that should be completely stripped (not returned at all) per provider type.
+ * Unlike SECRET_FIELDS which are masked, these are removed from the response entirely.
+ */
+const STRIP_FIELDS: Record<string, string[]> = {
+  vonage: [],
+  '46elks': [],
+  dummy: [],
+  'modem-gateway': ['pairing_secret', 'pairing_secret_created_at'],
 };
 
 /**
@@ -34,14 +44,22 @@ function maskSecret(value: string): string {
 
 /**
  * Mask secret fields in a provider config object based on the provider type.
+ * Also strips fields that should never be returned to the client.
  */
 function maskConfig(
   type: string,
   config: Record<string, unknown>,
 ): Record<string, unknown> {
   const secretFields = SECRET_FIELDS[type] ?? [];
+  const stripFields = STRIP_FIELDS[type] ?? [];
   const masked: Record<string, unknown> = { ...config };
 
+  // Remove fields that should never be exposed
+  for (const field of stripFields) {
+    delete masked[field];
+  }
+
+  // Mask remaining secret fields
   for (const field of secretFields) {
     if (typeof masked[field] === 'string') {
       masked[field] = maskSecret(masked[field] as string);
@@ -52,21 +70,10 @@ function maskConfig(
 }
 
 /**
- * Generate a pairing secret for modem-gateway providers.
- * Produces 6-8 case-insensitive alphanumeric characters.
- *
- * Requirements: 1.2
+ * Regex for validating a client-provided pairing secret.
+ * Must be 6-8 case-insensitive alphanumeric characters.
  */
-function generatePairingSecret(): string {
-  const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-  const length = 6 + (randomBytes(1)[0] % 3);
-  const bytes = randomBytes(length);
-  let secret = '';
-  for (let i = 0; i < length; i++) {
-    secret += chars[bytes[i] % chars.length];
-  }
-  return secret;
-}
+const PAIRING_SECRET_REGEX = /^[a-z0-9]{6,8}$/i;
 
 const providerIdParamSchema = z.object({
   id: z.string().uuid('Invalid provider ID format'),
@@ -131,6 +138,10 @@ export function registerProviderRoutes(
         type: p.type,
         displayName: p.displayName,
         enabled: p.enabled,
+        ...(p.type === 'modem-gateway' ? {
+          connected: ((p.instance as ModemGatewayTelephonyProvider | null)
+            ?.getWsHandler()?.isConnected() ?? false),
+        } : {}),
       })),
     });
   });
@@ -157,24 +168,31 @@ export function registerProviderRoutes(
     const { type, displayName, config } = parseResult.data;
 
     try {
-      // For modem-gateway providers, generate a pairing secret and store it in config
+      // For modem-gateway providers, expect a client-provided pairing secret
       const providerConfig = { ...config } as Record<string, unknown>;
-      let pairingSecret: string | undefined;
 
       if (type === 'modem-gateway') {
-        pairingSecret = generatePairingSecret();
-        providerConfig.pairing_secret = pairingSecret;
+        const pairingSecret = config.pairing_secret;
+        if (!pairingSecret || typeof pairingSecret !== 'string' || !PAIRING_SECRET_REGEX.test(pairingSecret)) {
+          return reply.status(400).send({
+            error: 'Validation failed',
+            fieldErrors: [{
+              field: 'config.pairing_secret',
+              message: 'A pairing secret (6-8 alphanumeric characters) is required',
+            }],
+          });
+        }
+        providerConfig.pairing_secret = pairingSecret.toLowerCase();
         providerConfig.pairing_secret_created_at = new Date().toISOString();
       }
 
       const result = await registry.addProvider(type, displayName, providerConfig);
 
-      // For modem-gateway, include pairing_secret and ws_endpoint in response
-      if (type === 'modem-gateway' && pairingSecret) {
+      // For modem-gateway, include ws_endpoint in response (secret is NOT returned)
+      if (type === 'modem-gateway') {
         return reply.status(201).send({
           providerId: result.providerId,
           webhookUrls: result.webhookUrls,
-          pairingSecret,
           wsEndpoint: `/ws/providers/${result.providerId}/signaling`,
         });
       }
@@ -349,7 +367,7 @@ export function registerProviderRoutes(
   /**
    * POST /api/providers/:id/reset
    * Reset a modem-gateway provider's pairing: close WS, delete stored key,
-   * generate new pairing secret.
+   * store client-provided pairing secret.
    *
    * Requirements: 2.6
    */
@@ -380,31 +398,40 @@ export function registerProviderRoutes(
       });
     }
 
+    // Validate client-provided pairing secret
+    const body = request.body as Record<string, unknown> | undefined;
+    const pairingSecret = body?.pairingSecret;
+    if (!pairingSecret || typeof pairingSecret !== 'string' || !PAIRING_SECRET_REGEX.test(pairingSecret)) {
+      return reply.status(400).send({
+        error: 'Validation failed',
+        fieldErrors: [{
+          field: 'pairingSecret',
+          message: 'A pairing secret (6-8 alphanumeric characters) is required',
+        }],
+      });
+    }
+
+    const normalizedSecret = pairingSecret.toLowerCase();
+
     const instance = provider.instance as ModemGatewayTelephonyProvider | null;
     const wsHandler = instance?.getWsHandler();
 
-    let newSecret: string;
-
     if (wsHandler) {
-      // Use the WS handler's resetPairing which closes connection, deletes key, generates new secret
-      newSecret = await wsHandler.resetPairing();
-    } else {
-      // No WS handler yet (not connected) — just generate a new secret in config
-      newSecret = generatePairingSecret();
+      // Use the WS handler's resetPairing which closes connection, deletes key, stores new secret
+      await wsHandler.resetPairing(normalizedSecret);
     }
 
     // Update the provider config with the new secret
     await registry.updateProvider(id, {
       config: {
         ...provider.config,
-        pairing_secret: newSecret,
+        pairing_secret: normalizedSecret,
         pairing_secret_created_at: new Date().toISOString(),
         public_key: null, // Clear stored public key
       },
     });
 
     return reply.status(200).send({
-      pairingSecret: newSecret,
       wsEndpoint: `/ws/providers/${id}/signaling`,
     });
   });
