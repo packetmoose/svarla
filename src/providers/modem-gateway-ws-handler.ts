@@ -206,6 +206,9 @@ const PING_INTERVAL_MS = 30_000;
 /** Pong timeout: 60 seconds */
 const PONG_TIMEOUT_MS = 60_000;
 
+/** Global auth timeout: close connection if not authenticated within 30 seconds */
+const AUTH_TIMEOUT_MS = 30_000;
+
 /**
  * ModemGatewayWsHandler manages the signaling WebSocket connection for a single
  * modem-gateway provider instance.
@@ -239,6 +242,9 @@ export class ModemGatewayWsHandler {
   private pingInterval: ReturnType<typeof setInterval> | null = null;
   private pongTimeout: ReturnType<typeof setTimeout> | null = null;
   private pongReceived = true;
+
+  // Auth timeout state
+  private authTimeout: ReturnType<typeof setTimeout> | null = null;
 
   constructor(persistence: WsHandlerPersistence, logger: WsHandlerLogger) {
     this.persistence = persistence;
@@ -314,6 +320,16 @@ export class ModemGatewayWsHandler {
 
     // Issue challenge or wait for pairing message
     void this.initiateAuth();
+
+    // Global auth timeout: close connection if not authenticated within 30s.
+    // This covers both the challenge-response and the unpaired "waiting for auth_pair" case.
+    this.authTimeout = setTimeout(() => {
+      if (!this.authenticated) {
+        this.logger.warn('Authentication timeout, closing connection');
+        this.sendMessage({ type: 'auth_error', reason: 'auth_timeout' });
+        this.closeExisting();
+      }
+    }, AUTH_TIMEOUT_MS);
   }
 
   /**
@@ -541,6 +557,7 @@ export class ModemGatewayWsHandler {
     await this.persistence.clearPairingSecret();
 
     this.authenticated = true;
+    this.clearAuthTimeout();
     this.logger.info('Pairing successful, public key stored');
 
     this.sendMessage({ type: 'auth_success' });
@@ -615,6 +632,7 @@ export class ModemGatewayWsHandler {
     }
 
     this.authenticated = true;
+    this.clearAuthTimeout();
     this.logger.info('Challenge-response authentication successful');
 
     this.sendMessage({ type: 'auth_success' });
@@ -799,6 +817,7 @@ export class ModemGatewayWsHandler {
   private handleDisconnect(): void {
     this.stopPingInterval();
     this.clearPongTimeout();
+    this.clearAuthTimeout();
     this.ws = null;
     this.authenticated = false;
     this.pendingChallenge = null;
@@ -812,6 +831,7 @@ export class ModemGatewayWsHandler {
   private closeExisting(): void {
     this.stopPingInterval();
     this.clearPongTimeout();
+    this.clearAuthTimeout();
     this.authenticated = false;
     this.pendingChallenge = null;
 
@@ -883,6 +903,16 @@ export class ModemGatewayWsHandler {
     if (this.pongTimeout) {
       clearTimeout(this.pongTimeout);
       this.pongTimeout = null;
+    }
+  }
+
+  /**
+   * Clear the global auth timeout.
+   */
+  private clearAuthTimeout(): void {
+    if (this.authTimeout) {
+      clearTimeout(this.authTimeout);
+      this.authTimeout = null;
     }
   }
 
