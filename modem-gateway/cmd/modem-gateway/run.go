@@ -98,7 +98,7 @@ func run(ctx context.Context, configPath string) error {
 	// Register signaling handlers before Start() so no messages are missed.
 	// Subsystem pointers are accessed via ModemLifecycle getters (thread-safe, nil when modem absent).
 	sigClient.OnMessage(func(msg signaling.Message) {
-		dispatchSignalingMessage(msg, modemLife.SMSManager(), modemLife.USSDManager(), sigClient)
+		dispatchSignalingMessage(msg, modemLife.SMSManager(), modemLife.USSDManager(), modemLife.CallManager(), sigClient)
 	})
 
 	sigClient.OnReconnect(func() {
@@ -119,7 +119,7 @@ func run(ctx context.Context, configPath string) error {
 
 	// Shutdown coordinator.
 	shutdownCoord := shutdown.NewCoordinator(shutdown.CoordinatorConfig{
-		CallTerminator:   nil, // call manager lifecycle is managed by ModemLifecycle
+		CallTerminator:   modemLife,
 		SMSBuffer:        smsBuffer,
 		MissedCallBuffer: missedCallBuf,
 		SignalingClient:   sigClient,

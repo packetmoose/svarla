@@ -260,6 +260,7 @@ func (mgr *Manager) handleCMTI(urc modem.URC) {
 		)
 
 		complete, assembled := mgr.reassembler.AddPart(
+			msg.From,
 			concatInfo.RefNum,
 			concatInfo.SeqNum,
 			concatInfo.TotalParts,
