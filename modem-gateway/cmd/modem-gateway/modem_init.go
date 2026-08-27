@@ -131,6 +131,26 @@ func (ml *ModemLifecycle) Modem() *modem.Modem {
 	return ml.rm.Modem()
 }
 
+// HasActiveCall returns true if the current call manager has an active call.
+// Satisfies the shutdown.CallTerminator interface.
+func (ml *ModemLifecycle) HasActiveCall() bool {
+	ml.mu.RLock()
+	cm := ml.callManager
+	ml.mu.RUnlock()
+	return cm != nil && cm.HasActiveCall()
+}
+
+// Shutdown terminates the active call if one exists.
+// Satisfies the shutdown.CallTerminator interface.
+func (ml *ModemLifecycle) Shutdown() {
+	ml.mu.RLock()
+	cm := ml.callManager
+	ml.mu.RUnlock()
+	if cm != nil {
+		cm.Shutdown()
+	}
+}
+
 // onModemConnected is called by ReconnectManager when the modem is detected
 // and initialized. It sets up all telephony subsystems.
 func (ml *ModemLifecycle) onModemConnected(initResult *modem.InitResult) {
@@ -224,11 +244,6 @@ func (ml *ModemLifecycle) onModemConnected(initResult *modem.InitResult) {
 	})
 	statusReporter.Start(ml.ctx)
 
-	// Register call manager message handler on the signaling client.
-	if callManager != nil {
-		ml.sigClient.OnMessage(callManager.HandleMessage)
-	}
-
 	// Store subsystem references.
 	ml.mu.Lock()
 	ml.smsMgr = smsMgr
@@ -260,7 +275,7 @@ func (ml *ModemLifecycle) onCallLost() {
 	ml.mu.RUnlock()
 
 	if cm != nil {
-		cm.HandleDisconnect()
+		cm.HandleModemLost()
 	}
 }
 

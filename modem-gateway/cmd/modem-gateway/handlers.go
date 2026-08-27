@@ -14,6 +14,7 @@ func dispatchSignalingMessage(
 	msg signaling.Message,
 	smsMgr *sms.Manager,
 	ussdMgr *ussd.Manager,
+	callMgr *signaling.CallManager,
 	client signaling.MessageSender,
 ) {
 	switch msg.Type {
@@ -24,6 +25,10 @@ func dispatchSignalingMessage(
 	case signaling.TypeUSSDRequest:
 		if ussdMgr != nil {
 			handleUSSDRequest(msg, ussdMgr, client)
+		}
+	case signaling.TypeMakeCall, signaling.TypeAnswerCall, signaling.TypeEndCall:
+		if callMgr != nil {
+			callMgr.HandleMessage(msg)
 		}
 	}
 }

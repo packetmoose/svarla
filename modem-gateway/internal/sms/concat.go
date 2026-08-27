@@ -1,6 +1,7 @@
 package sms
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
@@ -8,6 +9,19 @@ import (
 // DefaultStaleTimeout is the default duration after which incomplete
 // multi-part messages are discarded.
 const DefaultStaleTimeout = 5 * time.Minute
+
+// concatKey uniquely identifies a concatenated SMS message by combining
+// the sender number and the concatenation reference number. This prevents
+// collisions when two different senders use the same reference number.
+type concatKey struct {
+	sender string
+	refNum int
+}
+
+// String returns a human-readable representation for logging/debugging.
+func (k concatKey) String() string {
+	return fmt.Sprintf("%s/%d", k.sender, k.refNum)
+}
 
 // smsPart represents a single part of a concatenated SMS.
 type smsPart struct {
@@ -59,12 +73,12 @@ func (pm *pendingMessage) assemble() string {
 }
 
 // Reassembler handles concatenated (multi-part) SMS reassembly.
-// It tracks in-progress messages by their concatenation reference number
-// and assembles them when all parts arrive. Stale incomplete messages
+// It tracks in-progress messages by their sender and concatenation reference
+// number, and assembles them when all parts arrive. Stale incomplete messages
 // are cleaned up after a configurable timeout.
 type Reassembler struct {
 	mu           sync.Mutex
-	pending      map[int]*pendingMessage
+	pending      map[concatKey]*pendingMessage
 	staleTimeout time.Duration
 }
 
@@ -75,12 +89,13 @@ func NewReassembler(staleTimeout time.Duration) *Reassembler {
 		staleTimeout = DefaultStaleTimeout
 	}
 	return &Reassembler{
-		pending:      make(map[int]*pendingMessage),
+		pending:      make(map[concatKey]*pendingMessage),
 		staleTimeout: staleTimeout,
 	}
 }
 
 // AddPart adds a part of a concatenated SMS message.
+// sender is the originating phone number (used to disambiguate reference numbers).
 // refNum is the concatenation reference number (shared across all parts of the same message).
 // seqNum is the 1-based sequence number of this part.
 // totalParts is the total number of parts in the message.
@@ -90,9 +105,9 @@ func NewReassembler(staleTimeout time.Duration) *Reassembler {
 //   - complete: true if all parts have been received and the message is fully assembled.
 //   - assembled: the full concatenated message text (only meaningful when complete is true).
 //
-// If this part is a duplicate (same refNum and seqNum already received), it is ignored.
+// If this part is a duplicate (same sender, refNum, and seqNum already received), it is ignored.
 // Stale incomplete messages are cleaned up on each call to AddPart.
-func (r *Reassembler) AddPart(refNum int, seqNum int, totalParts int, body string) (complete bool, assembled string) {
+func (r *Reassembler) AddPart(sender string, refNum int, seqNum int, totalParts int, body string) (complete bool, assembled string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -104,8 +119,10 @@ func (r *Reassembler) AddPart(refNum int, seqNum int, totalParts int, body strin
 		return false, ""
 	}
 
+	key := concatKey{sender: sender, refNum: refNum}
+
 	// Look up or create the pending message.
-	pm, exists := r.pending[refNum]
+	pm, exists := r.pending[key]
 	if !exists {
 		pm = &pendingMessage{
 			RefNum:     refNum,
@@ -113,7 +130,7 @@ func (r *Reassembler) AddPart(refNum int, seqNum int, totalParts int, body strin
 			Parts:      make([]smsPart, 0, totalParts),
 			CreatedAt:  time.Now(),
 		}
-		r.pending[refNum] = pm
+		r.pending[key] = pm
 	}
 
 	// Check for duplicate part.
@@ -122,7 +139,7 @@ func (r *Reassembler) AddPart(refNum int, seqNum int, totalParts int, body strin
 			// Duplicate part, ignore.
 			if pm.isComplete() {
 				assembled = pm.assemble()
-				delete(r.pending, refNum)
+				delete(r.pending, key)
 				return true, assembled
 			}
 			return false, ""
@@ -138,7 +155,7 @@ func (r *Reassembler) AddPart(refNum int, seqNum int, totalParts int, body strin
 	// Check if the message is now complete.
 	if pm.isComplete() {
 		assembled = pm.assemble()
-		delete(r.pending, refNum)
+		delete(r.pending, key)
 		return true, assembled
 	}
 
@@ -156,9 +173,9 @@ func (r *Reassembler) PendingCount() int {
 // longer than the stale timeout. Must be called with r.mu held.
 func (r *Reassembler) cleanupStaleLocked() {
 	now := time.Now()
-	for refNum, pm := range r.pending {
+	for key, pm := range r.pending {
 		if now.Sub(pm.CreatedAt) > r.staleTimeout {
-			delete(r.pending, refNum)
+			delete(r.pending, key)
 		}
 	}
 }
