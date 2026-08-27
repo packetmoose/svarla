@@ -6,3 +6,11 @@ android
 *.md
 .env
 version.json
+modem-gateway
+mediabridge
+build-output
+docker
+docs
+scripts
+.github
+.idea

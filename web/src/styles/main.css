@@ -576,6 +576,27 @@ textarea {
   color: var(--md-on-surface-variant);
 }
 
+.badge-ok {
+  background: var(--md-success-container);
+  color: var(--md-on-success-container);
+}
+
+.badge-error {
+  background: var(--md-error-container);
+  color: var(--md-on-error-container);
+}
+
+.badge-not-connected {
+  background: var(--md-surface-container-high);
+  color: var(--md-on-surface-variant);
+}
+
+.badge-disabled {
+  background: var(--md-surface-container-high);
+  color: var(--md-on-surface-variant);
+  opacity: 0.7;
+}
+
 /* ===== Buttons ===== */
 
 .btn-sm {

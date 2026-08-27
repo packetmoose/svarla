@@ -133,16 +133,44 @@ export function registerProviderRoutes(
     const providers = registry.listProviders();
 
     return reply.status(200).send({
-      providers: providers.map((p) => ({
-        id: p.id,
-        type: p.type,
-        displayName: p.displayName,
-        enabled: p.enabled,
-        ...(p.type === 'modem-gateway' ? {
-          connected: ((p.instance as ModemGatewayTelephonyProvider | null)
-            ?.getWsHandler()?.isConnected() ?? false),
-        } : {}),
-      })),
+      providers: providers.map((p) => {
+        // Compute a unified status: 'ok' | 'error' | 'not_connected' | 'disabled'
+        let providerStatus: 'ok' | 'error' | 'not_connected' | 'disabled';
+        if (!p.enabled) {
+          providerStatus = 'disabled';
+        } else if (p.status === 'unavailable') {
+          providerStatus = 'error';
+        } else if (p.type === 'modem-gateway') {
+          const instance = p.instance as ModemGatewayTelephonyProvider | null;
+          const connected = instance?.getWsHandler()?.isConnected() ?? false;
+          if (!connected) {
+            providerStatus = 'not_connected';
+          } else {
+            // WS is connected — check modem health
+            const modemStatus = instance?.getModemStatus();
+            if (!modemStatus || modemStatus.signal === 0 || !modemStatus.network) {
+              providerStatus = 'error';
+            } else {
+              providerStatus = 'ok';
+            }
+          }
+        } else {
+          // Cloud providers: if active and enabled, they're OK
+          providerStatus = p.status === 'active' ? 'ok' : 'error';
+        }
+
+        return {
+          id: p.id,
+          type: p.type,
+          displayName: p.displayName,
+          enabled: p.enabled,
+          status: providerStatus,
+          ...(p.type === 'modem-gateway' ? {
+            connected: (p.instance as ModemGatewayTelephonyProvider | null)
+              ?.getWsHandler()?.isConnected() ?? false,
+          } : {}),
+        };
+      }),
     });
   });
 

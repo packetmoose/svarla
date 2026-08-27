@@ -9,6 +9,7 @@ interface ProviderSummary {
   displayName: string;
   enabled: boolean;
   connected?: boolean;
+  status: "ok" | "error" | "not_connected" | "disabled";
 }
 
 interface ProviderDetail extends ProviderSummary {
@@ -911,7 +912,7 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
     if (modemStatusLoading && !modemStatus) {
       return (
         <div class="modem-status-section">
-          <h4>Modem Status</h4>
+          <h4>Gateway Connection</h4>
           <p class="form-hint">Loading status...</p>
         </div>
       );
@@ -923,19 +924,26 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
     const signalLabel = modemStatus.signal != null ? `${modemStatus.signal}%` : "Unknown";
 
     return (
-      <div class="modem-status-section">
-        <h4>Modem Status</h4>
-
-        <div class="modem-connection-indicator">
-          <span class={`connection-dot ${modemStatus.connected ? "connected" : "disconnected"}`}
-                aria-hidden="true" />
-          <span class={modemStatus.connected ? "text-connected" : "text-disconnected"}>
-            {modemStatus.connected ? "Connected" : "Disconnected"}
-          </span>
+      <Fragment>
+        {/* Section 1: Connection to Svarla server */}
+        <div class="modem-status-section">
+          <h4>Gateway Connection</h4>
+          <p class="form-hint">Connection between the modem gateway and the Svarla server.</p>
+          <div class="modem-connection-indicator">
+            <span class={`connection-dot ${modemStatus.connected ? "connected" : "disconnected"}`}
+                  aria-hidden="true" />
+            <span class={modemStatus.connected ? "text-connected" : "text-disconnected"}>
+              {modemStatus.connected ? "Connected" : "Disconnected"}
+            </span>
+          </div>
         </div>
 
+        {/* Section 2: Modem / provider health */}
         {modemStatus.connected && (
-          <Fragment>
+          <div class="modem-status-section">
+            <h4>Modem Status</h4>
+            <p class="form-hint">Status reported by the modem hardware.</p>
+
             {modemStatus.modemUnsupportedWarning && (
               <div class="modem-warning" role="alert">
                 {modemStatus.modemUnsupportedWarning}
@@ -989,9 +997,9 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
                 Stale data: {modemStatus.stale.join(", ")}
               </p>
             )}
-          </Fragment>
+          </div>
         )}
-      </div>
+      </Fragment>
     );
   }
 
@@ -1030,7 +1038,19 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
           <dt>Type</dt>
           <dd>{selectedProvider.type}</dd>
           <dt>Status</dt>
-          <dd>{selectedProvider.enabled ? "Enabled" : "Disabled"}</dd>
+          <dd>
+            <span class={`badge ${
+              selectedProvider.status === "ok" ? "badge-ok" :
+              selectedProvider.status === "not_connected" ? "badge-not-connected" :
+              selectedProvider.status === "disabled" ? "badge-disabled" :
+              "badge-error"
+            }`}>
+              {selectedProvider.status === "ok" ? "OK" :
+               selectedProvider.status === "not_connected" ? "Not Connected" :
+               selectedProvider.status === "disabled" ? "Disabled" :
+               "Error"}
+            </span>
+          </dd>
           <dt>ID</dt>
           <dd class="monospace">{selectedProvider.id}</dd>
         </dl>
@@ -1110,16 +1130,17 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
             >
               <span class="provider-name">{provider.displayName}</span>
               <span class="provider-type badge">{provider.type}</span>
-              <span class={`provider-status badge ${provider.enabled ? "badge-success" : "badge-muted"}`}>
-                {provider.enabled ? "Enabled" : "Disabled"}
+              <span class={`provider-status badge ${
+                provider.status === "ok" ? "badge-ok" :
+                provider.status === "not_connected" ? "badge-not-connected" :
+                provider.status === "disabled" ? "badge-disabled" :
+                "badge-error"
+              }`}>
+                {provider.status === "ok" ? "OK" :
+                 provider.status === "not_connected" ? "Not Connected" :
+                 provider.status === "disabled" ? "Disabled" :
+                 "Error"}
               </span>
-              {provider.type === "modem-gateway" && provider.connected !== undefined && (
-                <span class={`provider-connection badge ${provider.connected ? "badge-connected" : "badge-disconnected"}`}>
-                  <span class={`connection-dot-sm ${provider.connected ? "connected" : "disconnected"}`}
-                        aria-hidden="true" />
-                  {provider.connected ? "Connected" : "Disconnected"}
-                </span>
-              )}
             </div>
             <div class="provider-actions">
               <button
