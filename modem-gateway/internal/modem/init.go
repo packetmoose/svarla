@@ -64,6 +64,7 @@ func RunInitSequence(ctx context.Context, m *Modem) (*InitResult, error) {
 		{"ATV1", "verbose result codes", false},
 		{"AT+CLIP=1", "caller ID presentation", false},
 		{"AT+DDET=1", "DTMF detection", true},
+		{"AT+CATR=0", "route all URCs to this port", true},
 	}
 
 	for _, c := range configCmds {

@@ -205,6 +205,7 @@ func (rm *ReconnectManager) connect(ctx context.Context) {
 	}
 
 	m := New(port)
+	m.SetLogger(slog.Default())
 	m.Open()
 
 	sm := NewStateMachine()
@@ -290,6 +291,7 @@ func (rm *ReconnectManager) reconnectLoop(ctx context.Context) {
 
 		// Port opened - try to initialize.
 		m := New(port)
+		m.SetLogger(slog.Default())
 		m.Open()
 
 		sm := NewStateMachine()

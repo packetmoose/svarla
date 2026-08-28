@@ -336,6 +336,10 @@ func (cm *CallManager) handleURC(urc modem.URC) {
 		cm.handleCLIP(urc)
 	case "NO CARRIER":
 		cm.handleNoCarrier()
+	case "MISSED_CALL":
+		// SIM7600-specific: sent instead of NO CARRIER when an incoming call
+		// rings but is never answered. Treat the same as NO CARRIER for cleanup.
+		cm.handleNoCarrier()
 	case "BUSY":
 		cm.handleBusy()
 	}
@@ -674,6 +678,8 @@ func (cm *CallManager) sendIncomingCall(callID, from string) {
 
 	if err := cm.sigClient.Send(msg); err != nil {
 		log.Printf("[calls] failed to send incoming_call message: %v", err)
+	} else {
+		log.Printf("[calls] incoming call reported to server: callID=%s from=%s", callID, from)
 	}
 }
 
