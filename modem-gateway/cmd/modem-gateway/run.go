@@ -129,6 +129,11 @@ func run(ctx context.Context, configPath string) error {
 	log.Println("modem-gateway is running")
 	<-ctx.Done()
 
+	// Flush SMS and missed call buffers to disk immediately. This is fast
+	// (local file I/O only) and must happen before the potentially slow modem
+	// teardown to guarantee persistence even if the force-kill timer fires.
+	shutdownCoord.FlushBuffers()
+
 	// Stop modem lifecycle (halts reconnect loop, tears down subsystems).
 	modemLife.Stop()
 

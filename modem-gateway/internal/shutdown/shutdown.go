@@ -130,3 +130,22 @@ func (c *Coordinator) Shutdown(ctx context.Context) error {
 	log.Println("shutdown: graceful shutdown complete")
 	return nil
 }
+
+// FlushBuffers flushes SMS and missed call buffers to disk. This is intended
+// to be called early in the shutdown sequence — before potentially slow
+// operations like modem teardown — to ensure data is persisted even if the
+// process is force-killed.
+func (c *Coordinator) FlushBuffers() {
+	if c.smsBuffer != nil {
+		log.Println("shutdown: flushing SMS buffer to disk")
+		if err := c.smsBuffer.Flush(); err != nil {
+			log.Printf("shutdown: failed to flush SMS buffer: %v", err)
+		}
+	}
+	if c.missedCallBuffer != nil {
+		log.Println("shutdown: flushing missed call buffer to disk")
+		if err := c.missedCallBuffer.Flush(); err != nil {
+			log.Printf("shutdown: failed to flush missed call buffer: %v", err)
+		}
+	}
+}

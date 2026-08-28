@@ -139,15 +139,11 @@ func (rm *ReconnectManager) Start(ctx context.Context) {
 }
 
 // Stop halts the health monitoring loop and closes the modem connection.
+// The modem is closed first to immediately unblock any in-flight AT command
+// (e.g. a health check waiting on an unresponsive device), so the monitoring
+// loop can exit without waiting for the command timeout.
 func (rm *ReconnectManager) Stop() {
-	if rm.cancel != nil {
-		rm.cancel()
-	}
-
-	// Wait for the monitoring loop to exit.
-	<-rm.done
-
-	// Close the modem if connected.
+	// Close the modem first to unblock any pending SendCommand via m.done.
 	rm.mu.Lock()
 	if rm.modem != nil {
 		_ = rm.modem.Close()
@@ -155,6 +151,12 @@ func (rm *ReconnectManager) Stop() {
 	}
 	rm.available = false
 	rm.mu.Unlock()
+
+	// Cancel context and wait for the monitoring loop to exit (should be instant now).
+	if rm.cancel != nil {
+		rm.cancel()
+	}
+	<-rm.done
 }
 
 // handleDisconnect is called when the modem is detected as unavailable.
