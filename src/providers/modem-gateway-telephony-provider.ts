@@ -73,6 +73,7 @@ export class ModemGatewayTelephonyProvider implements TelephonyProvider {
   private eventListeners: Array<(event: TelephonyEvent) => void> = [];
   private pendingOperations: Map<string, PendingOperation> = new Map();
   private modemStatus: StatusData | null = null;
+  private numberReportCallback: (() => void) | null = null;
   readonly registryId: string;
 
   constructor(config: ModemGatewayProviderConfig) {
@@ -234,6 +235,14 @@ export class ModemGatewayTelephonyProvider implements TelephonyProvider {
   }
 
   /**
+   * Register a callback invoked whenever a number_report message is received.
+   * Used to trigger an automatic number sync when the gateway reports a new number.
+   */
+  onNumberReport(callback: () => void): void {
+    this.numberReportCallback = callback;
+  }
+
+  /**
    * Modem-gateway does not use HTTP webhooks.
    *
    * Requirements: 12.8
@@ -262,6 +271,13 @@ export class ModemGatewayTelephonyProvider implements TelephonyProvider {
 
     handler.onDisconnect(() => {
       this.rejectAllPending(new ProviderUnavailableError('Modem gateway disconnected'));
+      // Clear the reported number so listNumbers() returns empty while disconnected.
+      // Fire the callback to trigger an automatic sync that deactivates the number.
+      this.reportedNumber = null;
+      this.reportedCapabilities = new Set();
+      if (this.numberReportCallback) {
+        this.numberReportCallback();
+      }
     });
 
     handler.onMessage((msg) => {
@@ -339,6 +355,11 @@ export class ModemGatewayTelephonyProvider implements TelephonyProvider {
       // number_unavailable
       this.reportedNumber = null;
       this.reportedCapabilities = new Set();
+    }
+
+    // Trigger automatic number sync so the new number is persisted immediately.
+    if (this.numberReportCallback) {
+      this.numberReportCallback();
     }
   }
 

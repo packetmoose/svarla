@@ -188,10 +188,19 @@ func (sr *StatusReporter) queryAll() (signal int, network string, operator strin
 		sr.lastOp = op
 	}
 
+	// If the modem reports measurable signal but network status is "unknown" (CREG stat 4),
+	// it likely means the modem sees a cell tower but hasn't completed registration yet.
+	// Report "searching" which is more informative than "unknown" for the user.
+	if net == "unknown" && sig > 0 {
+		net = "searching"
+	}
+
 	return sig, net, op, stale
 }
 
-// querySignal sends AT+CSQ and parses the signal strength value (0-31, 99=unknown).
+// querySignal sends AT+CSQ and parses the signal strength value (0-31).
+// The raw CSQ value 99 means "not known or not detectable" and is mapped to 0
+// so that clients don't misinterpret it as a high percentage.
 // Response format: +CSQ: <rssi>,<ber>
 func (sr *StatusReporter) querySignal() (int, error) {
 	resp, err := sr.modem.SendCommand("AT+CSQ", statusQueryTimeout)
@@ -199,7 +208,11 @@ func (sr *StatusReporter) querySignal() (int, error) {
 		return 0, err
 	}
 
-	return parseCSQ(resp), nil
+	val := parseCSQ(resp)
+	if val == 99 {
+		return 0, nil
+	}
+	return val, nil
 }
 
 // queryNetwork sends AT+CREG? and parses the registration status.

@@ -4,12 +4,17 @@ package modem
 
 import (
 	"bufio"
+	"context"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 	"time"
 )
+
+// logLevelVerbose is the custom log level for raw AT command tracing.
+// Matches config.LevelVerbose (-8) without importing the config package.
+const logLevelVerbose = slog.Level(-8)
 
 // URC represents an unsolicited result code received from the modem.
 type URC struct {
@@ -203,7 +208,7 @@ func (m *Modem) executeCommand(cmd *command) {
 	// Write command to serial port.
 	line := cmd.cmd + "\r\n"
 	if m.logger != nil {
-		m.logger.Debug("AT TX", "cmd", cmd.cmd)
+		m.logger.Log(context.Background(), logLevelVerbose, "AT TX", "cmd", cmd.cmd)
 	}
 	if _, err := m.port.Write([]byte(line)); err != nil {
 		cmd.response <- commandResult{err: fmt.Errorf("modem: write failed: %w", err)}
@@ -221,7 +226,7 @@ func (m *Modem) executeCommand(cmd *command) {
 		// Timeout. Try to deliver timeout error. The reader might
 		// deliver at the same moment, so use non-blocking send.
 		if m.logger != nil {
-			m.logger.Debug("AT TIMEOUT", "cmd", cmd.cmd, "timeout", cmd.timeout)
+			m.logger.Log(context.Background(), logLevelVerbose, "AT TIMEOUT", "cmd", cmd.cmd, "timeout", cmd.timeout)
 		}
 		select {
 		case cmd.response <- commandResult{err: ErrTimeout}:
@@ -264,7 +269,7 @@ func (m *Modem) readLoop() {
 		}
 
 		if m.logger != nil {
-			m.logger.Debug("AT RX", "line", line)
+			m.logger.Log(context.Background(), logLevelVerbose, "AT RX", "line", line)
 		}
 
 		// Check if this line is a final result code for a pending command.
@@ -295,17 +300,28 @@ func (m *Modem) readLoop() {
 		m.pendingMu.Unlock()
 		if pendingCmd != nil && strings.EqualFold(strings.TrimSpace(line), strings.TrimSpace(pendingCmd.cmd)) {
 			if m.logger != nil {
-				m.logger.Debug("AT ECHO (filtered)", "line", line)
+				m.logger.Log(context.Background(), logLevelVerbose, "AT ECHO (filtered)", "line", line)
 			}
 			continue
 		}
 
 		// Known URCs are dispatched even during command execution.
+		// However, some URCs (like +CREG:) are also valid solicited responses
+		// to queries (AT+CREG?). When a command is pending, dispatch the URC
+		// AND accumulate the line as a response so the command gets it.
 		if isKnownURC(line) {
 			if m.logger != nil {
-				m.logger.Debug("AT URC", "line", line)
+				m.logger.Log(context.Background(), logLevelVerbose, "AT URC", "line", line)
 			}
 			m.dispatchURC(line)
+
+			// Also accumulate as response line if a command is pending,
+			// since this may be the solicited answer to that command.
+			m.pendingMu.Lock()
+			if m.pendingCmd != nil {
+				m.pendingLines = append(m.pendingLines, line)
+			}
+			m.pendingMu.Unlock()
 			continue
 		}
 
@@ -366,6 +382,7 @@ var knownURCPrefixes = []string{
 	"+CDS:",
 	"NO CARRIER",
 	"+CRING:",
+	"MISSED_CALL:",
 }
 
 // isKnownURC checks if a line starts with a known URC prefix.

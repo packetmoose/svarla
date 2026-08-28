@@ -511,6 +511,21 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
     });
   }
 
+  // Wire up automatic number sync for modem-gateway providers.
+  // When a number_report is received, trigger syncNumbers() so the number
+  // is persisted to the database immediately without requiring manual sync.
+  for (const providerEntry of activeProviders) {
+    if (providerEntry.type === 'modem-gateway') {
+      const modemProvider = providerEntry.instance as ModemGatewayTelephonyProvider;
+      const providerId = providerEntry.id;
+      modemProvider.onNumberReport(() => {
+        numberManagementService.syncNumbers(providerId).catch((err) => {
+          server.log.error(err, `Auto-sync numbers failed for provider "${providerEntry.displayName}" after number_report`);
+        });
+      });
+    }
+  }
+
   // Middleware
   registerSessionMiddleware(server, authService, { webInterfaceEnabled: config.webInterfaceEnabled });
 
