@@ -470,43 +470,22 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
         }
       } else if (event.type === 'incoming_call') {
         // Skip if this call is already tracked by the orchestrator (handleInbound already notified devices).
-        // The event.callId here is the Vonage UUID; the orchestrator tracks it via providerCallToInternal.
         if (callOrchestrator.getCallIdByProviderCallId(event.callId)) {
           return;
         }
 
-        // Track ringing call for late-joining clients
-        activeCalls.set(event.callId, {
-          callId: event.callId,
-          status: 'ringing',
-          from: event.from,
-          providerNumber: event.to,
-          startedAt: Date.now(),
-        });
-
-        const wsEvent = {
-          type: 'call_event' as const,
-          data: {
-            callId: event.callId,
-            status: 'ringing',
-            from: event.from,
-            providerNumber: event.to,
-          },
-        };
-        wsBroadcaster.broadcast(wsEvent);
-
-        deviceRegistryManager.getActiveDevicesWithPushInfo().then((devices) => {
-          if (devices.length > 0) {
-            wakeSignalPublisher.sendToAllDevices(devices, {
-              id: event.callId,
-              priority: 'high',
-            }).catch((err) => {
-              server.log.error(err, 'Failed to send wake signals for incoming call');
-            });
-          }
-        }).catch((err) => {
-          server.log.error(err, 'Failed to get devices for incoming call wake signal');
-        });
+        // Route through the CallOrchestrator for proper call history, notifications,
+        // and MediaBridge session management.
+        callOrchestrator.handleInbound(providerEntry.id, event.callId, event.from, event.to)
+          .then((result) => {
+            server.log.info(
+              { callId: result.callId, providerCallId: event.callId, from: event.from, to: event.to },
+              'Inbound call routed through orchestrator',
+            );
+          })
+          .catch((err) => {
+            server.log.error(err, `Failed to handle inbound call via orchestrator for provider "${providerEntry.displayName}"`);
+          });
       }
     });
   }
