@@ -66,6 +66,7 @@ const SMS_TIMEOUT_MS = 60_000;
  */
 export class ModemGatewayTelephonyProvider implements TelephonyProvider {
   readonly providerId = 'modem-gateway';
+  readonly usesWebSocketAudio = true;
 
   private wsHandler: ModemGatewayWsHandler | null = null;
   private reportedNumber: string | null = null;
@@ -156,7 +157,7 @@ export class ModemGatewayTelephonyProvider implements TelephonyProvider {
    *
    * Requirements: 12.4
    */
-  async answerCall(callId: string, _deviceId: string): Promise<CallAnswerResult> {
+  async answerCall(callId: string, _deviceId: string, audioWsUrl?: string): Promise<CallAnswerResult> {
     this.ensureConnected();
 
     const requestId = randomUUID();
@@ -165,7 +166,7 @@ export class ModemGatewayTelephonyProvider implements TelephonyProvider {
       type: 'answer_call',
       requestId,
       callId,
-      audioWsUrl: '', // Will be set by orchestrator integration (task 17)
+      audioWsUrl: audioWsUrl ?? '',
     });
 
     await this.waitForResponse<void>(requestId, CALL_TIMEOUT_MS, 'answer_call');

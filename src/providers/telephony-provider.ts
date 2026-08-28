@@ -64,6 +64,9 @@ export interface TelephonyProvider {
   /** Whether this provider supports encrypted SIP (sips:). Defaults to false if not implemented. */
   readonly supportsSips?: boolean;
 
+  /** Whether this provider uses WebSocket audio to connect to MediaBridge (instead of SIP). */
+  readonly usesWebSocketAudio?: boolean;
+
   /** Initiate an outbound call from the given source number to the destination. */
   makeCall(from: string, to: string, sipUri?: string): Promise<CallInitResult>;
 
@@ -71,7 +74,7 @@ export interface TelephonyProvider {
   endCall(callId: string): Promise<void>;
 
   /** Answer an incoming call on the specified device. Returns connection details for the client. */
-  answerCall(callId: string, deviceId: string): Promise<CallAnswerResult>;
+  answerCall(callId: string, deviceId: string, audioWsUrl?: string): Promise<CallAnswerResult>;
 
   /** Send an SMS message from the given source number. */
   sendSms(from: string, to: string, body: string): Promise<SmsResult>;
