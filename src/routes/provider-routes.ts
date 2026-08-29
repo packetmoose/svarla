@@ -150,6 +150,9 @@ export function registerProviderRoutes(
             const modemStatus = instance?.getModemStatus();
             if (!modemStatus || modemStatus.signal === 0 || !modemStatus.network) {
               providerStatus = 'error';
+            } else if (modemStatus.stale && modemStatus.stale.length >= 3) {
+              // All status fields are stale — modem is unreachable (likely stuck or disconnected)
+              providerStatus = 'error';
             } else {
               providerStatus = 'ok';
             }

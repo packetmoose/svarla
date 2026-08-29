@@ -58,6 +58,7 @@ func handleReconnect(
 		if err != nil {
 			log.Printf("Failed to drain SMS buffer: %v", err)
 		}
+		var failedItems []sms.IncomingSMS
 		for _, incoming := range buffered {
 			payload := struct {
 				Type      string `json:"type"`
@@ -70,17 +71,22 @@ func handleReconnect(
 				MessageID: incoming.MessageID,
 				From:      incoming.From,
 				Body:      incoming.Body,
-				Timestamp: incoming.Timestamp.Unix(),
+				Timestamp: incoming.Timestamp.UnixMilli(),
 			}
 			msg, err := signaling.NewMessage(signaling.TypeBufferedSMS, payload)
 			if err != nil {
 				log.Printf("Failed to create buffered_sms message: %v", err)
+				failedItems = append(failedItems, incoming)
 				continue
 			}
 			if err := sigClient.Send(msg); err != nil {
 				log.Printf("Failed to send buffered_sms: %v", err)
-				_ = smsBuffer.Push(incoming)
+				failedItems = append(failedItems, incoming)
 			}
+		}
+		// Re-push any items that failed to send so they survive for next reconnect.
+		for _, item := range failedItems {
+			_ = smsBuffer.Push(item)
 		}
 	}
 }

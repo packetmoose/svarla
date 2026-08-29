@@ -213,6 +213,10 @@ func (ml *ModemLifecycle) onModemConnected(initResult *modem.InitResult) {
 	// Wire SMS forwarding.
 	wireSMSForwarding(smsMgr, ml.sigClient, ml.smsBuffer)
 
+	// Drain any messages stored on the SIM/modem from previous sessions.
+	// This must be called after wireSMSForwarding so handlers are registered.
+	go smsMgr.DrainStoredMessages()
+
 	// Call manager.
 	var callManager *signaling.CallManager
 	if voiceEnabled && audioPipeline != nil {
@@ -325,6 +329,8 @@ func wireSMSForwarding(
 	smsBuffer *buffer.PersistentBuffer[sms.IncomingSMS],
 ) {
 	smsMgr.OnReceived(func(incoming sms.IncomingSMS) {
+		log.Printf("OnReceived: incoming SMS from=%s bodyLen=%d connected=%t",
+			incoming.From, len(incoming.Body), sigClient.IsConnected())
 		if sigClient.IsConnected() {
 			payload := struct {
 				Type      string `json:"type"`
@@ -337,7 +343,7 @@ func wireSMSForwarding(
 				MessageID: incoming.MessageID,
 				From:      incoming.From,
 				Body:      incoming.Body,
-				Timestamp: incoming.Timestamp.Unix(),
+				Timestamp: incoming.Timestamp.UnixMilli(),
 			}
 			msg, err := signaling.NewMessage(signaling.TypeIncomingSMS, payload)
 			if err != nil {
@@ -349,10 +355,14 @@ func wireSMSForwarding(
 				if smsBuffer != nil {
 					_ = smsBuffer.Push(incoming)
 				}
+			} else {
+				log.Printf("Sent incoming_sms to server: from=%s messageId=%s", incoming.From, incoming.MessageID)
 			}
 		} else if smsBuffer != nil {
 			if err := smsBuffer.Push(incoming); err != nil {
 				log.Printf("Failed to buffer SMS: %v", err)
+			} else {
+				log.Printf("Buffered incoming_sms (offline): from=%s", incoming.From)
 			}
 		}
 	})

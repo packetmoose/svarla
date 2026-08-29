@@ -115,6 +115,14 @@ func RunInitSequence(ctx context.Context, m *Modem) (*InitResult, error) {
 		textMode = false
 	}
 
+	// Enable detailed SMS headers so AT+CMGR includes UDH for concatenation detection.
+	// AT+CSDH=1 shows extra fields (UDL, UDH length) in text mode responses.
+	if textMode {
+		if _, err := m.SendCommand("AT+CSDH=1", 0); err != nil {
+			slog.Warn("AT+CSDH=1 (show SMS header) not supported", "error", err)
+		}
+	}
+
 	// Phase 4: Query modem identification.
 	info, err := queryModemInfo(m)
 	if err != nil {
@@ -148,7 +156,18 @@ func RunInitSequence(ctx context.Context, m *Modem) (*InitResult, error) {
 // detectModem attempts to contact the modem with ATE0 (disable echo).
 // If the command fails, it retries with exponential backoff (2s → 30s)
 // until success or context cancellation.
+//
+// Before the first attempt, an ESC byte (0x1B) is written to the serial port
+// to abort any pending text input mode (e.g. from a previous AT+CMGS that
+// timed out). This is a no-op if the modem is already in command mode.
 func detectModem(ctx context.Context, m *Modem) error {
+	// Send ESC to escape any lingering text input mode from a prior session.
+	// If the modem is in command mode, ESC is harmless (ignored or returns ERROR).
+	m.WriteRaw([]byte{0x1B, '\r', '\n'})
+	// Brief pause so the modem processes ESC and emits any response before
+	// we flush and attempt ATE0.
+	time.Sleep(200 * time.Millisecond)
+
 	backoff := initBackoffMin
 
 	for {

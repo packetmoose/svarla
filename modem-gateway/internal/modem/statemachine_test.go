@@ -3,6 +3,7 @@ package modem
 import (
 	"errors"
 	"testing"
+	"time"
 )
 
 func TestStateMachine_InitialState(t *testing.T) {
@@ -170,6 +171,9 @@ func TestStateMachine_RegisterURCHandler_NoCarrier(t *testing.T) {
 	// Simulate a NO CARRIER URC being dispatched.
 	m.dispatchURC("NO CARRIER")
 
+	// URC handlers run in goroutines; give it time to execute.
+	time.Sleep(50 * time.Millisecond)
+
 	if sm.State() != StateReady {
 		t.Errorf("after NO CARRIER: state = %v, want Ready", sm.State())
 	}
@@ -187,6 +191,9 @@ func TestStateMachine_RegisterURCHandler_NoCarrier_NotInCall(t *testing.T) {
 
 	// Simulate NO CARRIER when already in Ready state.
 	m.dispatchURC("NO CARRIER")
+
+	// URC handlers run in goroutines; give it time to execute.
+	time.Sleep(50 * time.Millisecond)
 
 	if sm.State() != StateReady {
 		t.Errorf("after NO CARRIER from Ready: state = %v, want Ready", sm.State())

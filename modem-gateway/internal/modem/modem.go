@@ -100,7 +100,8 @@ func (m *Modem) SetState(state ModemState) {
 
 // OnURC registers a handler function that is called for each URC received
 // from the modem. Multiple handlers can be registered. Handlers are called
-// synchronously from the reader goroutine, so they should not block.
+// in separate goroutines so they may safely call SendCommand without
+// deadlocking the readLoop.
 func (m *Modem) OnURC(handler URCHandler) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -150,6 +151,55 @@ func (m *Modem) SendCommand(cmd string, timeout time.Duration) (string, error) {
 	}
 }
 
+// SendSMSCommand sends an SMS using two-phase AT+CMGS interaction:
+//  1. Sends the CMGS header (AT+CMGS="number"\r) and waits for the ">" prompt.
+//  2. Sends the message body followed by Ctrl-Z (0x1A) and waits for the final result.
+//
+// This two-phase approach is required because the SIM7600 (and many other modems)
+// needs to transition into text input mode before accepting the message body.
+// Writing everything in a single burst causes the body/Ctrl-Z to be lost.
+//
+// Returns the response (containing +CMGS: <ref>) on success, or an error.
+func (m *Modem) SendSMSCommand(header string, body string, timeout time.Duration) (string, error) {
+	m.mu.RLock()
+	if m.closed {
+		m.mu.RUnlock()
+		return "", ErrPortClosed
+	}
+	m.mu.RUnlock()
+
+	if timeout == 0 {
+		timeout = CMGSTimeout
+	}
+
+	c := &command{
+		cmd:         header,
+		timeout:     timeout,
+		response:    make(chan commandResult, 1),
+		completed:   make(chan struct{}),
+		smsBody:     body + "\x1A",
+		promptReady: make(chan struct{}, 1),
+	}
+
+	// Submit to the command queue.
+	select {
+	case m.cmdQueue <- c:
+	case <-m.done:
+		return "", ErrPortClosed
+	}
+
+	// Wait for the command to complete.
+	select {
+	case result := <-c.response:
+		if result.err != nil {
+			return strings.Join(result.lines, "\n"), result.err
+		}
+		return strings.Join(result.lines, "\n"), nil
+	case <-m.done:
+		return "", ErrPortClosed
+	}
+}
+
 // Close shuts down the modem manager, closing the serial port and
 // stopping all goroutines. Any pending commands will receive ErrPortClosed.
 func (m *Modem) Close() error {
@@ -164,6 +214,24 @@ func (m *Modem) Close() error {
 
 	close(m.done)
 	return m.port.Close()
+}
+
+// WriteRaw writes raw bytes directly to the serial port, bypassing the command
+// queue. This is used for sending escape sequences (e.g. ESC to abort text
+// input mode) where a full command/response cycle is not expected.
+// It is safe to call before Open() has been called.
+func (m *Modem) WriteRaw(data []byte) {
+	m.mu.RLock()
+	if m.closed {
+		m.mu.RUnlock()
+		return
+	}
+	m.mu.RUnlock()
+
+	if m.logger != nil {
+		m.logger.Log(context.Background(), logLevelVerbose, "AT RAW TX", "bytes", fmt.Sprintf("%q", data))
+	}
+	_, _ = m.port.Write(data)
 }
 
 // dispatchLoop is the single goroutine that serializes AT command execution.
@@ -191,6 +259,9 @@ func (m *Modem) dispatchLoop() {
 // executeCommand writes the command to the serial port and blocks until
 // the reader delivers a response or the timeout expires.
 // Only one command executes at a time (enforced by dispatchLoop).
+//
+// For two-phase SMS sends (cmd.smsBody non-empty), it writes the CMGS header,
+// waits for the ">" prompt from the modem, then writes the body + Ctrl-Z.
 func (m *Modem) executeCommand(cmd *command) {
 	// Register this as the pending command so the reader routes lines here.
 	m.pendingMu.Lock()
@@ -215,6 +286,56 @@ func (m *Modem) executeCommand(cmd *command) {
 		return
 	}
 
+	// Two-phase SMS send: wait for the "> " prompt, then write body + Ctrl-Z.
+	if cmd.smsBody != "" {
+		promptTimer := time.NewTimer(10 * time.Second)
+		select {
+		case <-cmd.promptReady:
+			// Modem is ready for the message body.
+			promptTimer.Stop()
+		case <-promptTimer.C:
+			// Modem never sent "> " prompt — it may have returned ERROR directly
+			// (handled by readLoop delivering to cmd.completed), or something is wrong.
+			// Check if the command already completed (e.g. with ERROR).
+			select {
+			case <-cmd.completed:
+				return
+			default:
+			}
+			// Genuinely timed out waiting for prompt.
+			if m.logger != nil {
+				m.logger.Log(context.Background(), logLevelVerbose, "AT SMS prompt timeout", "cmd", cmd.cmd)
+			}
+			select {
+			case cmd.response <- commandResult{err: fmt.Errorf("modem: timed out waiting for SMS input prompt")}:
+			default:
+			}
+			close(cmd.completed)
+			return
+		case <-cmd.completed:
+			// Command already completed (e.g. modem returned ERROR before prompt).
+			promptTimer.Stop()
+			return
+		case <-m.done:
+			promptTimer.Stop()
+			select {
+			case cmd.response <- commandResult{err: ErrPortClosed}:
+			default:
+			}
+			return
+		}
+
+		// Write the SMS body + Ctrl-Z.
+		if m.logger != nil {
+			m.logger.Log(context.Background(), logLevelVerbose, "AT TX (SMS body)", "body", cmd.smsBody)
+		}
+		if _, err := m.port.Write([]byte(cmd.smsBody)); err != nil {
+			cmd.response <- commandResult{err: fmt.Errorf("modem: SMS body write failed: %w", err)}
+			close(cmd.completed)
+			return
+		}
+	}
+
 	// Wait for the reader to deliver the result or timeout.
 	timer := time.NewTimer(cmd.timeout)
 	defer timer.Stop()
@@ -232,16 +353,36 @@ func (m *Modem) executeCommand(cmd *command) {
 		case cmd.response <- commandResult{err: ErrTimeout}:
 		default:
 		}
-		// Drain: wait briefly for the reader to close cmd.completed so it
-		// doesn't accidentally deliver a stale result to the next command.
-		// This prevents the "every other command fails" cascade.
-		drain := time.NewTimer(500 * time.Millisecond)
-		select {
-		case <-cmd.completed:
-		case <-drain.C:
-		case <-m.done:
+
+		// If this was a CMGS (SMS send) command, the modem is likely stuck
+		// in text input mode waiting for Ctrl-Z or ESC. Send ESC (0x1B) to
+		// abort the text input and return the modem to command mode.
+		if isCMGSCommand(cmd.cmd) {
+			if m.logger != nil {
+				m.logger.Log(context.Background(), logLevelVerbose, "AT TX (ESC to abort text mode)", "cmd", "0x1B")
+			}
+			_, _ = m.port.Write([]byte{0x1B})
+			// Give the modem time to process ESC and emit a result code
+			// before we move to the next command.
+			escDrain := time.NewTimer(2 * time.Second)
+			select {
+			case <-cmd.completed:
+			case <-escDrain.C:
+			case <-m.done:
+			}
+			escDrain.Stop()
+		} else {
+			// Drain: wait briefly for the reader to close cmd.completed so it
+			// doesn't accidentally deliver a stale result to the next command.
+			// This prevents the "every other command fails" cascade.
+			drain := time.NewTimer(500 * time.Millisecond)
+			select {
+			case <-cmd.completed:
+			case <-drain.C:
+			case <-m.done:
+			}
+			drain.Stop()
 		}
-		drain.Stop()
 	case <-m.done:
 		select {
 		case cmd.response <- commandResult{err: ErrPortClosed}:
@@ -270,6 +411,22 @@ func (m *Modem) readLoop() {
 
 		if m.logger != nil {
 			m.logger.Log(context.Background(), logLevelVerbose, "AT RX", "line", line)
+		}
+
+		// Detect SMS text input prompt "> " for two-phase SMS sending.
+		// When the modem enters text input mode, it sends "> " to indicate
+		// it's ready to accept the message body.
+		if strings.TrimRight(line, " ") == ">" {
+			m.pendingMu.Lock()
+			cmd := m.pendingCmd
+			m.pendingMu.Unlock()
+			if cmd != nil && cmd.promptReady != nil {
+				select {
+				case cmd.promptReady <- struct{}{}:
+				default:
+				}
+			}
+			continue
 		}
 
 		// Check if this line is a final result code for a pending command.
@@ -341,6 +498,8 @@ func (m *Modem) readLoop() {
 }
 
 // dispatchURC parses a line into a URC and calls all registered handlers.
+// Handlers are called in a new goroutine so they can safely call SendCommand
+// without deadlocking the readLoop (which delivers command responses).
 func (m *Modem) dispatchURC(line string) {
 	urc := parseURC(line)
 
@@ -350,7 +509,7 @@ func (m *Modem) dispatchURC(line string) {
 	m.mu.RUnlock()
 
 	for _, h := range handlers {
-		h(urc)
+		go h(urc)
 	}
 }
 
@@ -400,6 +559,11 @@ func isKnownURC(line string) bool {
 // AT modems commonly use \r\n but may also use bare \r as a line delimiter,
 // which the default bufio.ScanLines does not handle. This ensures every
 // response token is delivered promptly regardless of the modem's line ending style.
+//
+// Special case: the SMS text input prompt "> " (greater-than + space) is emitted
+// by the modem without a trailing line ending. This function detects it and
+// returns it immediately so the two-phase SMS send doesn't block waiting for
+// a newline that never arrives.
 func scanATLines(data []byte, atEOF bool) (advance int, token []byte, err error) {
 	if atEOF && len(data) == 0 {
 		return 0, nil, nil
@@ -427,6 +591,14 @@ func scanATLines(data []byte, atEOF bool) (advance int, token []byte, err error)
 			// Request more data.
 			return 0, nil, nil
 		}
+	}
+
+	// No line ending found — check for the SMS text input prompt "> ".
+	// The modem emits this without a trailing CR/LF, so we must detect it
+	// and return it immediately to unblock the two-phase SMS send.
+	trimmed := string(data)
+	if trimmed == "> " || trimmed == ">" {
+		return len(data), data, nil
 	}
 
 	// No line ending found.
