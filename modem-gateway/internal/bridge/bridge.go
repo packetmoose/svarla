@@ -143,30 +143,33 @@ func (b *AudioBridge) Close() error {
 	}
 	b.connected = false
 	close(b.stopCh)
-	b.connMu.Unlock()
 
-	b.stateMu.Lock()
-	b.streaming = false
-	b.stateMu.Unlock()
-
-	// Wait for goroutines to finish.
-	b.wg.Wait()
-
-	// Send close frame with normal closure code (1000).
-	b.connMu.Lock()
+	// Send a normal-closure frame, then close the underlying connection NOW,
+	// before waiting for the goroutines. receiveLoop blocks in
+	// conn.ReadMessage(), which is not interrupted by closing stopCh — it only
+	// returns when the connection is closed or the read deadline expires.
+	// Closing the connection here unblocks it immediately; otherwise Close()
+	// would deadlock in wg.Wait() until the read deadline (~pongWait) elapsed.
+	var closeErr error
 	if b.conn != nil {
 		_ = b.conn.WriteControl(
 			websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""),
 			time.Now().Add(writeWait),
 		)
-		err := b.conn.Close()
+		closeErr = b.conn.Close()
 		b.conn = nil
-		b.connMu.Unlock()
-		return err
 	}
 	b.connMu.Unlock()
-	return nil
+
+	b.stateMu.Lock()
+	b.streaming = false
+	b.stateMu.Unlock()
+
+	// Wait for the send/receive goroutines to finish (now unblocked).
+	b.wg.Wait()
+
+	return closeErr
 }
 
 // IsConnected returns true if the bridge has an active WebSocket connection.
@@ -222,8 +225,18 @@ func (b *AudioBridge) sendLoop(capture <-chan []byte) {
 func (b *AudioBridge) receiveLoop(playback chan<- []byte) {
 	defer b.wg.Done()
 
+	// Snapshot the connection. Close() may set b.conn = nil concurrently to
+	// unblock this loop; the captured reference remains valid (ReadMessage
+	// returns an error once the connection is closed).
+	b.connMu.Lock()
+	conn := b.conn
+	b.connMu.Unlock()
+	if conn == nil {
+		return
+	}
+
 	// Set initial read deadline for dead connection detection.
-	_ = b.conn.SetReadDeadline(time.Now().Add(pongWait))
+	_ = conn.SetReadDeadline(time.Now().Add(pongWait))
 
 	for {
 		select {
@@ -232,14 +245,14 @@ func (b *AudioBridge) receiveLoop(playback chan<- []byte) {
 		default:
 		}
 
-		msgType, data, err := b.conn.ReadMessage()
+		msgType, data, err := conn.ReadMessage()
 		if err != nil {
 			// Connection closed or read deadline exceeded (dead connection).
 			return
 		}
 
 		// Extend read deadline on any received message.
-		_ = b.conn.SetReadDeadline(time.Now().Add(pongWait))
+		_ = conn.SetReadDeadline(time.Now().Add(pongWait))
 
 		// Only process binary frames (PCM audio data).
 		if msgType != websocket.BinaryMessage {

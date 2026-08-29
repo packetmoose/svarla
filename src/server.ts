@@ -474,12 +474,16 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
           return;
         }
 
+        // A missing caller ID means the caller withheld their number (CLIR).
+        // Represent it as "anonymous", matching the 46elks provider behavior.
+        const callerFrom = event.from && event.from.trim() !== '' ? event.from : 'anonymous';
+
         // Route through the CallOrchestrator for proper call history, notifications,
         // and MediaBridge session management.
-        callOrchestrator.handleInbound(providerEntry.id, event.callId, event.from, event.to)
+        callOrchestrator.handleInbound(providerEntry.id, event.callId, callerFrom, event.to)
           .then((result) => {
             server.log.info(
-              { callId: result.callId, providerCallId: event.callId, from: event.from, to: event.to },
+              { callId: result.callId, providerCallId: event.callId, from: callerFrom, to: event.to },
               'Inbound call routed through orchestrator',
             );
           })

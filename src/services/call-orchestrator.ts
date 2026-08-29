@@ -199,7 +199,10 @@ export class CallOrchestrator {
     const providerEntry = await this.numberManagement.requireProviderForNumber(from);
     const provider = providerEntry.instance!;
 
-    // 2. Create MediaBridge session with pending provider leg and ringback
+    // 2. Create MediaBridge session with pending provider leg.
+    // Ringback is only played by MediaBridge for SIP providers. WebSocket audio
+    // providers (modem-gateway) get ringing from the carrier/modem directly, so
+    // MediaBridge must not inject its own ringback tone.
     const callId = randomUUID();
     const sessionId = callId;
 
@@ -208,7 +211,7 @@ export class CallOrchestrator {
       sessionInfo = await this.mediaBridge.createSession({
         sessionId,
         providerLeg: { type: 'pending' },
-        options: { ringback: true },
+        options: { ringback: !provider.usesWebSocketAudio },
       });
     } catch (err) {
       if (err instanceof MediaBridgeUnavailableError) {
@@ -322,6 +325,7 @@ export class CallOrchestrator {
     if (!providerEntry || !providerEntry.instance) {
       throw new ProviderNotAvailableError(`Provider ${providerId} is not available`);
     }
+    const provider = providerEntry.instance;
 
     // Register the provider-to-internal mapping immediately so that concurrent
     // event webhook processing can detect this call is already being handled.
@@ -330,16 +334,18 @@ export class CallOrchestrator {
     const sessionId = callId;
     this.providerCallToInternal.set(providerCallId, callId);
 
-    // 1. Create MediaBridge session — provider leg is 'pending' because
-    // Vonage will send a SIP INVITE to the MediaBridge after receiving
-    // the SIP connect NCCO. The MediaBridge plays ringback to the WebRTC
-    // client while waiting for the provider SIP connection.
+    // 1. Create MediaBridge session — provider leg is 'pending' until the
+    // provider connects its audio (SIP INVITE for SIP providers, or a WebSocket
+    // connection for WebSocket audio providers).
+    // Ringback is only played by MediaBridge for SIP providers. WebSocket audio
+    // providers (modem-gateway) get ringing from the carrier/modem directly, so
+    // MediaBridge must not inject its own ringback tone.
     let sessionInfo: SessionInfo;
     try {
       sessionInfo = await this.mediaBridge.createSession({
         sessionId,
         providerLeg: { type: 'pending' },
-        options: { ringback: true },
+        options: { ringback: !provider.usesWebSocketAudio },
       });
     } catch (err) {
       // Clean up the early mapping on failure
@@ -351,7 +357,6 @@ export class CallOrchestrator {
     }
 
     // Select the appropriate SIP URI (sips: when TLS enabled and provider supports it)
-    const provider = providerEntry.instance!;
     const selectedSipUri = selectSipUri({
       sipUri: sessionInfo.sipUri,
       sipsUri: sessionInfo.sipsUri ?? sessionInfo.sipUri,
@@ -460,9 +465,27 @@ export class CallOrchestrator {
     // use this to send the answer command. SIP-based providers where audio
     // is already flowing can treat this as a no-op.
     if (activeCall.direction === 'inbound' && activeCall.provider) {
-      const audioUrl = activeCall.provider.usesWebSocketAudio
-        ? (activeCall.audioWsUrl ?? undefined)
-        : undefined;
+      const usesWebSocketAudio = activeCall.provider.usesWebSocketAudio ?? false;
+
+      // For WebSocket audio providers, tell MediaBridge to expect the incoming
+      // WebSocket connection BEFORE the provider connects its audio bridge.
+      // Otherwise the provider's WebSocket would arrive at a still-'pending'
+      // session and its audio would not be routed (silence).
+      if (usesWebSocketAudio) {
+        try {
+          await this.mediaBridge.updateSession(activeCall.sessionId, {
+            providerLeg: { type: 'websocket', protocol: activeCall.provider.providerId, expectedCallId: activeCall.providerCallId },
+          });
+        } catch (err) {
+          activeCall.answered = false;
+          activeCall.answeredByDevice = null;
+          activeCall.answeredAt = null;
+          this.logger.error({ err, callId } as Record<string, unknown>, 'Failed to patch MediaBridge session before answer');
+          return { success: false, errorReason: 'Failed to prepare media session' };
+        }
+      }
+
+      const audioUrl = usesWebSocketAudio ? (activeCall.audioWsUrl ?? undefined) : undefined;
 
       try {
         await activeCall.provider.answerCall(activeCall.providerCallId, deviceId, audioUrl);
@@ -472,15 +495,6 @@ export class CallOrchestrator {
         activeCall.answeredAt = null;
         this.logger.error({ err, callId } as Record<string, unknown>, 'Provider answerCall failed');
         return { success: false, errorReason: 'Failed to answer call' };
-      }
-
-      // For WebSocket audio providers, tell MediaBridge to expect the connection
-      if (activeCall.provider.usesWebSocketAudio) {
-        this.mediaBridge.updateSession(activeCall.sessionId, {
-          providerLeg: { type: 'websocket', protocol: activeCall.provider.providerId, expectedCallId: activeCall.providerCallId },
-        }).catch((err) => {
-          this.logger.warn({ err, callId } as Record<string, unknown>, 'Failed to patch MediaBridge session for provider answer');
-        });
       }
     }
 
