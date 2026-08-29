@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"log"
 	"net/http"
 	"sync"
 	"time"
@@ -238,6 +239,9 @@ func (b *AudioBridge) receiveLoop(playback chan<- []byte) {
 	// Set initial read deadline for dead connection detection.
 	_ = conn.SetReadDeadline(time.Now().Add(pongWait))
 
+	var rxFrames int64
+	var droppedFrames int64
+
 	for {
 		select {
 		case <-b.stopCh:
@@ -259,6 +263,20 @@ func (b *AudioBridge) receiveLoop(playback chan<- []byte) {
 			continue
 		}
 
+		// Downlink diagnostics: log the first frame received and periodically
+		// so we can confirm app->modem audio is actually arriving from
+		// MediaBridge and see its size/format.
+		rxFrames++
+		if rxFrames == 1 {
+			dumpLen := 32
+			if len(data) < dumpLen {
+				dumpLen = len(data)
+			}
+			log.Printf("[bridge RX] first downlink frame received: %d bytes, first bytes (hex): %x", len(data), data[:dumpLen])
+		} else if rxFrames%500 == 0 {
+			log.Printf("[bridge RX] downlink frame %d received (%d bytes)", rxFrames, len(data))
+		}
+
 		// Send to playback, drop frame if channel is full (back-pressure).
 		select {
 		case playback <- data:
@@ -266,6 +284,10 @@ func (b *AudioBridge) receiveLoop(playback chan<- []byte) {
 			return
 		default:
 			// Playback channel full; drop frame to avoid blocking.
+			droppedFrames++
+			if droppedFrames == 1 || droppedFrames%500 == 0 {
+				log.Printf("[bridge RX] WARNING: playback channel full, dropped downlink frame (%d dropped total)", droppedFrames)
+			}
 		}
 	}
 }

@@ -51,6 +51,7 @@ type AudioPipeline interface {
 type MakeCallPayload struct {
 	Type       string `json:"type"`
 	RequestID  string `json:"requestId"`
+	CallID     string `json:"callId"`
 	To         string `json:"to"`
 	AudioWsURL string `json:"audioWsUrl"`
 }
@@ -191,7 +192,13 @@ func (cm *CallManager) handleMakeCall(msg Message) {
 		return
 	}
 
-	callID := cm.generateCallID()
+	// Use the callId assigned by the server so both sides agree on the call
+	// identifier (needed for end_call matching). Fall back to a locally
+	// generated id if the server didn't supply one.
+	callID := payload.CallID
+	if callID == "" {
+		callID = cm.generateCallID()
+	}
 	cm.call = &activeCall{
 		callID:     callID,
 		direction:  CallDirectionOutbound,
@@ -232,22 +239,13 @@ func (cm *CallManager) handleMakeCall(msg Message) {
 	// Report RINGING state to Svarla.
 	cm.sendCallState(callID, CallStateRinging, "", nil)
 
-	// The call is now in RINGING state. ANSWERED will be detected via
-	// the voice call connect notification or we rely on the +COLP/^CONN
-	// behavior. For SIM7600 modems, when the remote party answers,
-	// the modem's behavior on ATD is that OK means the call is connected.
-	// Since we already got OK from ATD, the call is answered.
-	cm.mu.Lock()
-	if cm.call != nil && cm.call.callID == callID {
-		cm.call.answered = true
-		cm.call.answerTime = time.Now()
-		cm.mu.Unlock()
-
-		cm.sendCallState(callID, CallStateAnswered, "", nil)
-		cm.openAudioBridge(callID)
-	} else {
-		cm.mu.Unlock()
-	}
+	// The call is now RINGING. ATD returning OK only means the call was
+	// initiated — the remote party has not answered yet, and the network
+	// ringback tone is present on the audio path. We must NOT open the audio
+	// bridge now, or the caller would hear that ringback streamed as call
+	// audio. We wait for the "VOICE CALL: BEGIN" URC (handleVoiceCall), which
+	// the SIM7600 emits when the remote party actually answers, before marking
+	// the call answered and opening the audio bridge.
 }
 
 // handleAnswerCall processes an answer_call message from Svarla.
@@ -331,11 +329,13 @@ func (cm *CallManager) handleEndCall(msg Message) {
 	}
 
 	if cm.call.callID != payload.CallID {
-		// CallId mismatch. Log it, but still hang up: the server only tracks one
-		// call per modem-gateway and an end_call almost certainly refers to the
-		// current call. Failing to hang up leaves the caller stuck on the line.
-		log.Printf("[calls] end_call callId mismatch (active=%s, requested=%s) — hanging up active call anyway",
+		// CallId mismatch — this end_call refers to a different (already-ended)
+		// call, e.g. a stale/delayed teardown from a previous call. Ignore it,
+		// otherwise we would wrongly hang up the current active call.
+		cm.mu.Unlock()
+		log.Printf("[calls] end_call callId mismatch (active=%s, requested=%s) — ignoring stale end_call",
 			cm.call.callID, payload.CallID)
+		return
 	}
 
 	call := cm.call
@@ -346,14 +346,12 @@ func (cm *CallManager) handleEndCall(msg Message) {
 
 	log.Printf("[calls] ending call %s via end_call", call.callID)
 
-	// Close audio bridge and pipeline FIRST. This disables PCM streaming
-	// (AT+CPCMREG=0) which the SIM7600 requires before a voice call can be
-	// hung up cleanly — sending the hangup while PCM is still registered can
-	// leave the call up.
-	cm.closeAudio(call)
-
-	// Hang up the voice call. Use AT+CHUP (the 3GPP voice hangup command),
-	// which is reliable for voice calls on the SIM7600, unlike ATH.
+	// Hang up the voice call FIRST so the caller's line drops immediately and
+	// is never delayed by audio-bridge/pipeline goroutine teardown (which waits
+	// on goroutines and can take time). We disable PCM streaming directly here
+	// — the SIM7600 wants PCM released before hangup — using quick AT commands
+	// rather than the full pipeline Stop() (that runs in closeAudio below).
+	_, _ = cm.mdm.SendCommand("AT+CPCMREG=0", 5*time.Second)
 	cm.hangupModem()
 
 	// Transition modem back to Ready.
@@ -362,6 +360,13 @@ func (cm *CallManager) handleEndCall(msg Message) {
 	// Report COMPLETED with duration.
 	duration := cm.calculateDuration(call)
 	cm.sendCallState(call.callID, CallStateCompleted, "", duration)
+
+	// Tear down the audio bridge and pipeline goroutines in the background.
+	// This handler runs synchronously on the signaling read loop, so a slow or
+	// stuck teardown here would block ALL subsequent signaling messages
+	// (including the next make_call). Running it in a goroutine keeps the read
+	// loop responsive so a new call can start immediately.
+	go cm.closeAudio(call)
 }
 
 // hangupModem terminates the current voice call on the modem. It uses AT+CHUP
@@ -380,6 +385,8 @@ func (cm *CallManager) handleURC(urc modem.URC) {
 		cm.handleRING()
 	case "+CLIP":
 		cm.handleCLIP(urc)
+	case "VOICE CALL":
+		cm.handleVoiceCall(urc)
 	case "NO CARRIER":
 		cm.handleNoCarrier()
 	case "MISSED_CALL":
@@ -389,6 +396,35 @@ func (cm *CallManager) handleURC(urc modem.URC) {
 	case "BUSY":
 		cm.handleBusy()
 	}
+}
+
+// handleVoiceCall processes the SIM7600 "VOICE CALL:" URC.
+//   - "VOICE CALL: BEGIN" fires when the remote party answers an outbound call.
+//     This is the true answer signal; ATD returning OK only means the call was
+//     initiated (still ringing). We mark the outbound call answered and open the
+//     audio bridge here so the caller doesn't hear the network ringback streamed
+//     through as call audio.
+//   - "VOICE CALL: END" fires when the call ends; NO CARRIER handles cleanup,
+//     so it's ignored here.
+func (cm *CallManager) handleVoiceCall(urc modem.URC) {
+	if !strings.HasPrefix(strings.ToUpper(urc.Data), "BEGIN") {
+		return
+	}
+
+	cm.mu.Lock()
+	call := cm.call
+	// Only act on outbound calls that haven't been marked answered yet.
+	if call == nil || call.direction != CallDirectionOutbound || call.answered {
+		cm.mu.Unlock()
+		return
+	}
+	callID := call.callID
+	call.answered = true
+	call.answerTime = time.Now()
+	cm.mu.Unlock()
+
+	cm.sendCallState(callID, CallStateAnswered, "", nil)
+	cm.openAudioBridge(callID)
 }
 
 // handleRING processes the RING URC indicating an incoming call.
@@ -620,23 +656,22 @@ func (cm *CallManager) openAudioBridge(callID string) {
 	}
 	cm.mu.Unlock()
 
-	// Brief delay to let the modem's audio subsystem come online after the
-	// call is established. Without this, AT+CPCMREG=1 can fail and the PCM
-	// stream can start before the modem produces real samples (silence).
-	time.Sleep(audioSettleDelay)
-
-	// Start the audio pipeline.
-	if cm.audio != nil {
-		if err := cm.audio.Start(); err != nil {
-			log.Printf("[calls] failed to start audio pipeline: %v", err)
-		}
-	}
-
-	// Create and connect the audio bridge.
 	if cm.bridgeFactory == nil {
 		return
 	}
 
+	// Connect the audio bridge WebSocket to MediaBridge and start streaming
+	// FIRST, before the PCM settle delay. This makes MediaBridge see the
+	// provider leg connect promptly and bridge the client's (app) WebRTC media
+	// to this session, so the app's WebRTC ICE connection stays up. If we
+	// delayed this behind the settle + AT+CPCMREG, the app's media path can
+	// have no peer, its ICE times out and closes, and the whole call is torn
+	// down right after answer (observed on inbound calls).
+	//
+	// StartStreaming wires BOTH directions at once (capture->bridge uplink and
+	// bridge->playback downlink). The capture channel is simply empty until the
+	// PCM pipeline is started below; the playback (downlink) path is live
+	// immediately so app audio can flow to the modem as soon as PCM is up.
 	b := cm.bridgeFactory()
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
@@ -647,7 +682,6 @@ func (cm *CallManager) openAudioBridge(callID string) {
 		return
 	}
 
-	// Start bidirectional audio streaming.
 	if cm.audio != nil {
 		if err := b.StartStreaming(cm.audio.CaptureFrames(), cm.audio.PlaybackFrames()); err != nil {
 			log.Printf("[calls] failed to start audio streaming: %v", err)
@@ -662,8 +696,24 @@ func (cm *CallManager) openAudioBridge(callID string) {
 	} else {
 		// Call was ended while we were connecting; close bridge.
 		_ = b.Close()
+		cm.mu.Unlock()
+		return
 	}
 	cm.mu.Unlock()
+
+	// Brief delay to let the modem's audio subsystem come online after the
+	// call is established. Without this, AT+CPCMREG=1 can fail and the PCM
+	// stream can start before the modem produces real samples (silence).
+	time.Sleep(audioSettleDelay)
+
+	// Start the modem PCM pipeline (AT+CPCMREG=1). This begins producing capture
+	// frames (uplink) and enables the modem to play back the downlink frames the
+	// bridge is already delivering.
+	if cm.audio != nil {
+		if err := cm.audio.Start(); err != nil {
+			log.Printf("[calls] failed to start audio pipeline: %v", err)
+		}
+	}
 }
 
 // closeAudio shuts down the audio bridge and pipeline for a call.
