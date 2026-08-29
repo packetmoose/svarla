@@ -63,7 +63,10 @@ services:
       - "9091:9091"     # Audio WebSocket
     environment:
       LOG_LEVEL: debug
-      PUBLIC_IP: "127.0.0.1"
+      # PUBLIC_IP is the IP address advertised to WebRTC clients in ICE candidates.
+      # It MUST be an address the client devices (e.g. the Android app) can reach.
+      # 127.0.0.1 only works when the client runs on the same host as MediaBridge.
+      PUBLIC_IP: "${PUBLIC_IP:-127.0.0.1}"
     volumes:
       - ./mediabridge/mediabridge-config.yaml:/mediabridge-config.yaml:ro
     depends_on:

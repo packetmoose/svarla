@@ -20,7 +20,9 @@ export type InboundMessageType =
   | 'ussd_error'
   | 'missed_calls'
   | 'buffered_sms'
-  | 'delivery_report';
+  | 'delivery_report'
+  | 'call_ack'
+  | 'answer_ack';
 
 /**
  * Signaling message types sent from Svarla to the Modem Gateway Binary.
@@ -802,6 +804,12 @@ export class ModemGatewayWsHandler {
             status: msg.status as string,
           },
         });
+        break;
+
+      case 'call_ack':
+      case 'answer_ack':
+        // Request-response acks are handled by the provider via the raw message
+        // callback (messageCallbacks) above; no event emission needed here.
         break;
 
       default:

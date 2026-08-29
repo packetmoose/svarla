@@ -17,6 +17,8 @@ const (
 	TypeEndCall     = "end_call"
 	TypeIncomingCall = "incoming_call"
 	TypeCallState   = "call_state"
+	TypeCallAck     = "call_ack"
+	TypeAnswerAck   = "answer_ack"
 
 	// SMS
 	TypeSendSMS     = "send_sms"

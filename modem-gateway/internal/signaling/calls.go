@@ -28,6 +28,12 @@ const (
 	CallDirectionInbound  = "inbound"
 )
 
+// audioSettleDelay is how long to wait after a call is established before
+// enabling PCM streaming (AT+CPCMREG=1). The SIM7600 audio subsystem needs
+// a moment to come online; starting too early yields command errors and
+// silent (all-zero) PCM frames.
+const audioSettleDelay = 1 * time.Second
+
 // BridgeFactory creates an AudioBridge for a given call. This allows
 // injection of different bridge implementations for testing.
 type BridgeFactory func() *bridge.AudioBridge
@@ -77,6 +83,14 @@ type IncomingCallPayload struct {
 	Type   string `json:"type"`
 	CallID string `json:"callId"`
 	From   string `json:"from"`
+}
+
+// AckPayload is sent to Svarla to acknowledge a make_call or answer_call request.
+// The RequestID echoes the requestId from the originating request so the server
+// can resolve its pending operation.
+type AckPayload struct {
+	Type      string `json:"type"`
+	RequestID string `json:"requestId"`
 }
 
 // activeCall tracks the state of the currently active call.
@@ -208,6 +222,10 @@ func (cm *CallManager) handleMakeCall(msg Message) {
 		return
 	}
 
+	// Dial succeeded — acknowledge the make_call request so the server can
+	// resolve its pending operation.
+	cm.sendAck(TypeCallAck, payload.RequestID)
+
 	// Dial succeeded — transition modem to InCall state.
 	_ = cm.stateMachine.TransitionToInCall()
 
@@ -276,6 +294,10 @@ func (cm *CallManager) handleAnswerCall(msg Message) {
 		return
 	}
 
+	// ATA success — acknowledge the answer_call request so the server can
+	// resolve its pending operation.
+	cm.sendAck(TypeAnswerAck, payload.RequestID)
+
 	// ATA success — modem is now in call.
 	_ = cm.stateMachine.TransitionToInCall()
 
@@ -302,9 +324,18 @@ func (cm *CallManager) handleEndCall(msg Message) {
 
 	cm.mu.Lock()
 
-	if cm.call == nil || cm.call.callID != payload.CallID {
+	if cm.call == nil {
 		cm.mu.Unlock()
+		log.Printf("[calls] end_call received but no active call (callId=%s)", payload.CallID)
 		return
+	}
+
+	if cm.call.callID != payload.CallID {
+		// CallId mismatch. Log it, but still hang up: the server only tracks one
+		// call per modem-gateway and an end_call almost certainly refers to the
+		// current call. Failing to hang up leaves the caller stuck on the line.
+		log.Printf("[calls] end_call callId mismatch (active=%s, requested=%s) — hanging up active call anyway",
+			cm.call.callID, payload.CallID)
 	}
 
 	call := cm.call
@@ -313,18 +344,33 @@ func (cm *CallManager) handleEndCall(msg Message) {
 	cm.incomingFrom = ""
 	cm.mu.Unlock()
 
-	// Hang up the modem.
-	_, _ = cm.mdm.SendCommand("ATH", 5*time.Second)
+	log.Printf("[calls] ending call %s via end_call", call.callID)
+
+	// Close audio bridge and pipeline FIRST. This disables PCM streaming
+	// (AT+CPCMREG=0) which the SIM7600 requires before a voice call can be
+	// hung up cleanly — sending the hangup while PCM is still registered can
+	// leave the call up.
+	cm.closeAudio(call)
+
+	// Hang up the voice call. Use AT+CHUP (the 3GPP voice hangup command),
+	// which is reliable for voice calls on the SIM7600, unlike ATH.
+	cm.hangupModem()
 
 	// Transition modem back to Ready.
 	_ = cm.stateMachine.TransitionToReady()
 
-	// Close audio bridge and pipeline.
-	cm.closeAudio(call)
-
 	// Report COMPLETED with duration.
 	duration := cm.calculateDuration(call)
 	cm.sendCallState(call.callID, CallStateCompleted, "", duration)
+}
+
+// hangupModem terminates the current voice call on the modem. It uses AT+CHUP
+// (3GPP voice call hangup), falling back to ATH if AT+CHUP is not supported.
+func (cm *CallManager) hangupModem() {
+	if _, err := cm.mdm.SendCommand("AT+CHUP", 5*time.Second); err != nil {
+		log.Printf("[calls] AT+CHUP failed (%v), falling back to ATH", err)
+		_, _ = cm.mdm.SendCommand("ATH", 5*time.Second)
+	}
 }
 
 // handleURC processes unsolicited result codes from the modem related to calls.
@@ -366,14 +412,14 @@ func (cm *CallManager) handleRING() {
 	if !cm.sigClient.IsConnected() {
 		cm.mu.Unlock()
 		// Reject call when WS is disconnected (req 5.9).
-		_, _ = cm.mdm.SendCommand("ATH", 5*time.Second)
+		cm.hangupModem()
 		return
 	}
 
 	// If there's an existing active call, reject the second incoming call.
 	if cm.call != nil {
 		cm.mu.Unlock()
-		_, _ = cm.mdm.SendCommand("ATH", 5*time.Second)
+		cm.hangupModem()
 		return
 	}
 
@@ -502,9 +548,9 @@ func (cm *CallManager) HandleDisconnect() {
 		cm.incomingFrom = ""
 		cm.mu.Unlock()
 
-		_, _ = cm.mdm.SendCommand("ATH", 5*time.Second)
-		_ = cm.stateMachine.TransitionToReady()
 		cm.closeAudio(call)
+		cm.hangupModem()
+		_ = cm.stateMachine.TransitionToReady()
 		return
 	}
 
@@ -512,7 +558,7 @@ func (cm *CallManager) HandleDisconnect() {
 }
 
 // Shutdown terminates the active call for graceful shutdown.
-// It sends ATH to hang up the modem, closes the audio bridge, and notifies
+// It hangs up the modem, closes the audio bridge, and notifies
 // Svarla with COMPLETED state and "shutdown" reason. If no call is active,
 // this is a no-op.
 func (cm *CallManager) Shutdown() {
@@ -529,14 +575,13 @@ func (cm *CallManager) Shutdown() {
 	cm.incomingFrom = ""
 	cm.mu.Unlock()
 
-	// Hang up the modem.
-	_, _ = cm.mdm.SendCommand("ATH", 5*time.Second)
+	// Close audio bridge and pipeline first (disables PCM streaming), then
+	// hang up the voice call.
+	cm.closeAudio(call)
+	cm.hangupModem()
 
 	// Transition modem back to Ready.
 	_ = cm.stateMachine.TransitionToReady()
-
-	// Close audio bridge and pipeline.
-	cm.closeAudio(call)
 
 	// Report COMPLETED with "shutdown" reason and duration.
 	duration := cm.calculateDuration(call)
@@ -574,6 +619,11 @@ func (cm *CallManager) openAudioBridge(callID string) {
 		return
 	}
 	cm.mu.Unlock()
+
+	// Brief delay to let the modem's audio subsystem come online after the
+	// call is established. Without this, AT+CPCMREG=1 can fail and the PCM
+	// stream can start before the modem produces real samples (silence).
+	time.Sleep(audioSettleDelay)
 
 	// Start the audio pipeline.
 	if cm.audio != nil {
@@ -659,6 +709,28 @@ func (cm *CallManager) sendCallState(callID, state, reason string, duration *int
 
 	if err := cm.sigClient.Send(msg); err != nil {
 		log.Printf("[calls] failed to send call_state message: %v", err)
+	}
+}
+
+// sendAck sends an acknowledgement message (call_ack or answer_ack) to Svarla,
+// echoing the requestId so the server can resolve its pending operation.
+func (cm *CallManager) sendAck(ackType, requestID string) {
+	if requestID == "" {
+		return
+	}
+	payload := AckPayload{
+		Type:      ackType,
+		RequestID: requestID,
+	}
+
+	msg, err := NewMessage(ackType, payload)
+	if err != nil {
+		log.Printf("[calls] failed to create %s message: %v", ackType, err)
+		return
+	}
+
+	if err := cm.sigClient.Send(msg); err != nil {
+		log.Printf("[calls] failed to send %s message: %v", ackType, err)
 	}
 }
 
