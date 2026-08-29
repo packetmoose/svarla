@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/packetmoose/svarla/modem-gateway/internal/modem"
@@ -29,6 +30,9 @@ type IncomingSMS struct {
 	Body string
 	// Timestamp is when the message was sent/received.
 	Timestamp time.Time
+	// Multipart is true if this message is part of a concatenated SMS
+	// (detected via the UDHI bit in the TP first-octet). Not serialized.
+	Multipart bool `json:"-"`
 }
 
 // DeliveryReport represents an SMS delivery status report.
@@ -37,6 +41,24 @@ type DeliveryReport struct {
 	MessageRef int
 	// Status is the delivery status (e.g., "DELIVERED", "FAILED").
 	Status string
+}
+
+// drainedMsg holds a message read during boot drain along with its storage index.
+type drainedMsg struct {
+	msg   IncomingSMS
+	index int
+}
+
+// concatWindow is how long to wait for additional parts of a multi-part SMS
+// received via live +CMTI notifications before flushing what we have.
+const concatWindow = 5 * time.Second
+
+// pendingConcat buffers parts of a multi-part SMS being received live, grouped
+// by sender, since the SIM7600 in text mode does not expose UDH ref/seq numbers.
+type pendingConcat struct {
+	parts     []IncomingSMS
+	timer     *time.Timer
+	firstSeen time.Time
 }
 
 // Manager handles SMS send and receive operations using the modem.
@@ -49,15 +71,20 @@ type Manager struct {
 	mu               sync.RWMutex
 	receivedHandlers []func(IncomingSMS)
 	deliveryHandlers []func(DeliveryReport)
+
+	// concatMu protects the live multi-part reassembly buffer.
+	concatMu      sync.Mutex
+	pendingConcat map[string]*pendingConcat
 }
 
 // New creates a new SMS Manager.
 // textMode should be true if AT+CMGF=1 succeeded during modem initialization.
 func New(m *modem.Modem, textMode bool) *Manager {
 	return &Manager{
-		modem:       m,
-		textMode:    textMode,
-		reassembler: NewReassembler(0), // Use default 5-minute stale timeout
+		modem:         m,
+		textMode:      textMode,
+		reassembler:   NewReassembler(0), // Use default 5-minute stale timeout
+		pendingConcat: make(map[string]*pendingConcat),
 	}
 }
 
@@ -73,9 +100,8 @@ func (mgr *Manager) Send(to, body string) (int, error) {
 }
 
 // sendTextMode sends an SMS in text mode via AT+CMGS.
-// The command format is: AT+CMGS="<number>"\r\n<body>\x1A
-// The modem enters input mode after the first \r\n, then processes
-// the body on receiving Ctrl-Z (0x1A).
+// Uses two-phase sending: first sends AT+CMGS="number" to enter text input
+// mode, waits for the ">" prompt, then sends the message body + Ctrl-Z.
 //
 // If the message body contains characters outside GSM-7, the Data Coding Scheme
 // is set to UCS-2 (0x08) via AT+CSCS and AT+CSMP before sending.
@@ -98,9 +124,9 @@ func (mgr *Manager) sendTextMode(to, body string) (int, error) {
 		// Encode the body and recipient as UCS-2 hex strings.
 		ucs2Body := encodeUCS2Hex(body)
 		ucs2To := encodeUCS2Hex(to)
-		cmd := fmt.Sprintf("AT+CMGS=\"%s\"\r\n%s\x1A", ucs2To, ucs2Body)
+		header := fmt.Sprintf("AT+CMGS=\"%s\"", ucs2To)
 
-		resp, err := mgr.modem.SendCommand(cmd, SendTimeout)
+		resp, err := mgr.modem.SendSMSCommand(header, ucs2Body, SendTimeout)
 
 		// Restore GSM character set and DCS after sending.
 		mgr.restoreGSMSettings()
@@ -118,9 +144,9 @@ func (mgr *Manager) sendTextMode(to, body string) (int, error) {
 	}
 
 	// GSM-7 send: standard text mode.
-	cmd := fmt.Sprintf("AT+CMGS=\"%s\"\r\n%s\x1A", to, body)
+	header := fmt.Sprintf("AT+CMGS=\"%s\"", to)
 
-	resp, err := mgr.modem.SendCommand(cmd, SendTimeout)
+	resp, err := mgr.modem.SendSMSCommand(header, body, SendTimeout)
 	if err != nil {
 		return 0, fmt.Errorf("sms: send failed: %w", err)
 	}
@@ -194,6 +220,208 @@ func (mgr *Manager) ConfigureDeliveryReports() error {
 	return nil
 }
 
+// DrainStoredMessages reads all messages stored on the SIM/modem, delivers them
+// to registered handlers, and deletes them from storage. This should be called
+// once during initialization (after handlers are registered) to process any
+// messages that arrived while the gateway was offline, and to clear stale
+// messages that would otherwise trigger duplicate +CMTI/+CDSI notifications.
+//
+// It lists messages from both "SM" (SIM) and "ME" (modem) storage using
+// AT+CMGL="ALL", reads each individually with AT+CMGR (which enables
+// concatenation reassembly), processes them, and deletes with AT+CMGD.
+func (mgr *Manager) DrainStoredMessages() {
+	if !mgr.textMode {
+		return
+	}
+
+	storages := []string{"SM", "ME", "SR"}
+	totalDrained := 0
+
+	for _, storage := range storages {
+		// Select storage for reading.
+		cmd := fmt.Sprintf("AT+CPMS=\"%s\"", storage)
+		if _, err := mgr.modem.SendCommand(cmd, 0); err != nil {
+			slog.Debug("Cannot select storage for drain, skipping", "storage", storage, "error", err)
+			continue
+		}
+
+		// List all messages to get their indices.
+		resp, err := mgr.modem.SendCommand("AT+CMGL=\"ALL\"", 0)
+		if err != nil {
+			slog.Debug("AT+CMGL failed for storage, skipping", "storage", storage, "error", err)
+			continue
+		}
+
+		if strings.TrimSpace(resp) == "" {
+			continue
+		}
+
+		// Extract indices from CMGL response.
+		lines := strings.Split(resp, "\n")
+		var indices []int
+		for _, line := range lines {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "+CMGL:") {
+				continue
+			}
+			afterPrefix := strings.TrimPrefix(line, "+CMGL:")
+			parts := strings.SplitN(strings.TrimSpace(afterPrefix), ",", 2)
+			if len(parts) < 1 {
+				continue
+			}
+			index, err := strconv.Atoi(strings.TrimSpace(parts[0]))
+			if err != nil {
+				continue
+			}
+			indices = append(indices, index)
+		}
+
+		if len(indices) == 0 {
+			continue
+		}
+
+		slog.Info("Draining stored messages", "storage", storage, "count", len(indices))
+
+		// Read each message individually.
+		var messages []drainedMsg
+
+		for _, idx := range indices {
+			msg, concatInfo, err := mgr.readMessageWithConcat(idx)
+			if err != nil {
+				slog.Warn("Failed to read stored message during drain", "storage", storage, "index", idx, "error", err)
+				// Still try to delete it so we don't loop on a corrupt message.
+				mgr.modem.SendCommand(fmt.Sprintf("AT+CMGD=%d", idx), 0)
+				continue
+			}
+
+			// Delete from storage after successful read.
+			if _, err := mgr.modem.SendCommand(fmt.Sprintf("AT+CMGD=%d", idx), 0); err != nil {
+				slog.Warn("Failed to delete drained message", "storage", storage, "index", idx, "error", err)
+			}
+
+			// If UDH-based concatenation info is available, use the reassembler.
+			if concatInfo != nil {
+				slog.Debug("Drain: concatenated SMS part (UDH)",
+					"refNum", concatInfo.RefNum,
+					"seqNum", concatInfo.SeqNum,
+					"totalParts", concatInfo.TotalParts,
+					"from", msg.From,
+				)
+
+				complete, assembled := mgr.reassembler.AddPart(
+					msg.From,
+					concatInfo.RefNum,
+					concatInfo.SeqNum,
+					concatInfo.TotalParts,
+					msg.Body,
+				)
+
+				if !complete {
+					continue
+				}
+
+				msg.Body = assembled
+				messages = append(messages, drainedMsg{msg: msg, index: idx})
+				continue
+			}
+
+			messages = append(messages, drainedMsg{msg: msg, index: idx})
+		}
+
+		// Group messages by sender + timestamp (within 2 seconds) for
+		// concatenation reassembly. The SIM7600 in text mode doesn't expose
+		// UDH, so we use sender + timestamp proximity as a heuristic.
+		// Messages with consecutive indices from the same sender within a
+		// 2-second window are treated as parts of one concatenated SMS.
+		delivered := groupAndDeliver(messages, mgr)
+		totalDrained += delivered
+	}
+
+	if totalDrained > 0 {
+		slog.Info("Boot drain complete", "totalMessages", totalDrained)
+	} else {
+		slog.Debug("No stored messages found during boot drain")
+	}
+
+	// Restore preferred message storage to SM so that +CMTI notifications
+	// can be read correctly with AT+CMGR.
+	if _, err := mgr.modem.SendCommand("AT+CPMS=\"SM\"", 0); err != nil {
+		slog.Warn("Failed to restore CPMS after drain", "error", err)
+	}
+}
+
+// groupAndDeliver groups drained messages by sender + timestamp proximity,
+// concatenates bodies of grouped messages, and delivers to handlers.
+// Returns the number of logical messages delivered.
+func groupAndDeliver(messages []drainedMsg, mgr *Manager) int {
+	if len(messages) == 0 {
+		return 0
+	}
+
+	type group struct {
+		msgs []IncomingSMS
+	}
+
+	var groups []group
+	var currentGroup group
+
+	for i, dm := range messages {
+		if i == 0 {
+			currentGroup.msgs = append(currentGroup.msgs, dm.msg)
+			continue
+		}
+
+		prev := messages[i-1].msg
+		curr := dm.msg
+
+		// Group if same sender and timestamps within 2 seconds.
+		sameGroup := prev.From == curr.From &&
+			!prev.Timestamp.IsZero() && !curr.Timestamp.IsZero() &&
+			absDuration(prev.Timestamp.Sub(curr.Timestamp)) <= 2*time.Second
+
+		if sameGroup {
+			currentGroup.msgs = append(currentGroup.msgs, curr)
+		} else {
+			groups = append(groups, currentGroup)
+			currentGroup = group{msgs: []IncomingSMS{curr}}
+		}
+	}
+	groups = append(groups, currentGroup)
+
+	// Deliver each group as a single message.
+	delivered := 0
+	for _, g := range groups {
+		var combined IncomingSMS
+		if len(g.msgs) == 1 {
+			combined = g.msgs[0]
+		} else {
+			// Concatenate bodies in order.
+			var bodyParts []string
+			for _, m := range g.msgs {
+				bodyParts = append(bodyParts, m.Body)
+			}
+			combined = g.msgs[0]
+			combined.Body = strings.Join(bodyParts, "")
+			slog.Debug("Reassembled concatenated SMS from drain",
+				"from", combined.From, "parts", len(g.msgs))
+		}
+
+		// Deliver (assigns a unique MessageID for server-side dedup).
+		mgr.deliverIncoming(combined)
+		delivered++
+	}
+
+	return delivered
+}
+
+// absDuration returns the absolute value of a time.Duration.
+func absDuration(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
+}
+
 // OnReceived registers a handler that is called when an SMS is received.
 // Multiple handlers can be registered.
 func (mgr *Manager) OnReceived(handler func(IncomingSMS)) {
@@ -251,9 +479,10 @@ func (mgr *Manager) handleCMTI(urc modem.URC) {
 		slog.Warn("Failed to delete read SMS from storage", "error", err, "index", info.Index)
 	}
 
-	// If this is a concatenated SMS part, feed it to the reassembler.
+	// If UDH-based concatenation info is available (some modems expose it),
+	// feed it to the reassembler for precise ordering.
 	if concatInfo != nil {
-		slog.Debug("Concatenated SMS part received",
+		slog.Debug("Concatenated SMS part received (UDH)",
 			"refNum", concatInfo.RefNum,
 			"seqNum", concatInfo.SeqNum,
 			"totalParts", concatInfo.TotalParts,
@@ -274,9 +503,81 @@ func (mgr *Manager) handleCMTI(urc modem.URC) {
 
 		// All parts received — replace body with the fully assembled message.
 		msg.Body = assembled
+		mgr.deliverIncoming(msg)
+		return
 	}
 
-	// Notify all registered handlers.
+	// If the modem flagged this as a multi-part message (UDHI bit) but didn't
+	// expose the UDH (SIM7600 text mode), buffer it and group by sender using
+	// a short time window.
+	if msg.Multipart {
+		mgr.bufferConcatPart(msg)
+		return
+	}
+
+	// Single-part message — deliver immediately.
+	mgr.deliverIncoming(msg)
+}
+
+// bufferConcatPart accumulates a part of a multi-part SMS (received live) keyed
+// by sender, and flushes the concatenated result after a short window during
+// which no further parts arrive.
+func (mgr *Manager) bufferConcatPart(msg IncomingSMS) {
+	mgr.concatMu.Lock()
+	defer mgr.concatMu.Unlock()
+
+	pc, ok := mgr.pendingConcat[msg.From]
+	if !ok {
+		pc = &pendingConcat{firstSeen: time.Now()}
+		mgr.pendingConcat[msg.From] = pc
+	}
+	pc.parts = append(pc.parts, msg)
+
+	// Reset the flush timer each time a new part arrives.
+	if pc.timer != nil {
+		pc.timer.Stop()
+	}
+	sender := msg.From
+	pc.timer = time.AfterFunc(concatWindow, func() {
+		mgr.flushConcat(sender)
+	})
+}
+
+// flushConcat concatenates all buffered parts for a sender and delivers the
+// combined message.
+func (mgr *Manager) flushConcat(sender string) {
+	mgr.concatMu.Lock()
+	pc, ok := mgr.pendingConcat[sender]
+	if !ok {
+		mgr.concatMu.Unlock()
+		return
+	}
+	delete(mgr.pendingConcat, sender)
+	mgr.concatMu.Unlock()
+
+	if len(pc.parts) == 0 {
+		return
+	}
+
+	combined := pc.parts[0]
+	if len(pc.parts) > 1 {
+		var sb strings.Builder
+		for _, p := range pc.parts {
+			sb.WriteString(p.Body)
+		}
+		combined.Body = sb.String()
+		slog.Debug("Reassembled live concatenated SMS", "from", sender, "parts", len(pc.parts))
+	}
+
+	mgr.deliverIncoming(combined)
+}
+
+// deliverIncoming notifies all registered received handlers of a message.
+// It assigns a globally-unique MessageID so the server can deduplicate
+// correctly (the raw storage index is reused across messages and is not unique).
+func (mgr *Manager) deliverIncoming(msg IncomingSMS) {
+	msg.MessageID = newMessageID()
+
 	mgr.mu.RLock()
 	handlers := make([]func(IncomingSMS), len(mgr.receivedHandlers))
 	copy(handlers, mgr.receivedHandlers)
@@ -285,6 +586,15 @@ func (mgr *Manager) handleCMTI(urc modem.URC) {
 	for _, h := range handlers {
 		h(msg)
 	}
+}
+
+// messageIDCounter provides a monotonic component for unique message IDs.
+var messageIDCounter atomic.Uint64
+
+// newMessageID generates a unique message ID for an incoming SMS.
+// Format: "in-<unixNano>-<counter>".
+func newMessageID() string {
+	return fmt.Sprintf("in-%d-%d", time.Now().UnixNano(), messageIDCounter.Add(1))
 }
 
 // readMessage reads an SMS from modem storage at the given index.
@@ -404,13 +714,44 @@ func parseTextModeMessage(resp string, index int) (IncomingSMS, error) {
 	}
 	body := strings.Join(bodyLines, "\n")
 
+	// The modem outputs text in Latin-1 (ISO-8859-1) when using GSM character set.
+	// Convert to UTF-8 so the body is properly encoded for JSON transmission.
+	body = latin1ToUTF8(body)
+
+	// Detect the UDHI bit (0x40) in the TP first-octet <fo> field, present in the
+	// extended header when AT+CSDH=1 is enabled. If set, this message is part of
+	// a concatenated SMS.
+	multipart := headerHasUDHI(headerLine)
+
 	return IncomingSMS{
 		MessageID: strconv.Itoa(index),
 		From:      from,
 		To:        "", // Recipient not available in +CMGR response
 		Body:      body,
 		Timestamp: timestamp,
+		Multipart: multipart,
 	}, nil
+}
+
+// csdhHeaderRegex matches the extended +CMGR/+CMGL header fields present when
+// AT+CSDH=1 is enabled. After the 4 quoted fields, the numeric fields are:
+// <tooa>,<fo>,<pid>,<dcs>,<sca>,<tosca>,<length>. We capture <fo> (2nd numeric).
+var csdhFoRegex = regexp.MustCompile(`"\s*,\s*(\d+)\s*,\s*(\d+)\s*,`)
+
+// headerHasUDHI returns true if the TP first-octet (<fo>) field in an extended
+// SMS header (AT+CSDH=1) has the UDHI bit (0x40) set, indicating the message
+// carries a User Data Header (used for concatenation).
+func headerHasUDHI(header string) bool {
+	m := csdhFoRegex.FindStringSubmatch(header)
+	if m == nil {
+		return false
+	}
+	// m[2] is the <fo> field (m[1] is <tooa>).
+	fo, err := strconv.Atoi(m[2])
+	if err != nil {
+		return false
+	}
+	return fo&0x40 != 0
 }
 
 // timestampRegex matches modem timestamp format: YY/MM/DD,HH:MM:SS±TZ
@@ -644,6 +985,33 @@ func parseConcatInfoFromResponse(resp string) *ConcatInfo {
 	return nil
 }
 
+// latin1ToUTF8 converts a Latin-1 (ISO-8859-1) encoded string to UTF-8.
+// The SIM7600 modem outputs SMS body text in Latin-1 when using the GSM
+// character set. Each byte in Latin-1 maps directly to the corresponding
+// Unicode code point, so we just need to promote bytes > 127 to multi-byte
+// UTF-8 sequences.
+func latin1ToUTF8(s string) string {
+	// Fast path: if the string is already valid UTF-8 with no high bytes,
+	// return it unchanged.
+	hasHighByte := false
+	for i := 0; i < len(s); i++ {
+		if s[i] > 127 {
+			hasHighByte = true
+			break
+		}
+	}
+	if !hasHighByte {
+		return s
+	}
+
+	// Convert each byte as a Latin-1 code point to UTF-8.
+	runes := make([]rune, 0, len(s))
+	for i := 0; i < len(s); i++ {
+		runes = append(runes, rune(s[i]))
+	}
+	return string(runes)
+}
+
 // looksLikeUCS2Hex returns true if the body appears to be a hex-encoded UCS-2 string.
 // This is a heuristic: the body must be all hex characters and have even length >= 4.
 func looksLikeUCS2Hex(body string) bool {
@@ -683,6 +1051,10 @@ func decodeUCS2HexString(hexStr string) string {
 // This is used when AT+CNMI <ds>=2: the modem stores the delivery report and
 // sends a +CDSI notification with the storage location. We read it from storage
 // and process it like a +CDS.
+//
+// Note: some modems (e.g. SIM7600) may also route regular incoming SMS via +CDSI
+// instead of +CMTI in certain configurations. If the stored message is not a
+// delivery report, we fall back to processing it as a regular incoming SMS.
 // Format: +CDSI: "<storage>",<index>
 func (mgr *Manager) handleCDSI(urc modem.URC) {
 	// +CDSI has the same format as +CMTI: "<storage>",<index>
@@ -693,6 +1065,21 @@ func (mgr *Manager) handleCDSI(urc modem.URC) {
 	}
 
 	slog.Debug("Delivery report stored notification", "storage", info.Storage, "index", info.Index)
+
+	// The +CDSI URC reports the storage (e.g. "SR") the report was stored in.
+	// AT+CMGR reads from the currently-selected read storage, which is normally
+	// "SM", so we must select the reported storage first, then restore "SM".
+	if info.Storage != "" {
+		if _, err := mgr.modem.SendCommand(fmt.Sprintf("AT+CPMS=%q", info.Storage), 0); err != nil {
+			slog.Warn("Failed to select storage for delivery report read",
+				"storage", info.Storage, "error", err)
+		}
+		defer func() {
+			if _, err := mgr.modem.SendCommand("AT+CPMS=\"SM\"", 0); err != nil {
+				slog.Warn("Failed to restore SM storage after delivery report read", "error", err)
+			}
+		}()
+	}
 
 	// Read the delivery report from storage using AT+CMGR.
 	resp, err := mgr.modem.SendCommand(fmt.Sprintf("AT+CMGR=%d", info.Index), 0)
@@ -710,11 +1097,35 @@ func (mgr *Manager) handleCDSI(urc modem.URC) {
 	// The response contains the status report data similar to +CDS format.
 	report, err := parseDeliveryReportFromCMGR(resp)
 	if err != nil {
-		slog.Error("Failed to parse stored delivery report", "error", err, "resp", resp)
+		// Not a delivery report — this may be a regular incoming SMS that the
+		// modem stored in the status report storage. Try parsing as a regular SMS.
+		slog.Debug("CDSI response is not a delivery report, trying as incoming SMS",
+			"index", info.Index, "parseError", err)
+
+		msg, parseErr := parseTextModeMessage(resp, info.Index)
+		if parseErr != nil {
+			slog.Error("Failed to parse CDSI stored message as SMS or delivery report",
+				"index", info.Index, "deliveryErr", err, "smsErr", parseErr, "resp", resp)
+			return
+		}
+
+		// Try to decode UCS-2 if applicable.
+		if looksLikeUCS2Hex(msg.Body) {
+			decoded := decodeUCS2HexString(msg.Body)
+			if decoded != "" {
+				msg.Body = decoded
+			}
+		}
+
+		// Deliver as incoming SMS.
+		slog.Debug("CDSI stored message processed as incoming SMS",
+			"from", msg.From, "index", info.Index)
+
+		mgr.deliverIncoming(msg)
 		return
 	}
 
-	// Notify all registered handlers.
+	// Notify all registered delivery report handlers.
 	mgr.mu.RLock()
 	handlers := make([]func(DeliveryReport), len(mgr.deliveryHandlers))
 	copy(handlers, mgr.deliveryHandlers)

@@ -396,9 +396,9 @@ describe('ConversationService', () => {
       await service.sendMessage('+14155550000', '+14155551234', longMessage);
 
       const conversations = dbHelper.getConversations();
-      // threadListPreview truncates to 50 chars and appends "…"
+      // threadListPreview truncates to 49 chars and appends "…" (total 50)
       expect(conversations[0].last_message_preview).toBe(
-        longMessage.slice(0, 50) + '…'
+        longMessage.slice(0, 49) + '…'
       );
     });
   });

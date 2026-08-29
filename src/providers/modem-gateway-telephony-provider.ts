@@ -417,10 +417,13 @@ export class ModemGatewayTelephonyProvider implements TelephonyProvider {
   private handleSmsResult(msg: Record<string, unknown>): void {
     const requestId = msg.requestId as string;
     const success = msg.success as boolean;
-    const messageRef = msg.messageRef as string | undefined;
     const errorReason = (msg.errorReason as string) ?? null;
 
-    const messageId = messageRef ?? requestId;
+    // NOTE: The modem's messageRef (+CMGS: <ref>) is a small integer (0-255)
+    // that the modem reuses across messages. It is NOT globally unique, so we
+    // must not use it as provider_message_id (which has a UNIQUE constraint).
+    // Use the per-send requestId (a UUID) as the unique message identifier.
+    const messageId = requestId;
 
     if (success) {
       this.resolveRequest(requestId, { messageId, success: true, errorReason: null });

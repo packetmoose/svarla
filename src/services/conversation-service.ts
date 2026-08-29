@@ -118,14 +118,29 @@ export class ConversationService {
     }
 
     if (result.success) {
-      // Update with provider_message_id and status SENT
-      const updated = await this.db
-        .updateTable('messages')
-        .set({ status: 'SENT', provider_message_id: result.messageId })
-        .where('id', '=', message.id)
-        .returningAll()
-        .executeTakeFirstOrThrow();
-      message = this.mapRow(updated);
+      // The message was physically sent. Update status to SENT and record the
+      // provider_message_id. This UPDATE is wrapped defensively: the message has
+      // already been sent, so a post-send DB error (e.g. a UNIQUE collision on a
+      // non-unique provider_message_id) must NOT leave the row stuck at PENDING
+      // or surface as a 500 to the caller.
+      try {
+        const updated = await this.db
+          .updateTable('messages')
+          .set({ status: 'SENT', provider_message_id: result.messageId })
+          .where('id', '=', message.id)
+          .returningAll()
+          .executeTakeFirstOrThrow();
+        message = this.mapRow(updated);
+      } catch {
+        // Retry without provider_message_id so the status still advances to SENT.
+        const updated = await this.db
+          .updateTable('messages')
+          .set({ status: 'SENT' })
+          .where('id', '=', message.id)
+          .returningAll()
+          .executeTakeFirstOrThrow();
+        message = this.mapRow(updated);
+      }
     } else {
       message = await this.updateStatus(message.id, 'FAILED');
     }

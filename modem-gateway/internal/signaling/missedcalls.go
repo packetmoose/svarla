@@ -42,7 +42,7 @@ func NewMissedCallBuffer(bufferPath string) (*MissedCallBuffer, error) {
 func (m *MissedCallBuffer) Add(from string) error {
 	entry := MissedCall{
 		From:      from,
-		Timestamp: time.Now().Unix(),
+		Timestamp: time.Now().UnixMilli(),
 	}
 	if err := m.buf.Push(entry); err != nil {
 		return fmt.Errorf("missed calls: failed to buffer entry: %w", err)
