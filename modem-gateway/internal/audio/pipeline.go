@@ -62,6 +62,7 @@ var _ AudioPipeline = (*Pipeline)(nil)
 // through the modem's dedicated PCM serial port.
 type Pipeline struct {
 	pcmPort    modem.SerialPort
+	portOpener func() (modem.SerialPort, error)
 	modemCtrl  *modem.Modem
 	sampleRate int
 
@@ -86,6 +87,22 @@ type Pipeline struct {
 func New(pcmPort modem.SerialPort, m *modem.Modem, sampleRate int) *Pipeline {
 	return &Pipeline{
 		pcmPort:    pcmPort,
+		modemCtrl:  m,
+		sampleRate: sampleRate,
+		capture:    make(chan []byte, captureBufferSize),
+		playback:   make(chan []byte, playbackBufferSize),
+	}
+}
+
+// NewReopenable creates a Pipeline that reopens its PCM port on each Start().
+//
+// Stop() closes the PCM port to unblock the blocking Read() in the capture
+// goroutine, so the port must be reopened before the next call. The provided
+// opener is invoked at the start of each Start() to obtain a fresh port.
+// This is required for supporting multiple sequential calls.
+func NewReopenable(opener func() (modem.SerialPort, error), m *modem.Modem, sampleRate int) *Pipeline {
+	return &Pipeline{
+		portOpener: opener,
 		modemCtrl:  m,
 		sampleRate: sampleRate,
 		capture:    make(chan []byte, captureBufferSize),
@@ -131,6 +148,19 @@ func (p *Pipeline) Start() error {
 		return ErrAlreadyRunning
 	}
 
+	// (Re)open the PCM port. Stop() closes it to unblock the capture goroutine's
+	// blocking Read(), so for a second/subsequent call the port must be reopened.
+	if p.pcmPort == nil {
+		if p.portOpener == nil {
+			return fmt.Errorf("audio pipeline: PCM port is closed and no opener configured")
+		}
+		port, err := p.portOpener()
+		if err != nil {
+			return fmt.Errorf("audio pipeline: reopen PCM port: %w", err)
+		}
+		p.pcmPort = port
+	}
+
 	// Set PCM format right before enabling streaming, in case a previous
 	// AT+CPCMREG=0 or modem reset changed it.
 	if p.sampleRate == 16000 {
@@ -159,9 +189,15 @@ func (p *Pipeline) Start() error {
 	p.stopCh = make(chan struct{})
 	p.running = true
 
+	// Capture the port reference for the goroutines. Stop() closes the port to
+	// unblock the blocking Read()/Write(), then nils the field after the
+	// goroutines have exited — passing the reference here avoids a data race on
+	// p.pcmPort between the loops and Stop().
+	port := p.pcmPort
+
 	p.wg.Add(2)
-	go p.captureLoop()
-	go p.playbackLoop()
+	go p.captureLoop(port)
+	go p.playbackLoop(port)
 
 	return nil
 }
@@ -181,7 +217,11 @@ func (p *Pipeline) Stop() error {
 	// Close the PCM port to unblock any Read()/Write() calls in the
 	// capture/playback goroutines. Without this, Stop() hangs forever
 	// because Read() blocks with no timeout on the streaming port.
-	_ = p.pcmPort.Close()
+	// The port is set to nil so Start() reopens it for the next call.
+	if p.pcmPort != nil {
+		_ = p.pcmPort.Close()
+		p.pcmPort = nil
+	}
 
 	// Wait for goroutines to exit.
 	p.wg.Wait()
@@ -200,7 +240,7 @@ func (p *Pipeline) Stop() error {
 // captureLoop continuously reads PCM frames from the serial port and sends
 // them to the capture channel. It assembles raw bytes into complete frames
 // based on the negotiated sample rate.
-func (p *Pipeline) captureLoop() {
+func (p *Pipeline) captureLoop(port modem.SerialPort) {
 	defer p.wg.Done()
 
 	frameSize := p.frameSize()
@@ -216,7 +256,7 @@ func (p *Pipeline) captureLoop() {
 		default:
 		}
 
-		n, err := p.pcmPort.Read(buf[offset:])
+		n, err := port.Read(buf[offset:])
 		if err != nil {
 			// Check if we were asked to stop.
 			select {
@@ -231,6 +271,12 @@ func (p *Pipeline) captureLoop() {
 			}
 			// Brief pause before retrying on transient errors.
 			time.Sleep(1 * time.Millisecond)
+			continue
+		}
+
+		// A read timeout returns n=0 with no error. Loop back to re-check the
+		// stop signal (keeps teardown responsive) without emitting a frame.
+		if n == 0 {
 			continue
 		}
 
@@ -278,8 +324,10 @@ func (p *Pipeline) captureLoop() {
 
 // playbackLoop reads PCM frames from the playback channel and writes them
 // to the serial port.
-func (p *Pipeline) playbackLoop() {
+func (p *Pipeline) playbackLoop(port modem.SerialPort) {
 	defer p.wg.Done()
+
+	var playedFrames int64
 
 	for {
 		select {
@@ -287,11 +335,23 @@ func (p *Pipeline) playbackLoop() {
 			if !ok {
 				return
 			}
+			// Downlink diagnostics: log the first frame written to the modem
+			// and periodically, to confirm app->modem audio reaches the modem.
+			playedFrames++
+			if playedFrames == 1 {
+				dumpLen := 32
+				if len(frame) < dumpLen {
+					dumpLen = len(frame)
+				}
+				log.Printf("[PCM playback] first frame to modem: %d bytes, first bytes (hex): %x", len(frame), frame[:dumpLen])
+			} else if playedFrames%500 == 0 {
+				log.Printf("[PCM playback] frame %d written to modem (%d bytes)", playedFrames, len(frame))
+			}
 			// Write the complete frame to the serial port.
 			// Use a loop to handle partial writes.
 			written := 0
 			for written < len(frame) {
-				n, err := p.pcmPort.Write(frame[written:])
+				n, err := port.Write(frame[written:])
 				if err != nil {
 					select {
 					case <-p.stopCh:
@@ -299,6 +359,7 @@ func (p *Pipeline) playbackLoop() {
 					default:
 					}
 					// On write errors, skip this frame.
+					log.Printf("[PCM playback] write error after %d bytes: %v", written, err)
 					break
 				}
 				written += n

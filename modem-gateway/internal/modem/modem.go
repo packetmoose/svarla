@@ -542,6 +542,7 @@ var knownURCPrefixes = []string{
 	"NO CARRIER",
 	"+CRING:",
 	"MISSED_CALL:",
+	"VOICE CALL:",
 }
 
 // isKnownURC checks if a line starts with a known URC prefix.

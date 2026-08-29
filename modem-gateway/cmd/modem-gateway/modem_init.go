@@ -16,6 +16,12 @@ import (
 	"github.com/packetmoose/svarla/modem-gateway/internal/ussd"
 )
 
+// pcmReadTimeout bounds each blocking Read() on the PCM audio port so the
+// capture goroutine can observe the stop signal and exit promptly when a call
+// ends. A short timeout is transparent to streaming (the loop simply reads
+// whatever is available or loops on timeout).
+const pcmReadTimeout = 100 * time.Millisecond
+
 // ModemLifecycle manages the modem connection lifecycle using ReconnectManager.
 // It sets up subsystems when the modem connects and tears them down on disconnect.
 // The modem is retried forever with exponential backoff (2s–30s).
@@ -182,12 +188,25 @@ func (ml *ModemLifecycle) onModemConnected(initResult *modem.InitResult) {
 			if pcmPortPath == "" {
 				log.Println("WARNING: voiceEnabled but no pcmAudioPort configured, voice calls will fail")
 			} else {
-				pcmPort, err := modem.OpenSerialPort(pcmPortPath, 0)
+				// Verify the PCM port can be opened up front, then use a
+				// reopenable pipeline. The pipeline closes the port on Stop()
+				// (to unblock its blocking Read()) and reopens it on the next
+				// Start(), which is required to support multiple sequential calls.
+				probePort, err := modem.OpenSerialPort(pcmPortPath, 0)
 				if err != nil {
 					log.Printf("WARNING: failed to open PCM audio port %s: %v (voice disabled)", pcmPortPath, err)
 					voiceEnabled = false
 				} else {
-					audioPipeline = audio.New(pcmPort, m, sampleRate)
+					_ = probePort.Close()
+					// Open the PCM port with a short read timeout so the
+					// capture goroutine's Read() returns periodically and can
+					// observe the stop signal. Without a timeout, a blocking
+					// Read() may not unblock when the port is closed, hanging
+					// pipeline teardown between calls.
+					opener := func() (modem.SerialPort, error) {
+						return modem.OpenSerialPortWithTimeout(pcmPortPath, 0, pcmReadTimeout)
+					}
+					audioPipeline = audio.NewReopenable(opener, m, sampleRate)
 					log.Printf("Audio pipeline initialized on %s", pcmPortPath)
 				}
 			}
