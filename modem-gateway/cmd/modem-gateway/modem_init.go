@@ -41,9 +41,6 @@ type ModemLifecycle struct {
 	callManager    *signaling.CallManager
 	numberReporter *signaling.NumberReporter
 	statusReporter *signaling.StatusReporter
-
-	// Cleanup handles for the current modem session.
-	deliveryPollCancel context.CancelFunc
 }
 
 // ModemLifecycleConfig holds dependencies for ModemLifecycle.
@@ -214,20 +211,11 @@ func (ml *ModemLifecycle) onModemConnected(initResult *modem.InitResult) {
 	}
 
 	// SMS manager.
-	smsMgr := sms.New(m, initResult.TextMode)
+	smsMgr := sms.New(m)
 	smsMgr.RegisterURCHandlers()
-	if err := smsMgr.ConfigureDeliveryReports(); err != nil {
-		log.Printf("WARNING: delivery report configuration failed: %v", err)
-	}
 
-	// Delivery report polling.
-	var deliveryPollCancel context.CancelFunc
-	if initResult.CNMIDeliveryStatus <= 0 {
-		var deliveryPollCtx context.Context
-		deliveryPollCtx, deliveryPollCancel = context.WithCancel(ml.ctx)
-		go pollDeliveryReports(deliveryPollCtx, smsMgr)
-		log.Printf("Delivery report polling enabled (CNMI ds=%d)", initResult.CNMIDeliveryStatus)
-	}
+	// Delivery/status reports are not used on this hardware (see internal/sms),
+	// so there is nothing to configure or poll for them here.
 
 	// Wire SMS forwarding.
 	wireSMSForwarding(smsMgr, ml.sigClient, ml.smsBuffer)
@@ -274,7 +262,6 @@ func (ml *ModemLifecycle) onModemConnected(initResult *modem.InitResult) {
 	ml.callManager = callManager
 	ml.numberReporter = numberReporter
 	ml.statusReporter = statusReporter
-	ml.deliveryPollCancel = deliveryPollCancel
 	ml.mu.Unlock()
 
 	// Report number on connect if signaling is already up.
@@ -305,7 +292,6 @@ func (ml *ModemLifecycle) onCallLost() {
 // teardownSubsystems stops and clears all modem-dependent subsystems.
 func (ml *ModemLifecycle) teardownSubsystems() {
 	ml.mu.Lock()
-	deliveryPollCancel := ml.deliveryPollCancel
 	statusReporter := ml.statusReporter
 
 	ml.smsMgr = nil
@@ -313,35 +299,15 @@ func (ml *ModemLifecycle) teardownSubsystems() {
 	ml.callManager = nil
 	ml.numberReporter = nil
 	ml.statusReporter = nil
-	ml.deliveryPollCancel = nil
 	ml.mu.Unlock()
 
-	if deliveryPollCancel != nil {
-		deliveryPollCancel()
-	}
 	if statusReporter != nil {
 		statusReporter.Stop()
 	}
 }
 
-// pollDeliveryReports runs a periodic delivery report poll loop.
-func pollDeliveryReports(ctx context.Context, smsMgr *sms.Manager) {
-	ticker := time.NewTicker(60 * time.Second)
-	defer ticker.Stop()
-	time.Sleep(5 * time.Second)
-	smsMgr.PollDeliveryReports()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			smsMgr.PollDeliveryReports()
-		}
-	}
-}
-
 // wireSMSForwarding registers callbacks on the SMS manager to forward
-// received messages and delivery reports to Svarla (or buffer when offline).
+// received messages to Svarla (or buffer when offline).
 func wireSMSForwarding(
 	smsMgr *sms.Manager,
 	sigClient *signaling.ReconnectingClient,
@@ -383,29 +349,6 @@ func wireSMSForwarding(
 			} else {
 				log.Printf("Buffered incoming_sms (offline): from=%s", incoming.From)
 			}
-		}
-	})
-
-	smsMgr.OnDeliveryReport(func(report sms.DeliveryReport) {
-		if !sigClient.IsConnected() {
-			return
-		}
-		payload := struct {
-			Type       string `json:"type"`
-			MessageRef int    `json:"messageRef"`
-			Status     string `json:"status"`
-		}{
-			Type:       signaling.TypeDeliveryReport,
-			MessageRef: report.MessageRef,
-			Status:     report.Status,
-		}
-		msg, err := signaling.NewMessage(signaling.TypeDeliveryReport, payload)
-		if err != nil {
-			log.Printf("Failed to create delivery_report message: %v", err)
-			return
-		}
-		if err := sigClient.Send(msg); err != nil {
-			log.Printf("Failed to send delivery_report: %v", err)
 		}
 	})
 }
