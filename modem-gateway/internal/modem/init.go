@@ -32,18 +32,13 @@ type ModemInfo struct {
 
 // InitResult is returned by RunInitSequence on success.
 type InitResult struct {
-	Info     ModemInfo
-	TextMode bool // true if AT+CMGF=1 succeeded
-	// CNMIDeliveryStatus indicates which <ds> parameter succeeded for AT+CNMI.
-	// 1 = direct +CDS push, 2 = +CDSI index notification, 0 = no notification (needs polling),
-	// -1 = AT+CNMI failed entirely.
-	CNMIDeliveryStatus int
+	Info ModemInfo
 }
 
 // RunInitSequence performs the modem initialization sequence:
 //  1. Detect modem presence (ATE0 with exponential backoff)
 //  2. Configure modem settings (verbose results, caller ID, DTMF, SMS notifications)
-//  3. Set SMS mode (text mode preferred, PDU fallback)
+//  3. Set SMS PDU mode (AT+CMGF=0) — all SMS encoding/decoding is done in-process
 //  4. Query modem identification (model, manufacturer, firmware)
 //  5. Compatibility check against known-supported patterns
 //
@@ -80,47 +75,36 @@ func RunInitSequence(ctx context.Context, m *Modem) (*InitResult, error) {
 	}
 
 	// Configure SMS notification routing (AT+CNMI).
-	// Try preferred parameters first, then fall back to alternatives.
-	// SIM7600 series doesn't support <ds>=1 (direct +CDS routing) in some
-	// firmware versions, so we try <ds>=2 and finally <ds>=0 as fallbacks.
-	type cnmiVariant struct {
-		cmd string
-		ds  int
+	//
+	// We route new incoming SMS via +CMTI and explicitly disable delivery-report
+	// routing (<ds>=0). Delivery/status reports are not used: the SIM7600G-H
+	// rejects live +CDS push (<ds>=1) and its stored reports (+CDSI) are not
+	// retrievable — the "SR" storage always reports zero used entries and
+	// AT+CMGR returns "Invalid memory index". Requesting them only produced
+	// useless churn, so we neither request (no TP-SRR) nor route them.
+	cnmiCmds := []string{
+		"AT+CNMI=2,1,0,0,0", // +CMTI for new SMS, no delivery-report routing
+		"AT+CNMI=2,1,0",     // shorter form for firmware that rejects the 5-arg variant
 	}
-	cnmiVariants := []cnmiVariant{
-		{"AT+CNMI=2,1,0,1,0", 1}, // preferred: +CMTI for new SMS, +CDS for delivery reports
-		{"AT+CNMI=2,1,0,2,0", 2}, // fallback 1: +CMTI for new SMS, +CDSI for delivery reports
-		{"AT+CNMI=2,1,0,0,0", 0}, // fallback 2: +CMTI for new SMS, no delivery report routing
-	}
-	cnmiDS := -1
-	for _, v := range cnmiVariants {
-		if _, err := m.SendCommand(v.cmd, 0); err == nil {
-			slog.Info("SMS notification routing configured", "cmd", v.cmd)
-			cnmiDS = v.ds
+	cnmiOK := false
+	for _, cmd := range cnmiCmds {
+		if _, err := m.SendCommand(cmd, 0); err == nil {
+			slog.Info("SMS notification routing configured", "cmd", cmd)
+			cnmiOK = true
 			break
 		}
 	}
-	if cnmiDS == -1 {
-		slog.Warn("AT+CNMI configuration failed with all variants — incoming SMS notifications may not work")
+	if !cnmiOK {
+		slog.Warn("AT+CNMI configuration failed — incoming SMS notifications may not work")
 	}
 
-	// Phase 3: SMS mode — prefer text mode, fallback to PDU.
-	textMode := true
-	if _, err := m.SendCommand("AT+CMGF=1", 0); err != nil {
-		slog.Warn("AT+CMGF=1 (text mode) not supported, falling back to PDU mode", "error", err)
-		if _, err2 := m.SendCommand("AT+CMGF=0", 0); err2 != nil {
-			m.SetState(StateError)
-			return nil, fmt.Errorf("modem init: AT+CMGF=0 (PDU mode) failed: %w", err2)
-		}
-		textMode = false
-	}
-
-	// Enable detailed SMS headers so AT+CMGR includes UDH for concatenation detection.
-	// AT+CSDH=1 shows extra fields (UDL, UDH length) in text mode responses.
-	if textMode {
-		if _, err := m.SendCommand("AT+CSDH=1", 0); err != nil {
-			slog.Warn("AT+CSDH=1 (show SMS header) not supported", "error", err)
-		}
+	// Phase 3: SMS PDU mode (AT+CMGF=0). We build and parse SMS PDUs in-process
+	// (see internal/sms), which gives full control over GSM-7/UCS-2 encoding and
+	// concatenation and avoids the modem text-mode charset ambiguities. PDU mode
+	// is required; if it fails, SMS cannot work correctly, so this is fatal.
+	if _, err := m.SendCommand("AT+CMGF=0", 0); err != nil {
+		m.SetState(StateError)
+		return nil, fmt.Errorf("modem init: AT+CMGF=0 (PDU mode) failed: %w", err)
 	}
 
 	// Phase 4: Query modem identification.
@@ -143,13 +127,11 @@ func RunInitSequence(ctx context.Context, m *Modem) (*InitResult, error) {
 		"model", info.Model,
 		"manufacturer", info.Manufacturer,
 		"firmware", info.Firmware,
-		"textMode", textMode,
+		"smsMode", "PDU",
 	)
 
 	return &InitResult{
-		Info:               info,
-		TextMode:           textMode,
-		CNMIDeliveryStatus: cnmiDS,
+		Info: info,
 	}, nil
 }
 
