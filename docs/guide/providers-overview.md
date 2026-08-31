@@ -6,10 +6,14 @@ Svarla is provider-agnostic. You can add, remove, and reconfigure telephony prov
 
 | Provider | Type | Audio Transport | Features |
 |----------|------|-----------------|----------|
-| [Vonage](/guide/provider-vonage) | Cloud VoIP | SIP → MediaBridge | Voice + SMS |
-| [46elks](/guide/provider-46elks) | Cloud VoIP | Audio WS → MediaBridge | Voice + SMS |
-| [Modem Gateway](/guide/provider-modem-gateway) | USB Modem | PCM Serial → Audio WS → MediaBridge | Voice + SMS |
-| [Modem Gateway](/guide/provider-modem-gateway) | USB Modem | PCM Serial → Audio WS → MediaBridge | Voice + SMS + USSD |
+| [Vonage](/guide/provider-vonage) | Cloud VoIP | Vonage → SIP → MediaBridge | Voice + SMS |
+| [46elks](/guide/provider-46elks) | Cloud VoIP | 46elks → Websocket → MediaBridge | Voice + SMS |
+
+#### Experimental providers
+
+| Provider | Type | Audio Transport | Features |
+|----------|------|-----------------|----------|
+| [Modem Gateway](/guide/provider-modem-gateway) _(from v0.6.0)_ | USB Modem | PCM Serial → Websocket → MediaBridge | Voice + SMS |
 
 ## How providers work
 
