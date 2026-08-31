@@ -1,6 +1,10 @@
 # Modem Gateway
 
-The modem-gateway provider enables SMS and voice calls through a physical USB modem connected to a Raspberry Pi or similar single-board computer. A standalone Go binary communicates with the modem via AT commands and streams PCM audio over a dedicated serial port, connecting back to your Svarla instance over WebSocket.
+The modem-gateway provider enables SMS and voice calls through a physical USB modem connected to a Raspberry Pi or similar single-board computer. A standalone Go gateway communicates with the modem via AT commands and streams PCM audio over a dedicated serial port, connecting back to your Svarla instance over WebSocket.
+
+::: info Available from v0.6.0
+The modem-gateway provider — both the Svarla server support and the gateway binary — ships with Svarla **v0.6.0**. Until that release is published, this provider isn't available: the download links won't resolve and the Modem Gateway type won't appear in the server.
+:::
 
 ::: warning Experimental
 The modem-gateway provider is experimental. To add a new modem-gateway provider via the web UI, start the Svarla server with `EXPERIMENTAL_PROVIDERS=true`. Existing providers operate normally regardless of this flag. API-based creation works without the flag.
@@ -35,39 +39,33 @@ The modem-gateway provider is experimental. To add a new modem-gateway provider 
 └─────────────────────────────────────┘
 ```
 
-The Go binary initiates two outbound WebSocket connections:
+The gateway initiates two outbound WebSocket connections:
 
-- A **persistent signaling WebSocket** to Svarla for authentication, SMS, call control, DTMF, USSD, and status reporting.
+- A **persistent signaling WebSocket** to Svarla for authentication, SMS, call control, USSD, and status reporting.
 - An **ephemeral per-call audio WebSocket** to the MediaBridge for bidirectional 16kHz PCM audio streaming.
 
-Since the binary connects outbound, no port forwarding is needed on the Pi.
+Since the gateway connects outbound, no port forwarding is needed on the Pi.
 
 ## Supported Modems
 
-### Primary: SIMCom SIM7600G-H
+### SIMCom SIM7600G-H
 
 The SIM7600G-H is the primary reference modem. It provides:
 
 - Global LTE Cat-4 connectivity
 - AT command interface over USB serial (`/dev/ttyUSB2` typically)
 - PCM audio streaming over a dedicated USB serial port (`AT+CPCMREG` support)
-- DTMF detection (`AT+DDET`)
 
 Other SIMCom models in the SIM7600, SIM7500, and A7600 families are also supported.
 
-### Future: Quectel EG25-G (UAC firmware)
-
-The Quectel EG25-G with UAC (USB Audio Class) firmware is a future option. It exposes audio as an ALSA device rather than a serial port. Support for this audio backend is planned but not yet implemented.
-
 ### Compatibility Check
 
-The binary checks the modem model against a known-supported list (`SIM7600*`, `SIM7500*`, `A7600*`). If your modem is not recognized, you'll see a warning in the logs and provider status — but the binary will continue operating. SIMCom-proprietary commands (`AT+CPCMREG`, `AT+CPCMFRM`, `AT+DDET`) may not work on other modems.
+The gateway checks the modem model against a known-supported list (`SIM7600*`, `SIM7500*`, `A7600*`). If your modem is not recognized, you'll see a warning in the logs and provider status — but the gateway will continue operating. SIMCom-proprietary commands (`AT+CPCMREG`, `AT+CPCMFRM`) may not work on other modems.
 
 ### Required Modem Firmware Features
 
 - **AT command interface** accessible over USB serial port
 - **PCM audio over USB serial port** — enabled via `AT+CPCMREG=1` during calls
-- **DTMF detection** — via `AT+DDET=1` (optional, for receiving DTMF)
 
 ## Hardware Requirements
 
@@ -131,28 +129,19 @@ sudo mv modem-gateway.yaml /etc/modem-gateway/modem-gateway.yaml
 
 ### 3. Create the provider in Svarla
 
-Via the web UI (requires `EXPERIMENTAL_PROVIDERS=true`) or the API:
+Create the provider from the Svarla web interface:
 
-```bash
-curl -X POST https://your-svarla-instance/api/providers \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer YOUR_TOKEN" \
-  -d '{"type": "modem-gateway", "displayName": "My USB Modem"}'
-```
+1. Open **Settings → Providers** and click **Add Provider**.
+2. Choose **Modem Gateway** as the type and give it a display name (e.g., "My USB Modem").
 
-The response includes:
+   ::: tip
+   The Modem Gateway type only appears in the picker when the server is started with `EXPERIMENTAL_PROVIDERS=true`.
+   :::
+3. Save. Svarla creates the provider and displays a **one-time pairing secret** along with the **signaling WebSocket endpoint**.
 
-```json
-{
-  "id": "provider-id-here",
-  "pairingSecret": "abc123xy",
-  "wsEndpoint": "/ws/providers/provider-id-here/signaling"
-}
-```
+Copy both values now — the pairing secret is shown only once and cannot be retrieved later. If you lose it, you can generate a new one with **Reset pairing** (see [Re-pairing](#re-pairing)).
 
-Note the `pairingSecret` and the full WebSocket URL for the next step.
-
-### 4. Configure the binary
+### 4. Configure the gateway
 
 Edit `/etc/modem-gateway/modem-gateway.yaml`:
 
@@ -165,13 +154,13 @@ modem:
   serialPort: "/dev/ttyUSB2"
 ```
 
-### 5. Start the binary
+### 5. Start the gateway
 
 ```bash
 modem-gateway -config /etc/modem-gateway/modem-gateway.yaml
 ```
 
-On first start, the binary:
+On first start, the gateway:
 1. Generates an Ed25519 keypair (saved to `modem-gateway.key` alongside the config)
 2. Connects to Svarla and pairs using the secret
 3. Begins reporting modem status
@@ -251,23 +240,23 @@ log:
 
 ## Pairing Flow
 
-The pairing flow establishes trust between the modem-gateway binary and Svarla using Ed25519 public-key cryptography.
+The pairing flow establishes trust between the gateway and Svarla using Ed25519 public-key cryptography.
 
 ### Initial Pairing (one-time)
 
-1. **Create provider** in Svarla — you receive a pairing secret and WebSocket URL
-2. **Configure** the binary with the endpoint and pairing secret
-3. **Start** the binary — it generates an Ed25519 keypair and connects to Svarla
-4. **Pairing** — the binary sends its public key + pairing secret; Svarla stores the key and invalidates the secret
+1. **Create provider** in Svarla (Settings → Providers) — Svarla shows a one-time pairing secret and the WebSocket endpoint
+2. **Configure** the gateway with the endpoint and pairing secret
+3. **Start** the gateway — it generates an Ed25519 keypair and connects to Svarla
+4. **Pairing** — the gateway sends its public key + pairing secret; Svarla stores the key and invalidates the secret
 5. **Done** — remove `pairingSecret` from your config file
 
 ### Subsequent Connections
 
 After pairing, reconnections use challenge-response authentication:
 
-1. Binary connects to Svarla
+1. Gateway connects to Svarla
 2. Svarla sends a 32-byte random nonce (expires in 30s)
-3. Binary signs the nonce with its Ed25519 private key
+3. Gateway signs the nonce with its Ed25519 private key
 4. Svarla verifies the signature against the stored public key
 5. Connection authenticated
 
@@ -275,12 +264,12 @@ After pairing, reconnections use challenge-response authentication:
 
 If you need to re-pair (lost key file, moved to a new device):
 
-```bash
-curl -X POST https://your-svarla-instance/api/providers/PROVIDER_ID/reset \
-  -H "Authorization: Bearer YOUR_TOKEN"
-```
+1. Open **Settings → Providers** and select the modem-gateway provider.
+2. Click **Reset pairing**. Svarla generates and displays a new one-time pairing secret.
+3. On the gateway device, delete the old key file (`modem-gateway.key`, alongside your config), then add the new `pairingSecret` to your config.
+4. Restart the gateway. It generates a fresh keypair and pairs with the new secret.
 
-This returns a new pairing secret. Update your config and restart the binary.
+Resetting invalidates the previously stored public key, so the old key file can no longer authenticate.
 
 ## Running as a Systemd Service
 
@@ -297,7 +286,7 @@ Type=simple
 User=modem-gateway
 Group=modem-gateway
 
-# Path to binary and config
+# Path to gateway and config
 ExecStart=/usr/local/bin/modem-gateway -config /etc/modem-gateway/modem-gateway.yaml
 WorkingDirectory=/etc/modem-gateway
 
@@ -305,7 +294,7 @@ WorkingDirectory=/etc/modem-gateway
 Restart=on-failure
 RestartSec=5
 
-# Graceful shutdown (binary handles SIGTERM)
+# Graceful shutdown (gateway handles SIGTERM)
 TimeoutStopSec=15
 
 # Security hardening
@@ -347,29 +336,13 @@ sudo systemctl enable modem-gateway
 sudo systemctl start modem-gateway
 ```
 
-### Management commands
-
-```bash
-# Check status
-sudo systemctl status modem-gateway
-
-# View logs
-sudo journalctl -u modem-gateway -f
-
-# Restart
-sudo systemctl restart modem-gateway
-
-# Stop
-sudo systemctl stop modem-gateway
-```
-
 ## Troubleshooting
 
-### Binary cannot open serial port
+### Gateway cannot open serial port
 
 **Symptom:** `failed to open serial port: permission denied`
 
-**Fix:** Ensure the user running the binary has access to the serial device:
+**Fix:** Ensure the user running the gateway has access to the serial device:
 
 ```bash
 sudo usermod -a -G dialout $USER
@@ -385,12 +358,7 @@ sudo usermod -a -G dialout $USER
 - The secret was already used
 - The provider already has a stored public key (already paired)
 
-**Fix:** Reset the provider and get a new secret:
-
-```bash
-curl -X POST https://your-svarla-instance/api/providers/PROVIDER_ID/reset \
-  -H "Authorization: Bearer YOUR_TOKEN"
-```
+**Fix:** In **Settings → Providers**, select the provider and click **Reset pairing** to generate a new secret, then update your config and restart the gateway (see [Re-pairing](#re-pairing)).
 
 ### Modem not detected
 
@@ -453,10 +421,10 @@ tls:
 
 **Symptom:** Provider status shows a compatibility warning
 
-This means your modem model wasn't recognized as a known-supported SIMCom device. The binary will continue operating, but SIMCom-proprietary commands (`AT+CPCMREG` for PCM audio, `AT+CPCMFRM` for sample rate, `AT+DDET` for DTMF detection) may not work. Voice calls may not function if your modem doesn't support these commands.
+This means your modem model wasn't recognized as a known-supported SIMCom device. The gateway will continue operating, but SIMCom-proprietary commands (`AT+CPCMREG` for PCM audio, `AT+CPCMFRM` for sample rate) may not work. Voice calls may not function if your modem doesn't support these commands.
 
 ### SIM PIN rejected
 
 **Symptom:** `SIM PIN rejected, not retrying`
 
-The binary will never retry a rejected PIN to avoid locking your SIM. Verify the PIN is correct in your config, then restart the service.
+The gateway will never retry a rejected PIN to avoid locking your SIM. Verify the PIN is correct in your config, then restart the service.
