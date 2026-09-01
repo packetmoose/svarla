@@ -198,58 +198,38 @@ export class Conversations extends Component<Record<string, never>, Conversation
     const ws = getWebSocket() || initWebSocket();
 
     this.unsubNewMessage = ws.subscribe("new_message", (data: unknown) => {
-      const msg = data as Message;
-      const { selectedNumber, messages, conversations } = this.state;
+      // The new_message event is a lightweight notification and does NOT carry
+      // the message body or timestamp — only conversationNumber, messageId, and
+      // direction. Rather than trusting the partial payload, resync authoritative
+      // data from the server. This also picks up any messages we may have missed
+      // in other conversations, keeping the whole list up to date.
+      const notification = data as {
+        conversationNumber: string;
+        messageId: string;
+        direction: string;
+      };
 
-      // Append message to thread if viewing that conversation
-      if (selectedNumber && msg.conversation_number === selectedNumber) {
-        this.setState({ messages: [...messages, msg] });
+      // Refresh the full conversation list (previews, timestamps, ordering).
+      this.fetchConversations();
+
+      // If the message belongs to the currently open thread, refresh it so the
+      // new message appears with its full body and status. Use refreshMessages
+      // (not fetchMessages) so an in-progress reply and scroll state aren't reset.
+      if (
+        this.state.selectedNumber &&
+        notification.conversationNumber === this.state.selectedNumber
+      ) {
+        this.refreshMessages(this.state.selectedNumber);
       }
-
-      // Update conversation list preview
-      const updatedConversations = conversations.map((c) => {
-        if (c.phoneNumber === msg.conversation_number) {
-          return {
-            ...c,
-            lastMessagePreview: msg.body,
-            lastMessageTimestamp: msg.timestamp,
-          };
-        }
-        return c;
-      });
-
-      // If conversation doesn't exist, add it
-      const exists = updatedConversations.some(
-        (c) => c.phoneNumber === msg.conversation_number
-      );
-      if (!exists) {
-        updatedConversations.unshift({
-          phoneNumber: msg.conversation_number,
-          lastMessagePreview: msg.body,
-          lastMessageTimestamp: msg.timestamp,
-        });
-      }
-
-      // Re-sort by most recent
-      updatedConversations.sort((a, b) => {
-        const timeA = a.lastMessageTimestamp
-          ? new Date(a.lastMessageTimestamp).getTime()
-          : 0;
-        const timeB = b.lastMessageTimestamp
-          ? new Date(b.lastMessageTimestamp).getTime()
-          : 0;
-        return timeB - timeA;
-      });
-
-      this.setState({ conversations: updatedConversations });
     });
 
     this.unsubMessageStatus = ws.subscribe("message_status", (data: unknown) => {
-      const update = data as { id: string; status: string };
+      // Server broadcasts { messageId, status } — match that shape.
+      const update = data as { messageId: string; status: string };
       const { messages } = this.state;
 
       const updatedMessages = messages.map((m) => {
-        if (m.id === update.id) {
+        if (m.id === update.messageId) {
           return { ...m, status: update.status as Message["status"] };
         }
         return m;
@@ -365,6 +345,32 @@ export class Conversations extends Component<Record<string, never>, Conversation
     }
 
     this.setState({ messages: sorted, messagesLoading: false });
+  }
+
+  /**
+   * Reload the messages for an already-open thread without disturbing UI state
+   * (compose text, selected source, loading flash). Used for live refresh when a
+   * new_message notification arrives for the currently selected conversation.
+   */
+  private async refreshMessages(phoneNumber: string) {
+    const result = await api.get<MessagesResponse>(
+      `/api/conversations/${encodeURIComponent(phoneNumber)}`
+    );
+
+    if (!result.ok) {
+      return;
+    }
+
+    // Guard against a thread switch that happened while the request was in flight.
+    if (this.state.selectedNumber !== phoneNumber) {
+      return;
+    }
+
+    const sorted = [...result.data.messages].sort(
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+    );
+
+    this.setState({ messages: sorted });
   }
 
   private handleSelectConversation = (phoneNumber: string) => {
