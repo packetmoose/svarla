@@ -1,0 +1,858 @@
+{
+  "pbtResults": {},
+  "executionHistory": {
+    "1.1 Create database migration `012_remove_modemmanager.ts` that deletes numbers and provider rows with type \"modemmanager\"": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596453205
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596469726
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596902401
+      }
+    ],
+    "1.2 Remove ModemManager provider files and references": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596453552
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596907817
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597143210
+      }
+    ],
+    "1.3 Remove `dbus-next` dependency from `package.json` and regenerate lock file": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596453720
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597149567
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597282654
+      }
+    ],
+    "1.4 Verify build and tests pass after ModemManager removal": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596453864
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597307891
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597677399
+      }
+    ],
+    "2. Checkpoint - Ensure all tests pass": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596454019
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597684506
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597964525
+      }
+    ],
+    "3.1 Initialize Go module and directory structure": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596454154
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596470334
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596903146
+      }
+    ],
+    "3.2 Implement `internal/config` package": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596454307
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596908452
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597143988
+      }
+    ],
+    "4.1 Implement `internal/identity` package": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596454430
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597150183
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597283216
+      }
+    ],
+    "5.1 Implement `internal/modem` package - AT command manager": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596454539
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597308600
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597676567
+      }
+    ],
+    "5.2 Implement URC parser and modem state machine": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596454671
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597685062
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597961039
+      }
+    ],
+    "5.3 Implement modem initialization sequence": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596454830
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597685865
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597961832
+      }
+    ],
+    "6.1 Implement `internal/signaling` package - WebSocket client": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596454942
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597686787
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597962680
+      }
+    ],
+    "6.2 Implement authentication flow in signaling client": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596455058
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597971111
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787598725283
+      }
+    ],
+    "6.3 Implement exponential backoff reconnection": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596455165
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597971831
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787598726223
+      }
+    ],
+    "7. Checkpoint - Ensure all tests pass": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596455263
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599853502
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600226423
+      }
+    ],
+    "8.1 Implement `internal/sms` package - send and receive": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596455370
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597972713
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787598726884
+      }
+    ],
+    "8.2 Implement concatenated SMS reassembly and UCS-2 encoding": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596455458
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787598734097
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599109459
+      }
+    ],
+    "9.1 Implement `internal/buffer` package - disk-persisted ring buffer": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596455638
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597687848
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597963439
+      }
+    ],
+    "10.1 Implement `internal/audio` package - PCM serial capture and playback": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596455719
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597973647
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787598727794
+      }
+    ],
+    "10.2 Implement audio resampling (8kHz ↔ 16kHz)": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596455829
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787598735162
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599108944
+      }
+    ],
+    "10.3 Implement `internal/bridge` package - Audio WebSocket client": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596455944
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787598736379
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599252860
+      }
+    ],
+    "11.1 Implement voice call state management in signaling client": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596456059
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599259286
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599507356
+      }
+    ],
+    "11.2 Implement DTMF send and receive": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596456158
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599261618
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599507664
+      }
+    ],
+    "12.1 Implement `internal/ussd` package": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596456293
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787598736736
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599110306
+      }
+    ],
+    "13.1 Implement periodic status reporting": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596456399
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599260006
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599508151
+      }
+    ],
+    "13.2 Implement number discovery and reporting": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596456505
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599260874
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599508850
+      }
+    ],
+    "14.1 Implement modem reconnection and error recovery": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596456599
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599262556
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599509591
+      }
+    ],
+    "14.2 Implement network registration mode": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596456732
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599515383
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599837834
+      }
+    ],
+    "14.3 Implement graceful shutdown": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596456897
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599516017
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599838039
+      }
+    ],
+    "14.4 Implement missed call buffering": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596457008
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599516810
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599835963
+      }
+    ],
+    "14.5 Implement logging and diagnostics": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596457145
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599517674
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599838216
+      }
+    ],
+    "15. Checkpoint - Ensure all Go binary tests pass": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596457262
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599850973
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600227217
+      }
+    ],
+    "16.1 Create `src/providers/modem-gateway-telephony-provider.ts`": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596457377
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599851814
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600228006
+      }
+    ],
+    "16.2 Create `src/providers/modem-gateway-ws-handler.ts`": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596457493
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599852588
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600228813
+      }
+    ],
+    "17.1 Add modem-gateway provider config validation and factory": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596457584
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600234790
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600612792
+      }
+    ],
+    "17.2 Implement feature flag for EXPERIMENTAL_PROVIDERS": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596457678
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600236439
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600613562
+      }
+    ],
+    "17.3 Implement provider API endpoints for modem-gateway": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596457802
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600236913
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600614385
+      }
+    ],
+    "17.4 Implement WebSocket route for signaling endpoint": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596457924
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600237643
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600615137
+      }
+    ],
+    "18. Checkpoint - Ensure all Svarla server tests pass": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596458048
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600623232
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600838811
+      }
+    ],
+    "19.1 Create `modem-gateway/Dockerfile.build` for cross-compilation": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596458165
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600622431
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600839498
+      }
+    ],
+    "19.2 Extend `.github/workflows/release.yml` with modem-gateway build job": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596458269
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600625126
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600840401
+      }
+    ],
+    "20.1 Create provider documentation page": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596458365
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600623989
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600841138
+      }
+    ],
+    "20.2 Add systemd service documentation section": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596458486
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600626181
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600842099
+      }
+    ],
+    "21. Final checkpoint - Ensure all tests pass": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787596458603
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600848306
+      },
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600917099
+      }
+    ],
+    "3. Set up Go binary project scaffolding": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597144123
+      }
+    ],
+    "4. Implement Go binary identity and authentication": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597283332
+      }
+    ],
+    "1. Remove legacy ModemManager provider": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597677556
+      }
+    ],
+    "5. Implement Go binary modem communication": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597961971
+      }
+    ],
+    "9. Implement Go binary persistent buffer": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787597963632
+      }
+    ],
+    "6. Implement Go binary signaling WebSocket client": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787598726407
+      }
+    ],
+    "8. Implement Go binary SMS handling": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599109608
+      }
+    ],
+    "12. Implement Go binary USSD support": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599110461
+      }
+    ],
+    "10. Implement Go binary audio pipeline": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599253079
+      }
+    ],
+    "11. Implement Go binary voice call handling and DTMF": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599507888
+      }
+    ],
+    "13. Implement Go binary status reporting and number discovery": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787599509056
+      }
+    ],
+    "16. Implement Svarla server ModemGatewayTelephonyProvider": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600228976
+      }
+    ],
+    "17. Implement Svarla server integration (config, factory, feature flag, API)": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600615303
+      }
+    ],
+    "19. Build system and release integration": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600840545
+      }
+    ],
+    "20. Documentation": [
+      {
+        "executionId": "412c7f08-7f3f-42ed-928f-49c9bceeae44",
+        "chatSessionId": "sess_303f4bf1-f0c2-463f-a22a-c8a69c7ef8e5",
+        "timestamp": 1787600842348
+      }
+    ]
+  }
+}

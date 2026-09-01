@@ -576,6 +576,27 @@ textarea {
   color: var(--md-on-surface-variant);
 }
 
+.badge-ok {
+  background: var(--md-success-container);
+  color: var(--md-on-success-container);
+}
+
+.badge-error {
+  background: var(--md-error-container);
+  color: var(--md-on-error-container);
+}
+
+.badge-not-connected {
+  background: var(--md-surface-container-high);
+  color: var(--md-on-surface-variant);
+}
+
+.badge-disabled {
+  background: var(--md-surface-container-high);
+  color: var(--md-on-surface-variant);
+  opacity: 0.7;
+}
+
 /* ===== Buttons ===== */
 
 .btn-sm {
@@ -861,6 +882,163 @@ textarea {
   display: flex;
   gap: var(--md-space-sm);
   justify-content: flex-end;
+}
+
+/* ===== Pairing Secret Display ===== */
+
+.pairing-secret-display {
+  background: var(--md-surface-variant);
+  border: 2px dashed var(--md-primary);
+  border-radius: var(--md-radius-md);
+  padding: var(--md-space-lg);
+  text-align: center;
+  margin-bottom: var(--md-space-lg);
+  user-select: all;
+}
+
+.pairing-secret-value {
+  font-size: 1.75rem;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  color: var(--md-primary);
+}
+
+.detail-section {
+  margin-top: var(--md-space-lg);
+  padding-top: var(--md-space-md);
+  border-top: 1px solid var(--md-outline-variant);
+}
+
+/* ===== Modem Status ===== */
+
+.modem-status-section {
+  margin-top: var(--md-space-lg);
+  padding-top: var(--md-space-md);
+  border-top: 1px solid var(--md-outline-variant);
+}
+
+.modem-status-section h4 {
+  margin-bottom: var(--md-space-sm);
+}
+
+.modem-connection-indicator {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-xs);
+  margin-bottom: var(--md-space-md);
+}
+
+.connection-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.connection-dot.connected {
+  background: var(--md-success, #4caf50);
+  box-shadow: 0 0 4px var(--md-success, #4caf50);
+}
+
+.connection-dot.disconnected {
+  background: var(--md-error, #f44336);
+}
+
+.text-connected {
+  color: var(--md-success, #4caf50);
+  font-weight: 500;
+}
+
+.text-disconnected {
+  color: var(--md-error, #f44336);
+  font-weight: 500;
+}
+
+.modem-signal {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-sm);
+  margin-bottom: var(--md-space-md);
+}
+
+.signal-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 18px;
+}
+
+.signal-bar {
+  width: 4px;
+  border-radius: 1px;
+  background: var(--md-outline-variant);
+  transition: background var(--md-motion-duration-short) var(--md-motion-ease);
+}
+
+.signal-bar:nth-child(1) { height: 4px; }
+.signal-bar:nth-child(2) { height: 7px; }
+.signal-bar:nth-child(3) { height: 10px; }
+.signal-bar:nth-child(4) { height: 14px; }
+.signal-bar:nth-child(5) { height: 18px; }
+
+.signal-bar.active {
+  background: var(--md-primary);
+}
+
+.signal-label {
+  font-size: 0.8125rem;
+  color: var(--md-on-surface-variant);
+}
+
+.modem-detail-list {
+  margin-bottom: var(--md-space-sm);
+}
+
+.modem-warning {
+  background: var(--md-error-container, #fdecea);
+  color: var(--md-on-error-container, #b71c1c);
+  border-radius: var(--md-radius-sm);
+  padding: var(--md-space-sm) var(--md-space-md);
+  margin-bottom: var(--md-space-md);
+  font-size: 0.8125rem;
+}
+
+.modem-stale-warning {
+  color: var(--md-on-surface-variant);
+  font-style: italic;
+}
+
+/* ===== Provider Connection Badge (list view) ===== */
+
+.provider-connection {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.75rem;
+}
+
+.badge-connected {
+  color: var(--md-success, #4caf50);
+}
+
+.badge-disconnected {
+  color: var(--md-error, #f44336);
+}
+
+.connection-dot-sm {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.connection-dot-sm.connected {
+  background: var(--md-success, #4caf50);
+  box-shadow: 0 0 3px var(--md-success, #4caf50);
+}
+
+.connection-dot-sm.disconnected {
+  background: var(--md-error, #f44336);
 }
 
 /* ===== Empty State ===== */

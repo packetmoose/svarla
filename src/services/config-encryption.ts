@@ -25,8 +25,8 @@ const ENCRYPTED_PREFIX = 'enc:v1:';
 const SENSITIVE_FIELDS: Record<string, string[]> = {
   vonage: ['api_secret', 'private_key'],
   '46elks': ['api_password'],
-  modemmanager: [],
   dummy: [],
+  'modem-gateway': [],
 };
 
 /**

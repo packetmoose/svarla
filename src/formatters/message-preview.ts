@@ -1,13 +1,13 @@
 /**
  * Truncates a message to the specified length for preview display.
- * Appends "…" if the message was truncated.
+ * Appends "…" if the message was truncated, keeping total within maxLength.
  */
 function truncate(message: string, maxLength: number): string {
   if (message.length <= maxLength) {
     return message;
   }
 
-  return message.slice(0, maxLength) + '…';
+  return message.slice(0, maxLength - 1) + '…';
 }
 
 /**
@@ -20,7 +20,7 @@ export function notificationPreview(message: string): string {
 
 /**
  * Generates a message preview for the conversation thread list.
- * Truncates to 50 characters with "…" appended if truncated.
+ * Truncates to 50 characters total (49 + "…") to fit the database column.
  */
 export function threadListPreview(message: string): string {
   return truncate(message, 50);

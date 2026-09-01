@@ -1,0 +1,14 @@
+# Built binaries
+/modem-gateway
+/voice-test
+/bin/*
+
+# Private key
+*.key
+
+# Generated config
+modem-gateway.yaml
+
+# Runtime data
+*.jsonl
+*.log

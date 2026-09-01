@@ -25,7 +25,6 @@ export function maskSecret(value: string): string {
  */
 export const SECRET_FIELDS: Record<string, Set<string>> = {
   vonage: new Set(['api_secret', 'private_key', 'private_key_path']),
-  modemmanager: new Set(),
   dummy: new Set(),
 };
 

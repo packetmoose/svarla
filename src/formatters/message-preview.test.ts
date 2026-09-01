@@ -15,8 +15,8 @@ describe('notificationPreview', () => {
   it('should truncate and append "…" if the message exceeds 100 characters', () => {
     const msg = 'a'.repeat(150);
     const result = notificationPreview(msg);
-    expect(result).toBe('a'.repeat(100) + '…');
-    expect(result.length).toBe(101);
+    expect(result).toBe('a'.repeat(99) + '…');
+    expect(result.length).toBe(100);
   });
 
   it('should handle an empty string', () => {
@@ -38,8 +38,8 @@ describe('threadListPreview', () => {
   it('should truncate and append "…" if the message exceeds 50 characters', () => {
     const msg = 'b'.repeat(80);
     const result = threadListPreview(msg);
-    expect(result).toBe('b'.repeat(50) + '…');
-    expect(result.length).toBe(51);
+    expect(result).toBe('b'.repeat(49) + '…');
+    expect(result.length).toBe(50);
   });
 
   it('should handle an empty string', () => {

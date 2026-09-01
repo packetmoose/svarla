@@ -1,0 +1,9 @@
+modem-gateway
+*.log
+*.jsonl
+*.key
+*.yaml
+.git
+.gitignore
+TODO.md
+bin/

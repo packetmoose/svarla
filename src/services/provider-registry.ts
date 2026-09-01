@@ -48,8 +48,8 @@ export type ProviderFactory = (
 const WEBHOOK_ENDPOINTS: Record<string, string[]> = {
   vonage: ['answer', 'event', 'inbound-sms', 'sms-status'],
   '46elks': ['voice_start', 'voice_event', 'sms_incoming'],
-  modemmanager: [],
   dummy: ['inbound-sms', 'event'],
+  'modem-gateway': [],
 };
 
 /**

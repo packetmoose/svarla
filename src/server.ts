@@ -27,9 +27,12 @@ import { registerProviderRoutes } from './routes/provider-routes.js';
 import { ProviderRegistry } from './services/provider-registry.js';
 import type { TelephonyProvider } from './providers/telephony-provider.js';
 import { VonageTelephonyProvider } from './providers/vonage-telephony-provider.js';
-import { ModemManagerTelephonyProvider } from './providers/modemmanager-telephony-provider.js';
 import { DummyTelephonyProvider } from './providers/dummy-telephony-provider.js';
 import { Elks46TelephonyProvider } from './providers/elks46-telephony-provider.js';
+import { ModemGatewayTelephonyProvider } from './providers/modem-gateway-telephony-provider.js';
+import { ModemGatewayWsHandler } from './providers/modem-gateway-ws-handler.js';
+import { ModemGatewayDbPersistence } from './providers/modem-gateway-persistence.js';
+import { registerModemGatewaySignalingRoute } from './routes/modem-gateway-signaling-route.js';
 import { WakeSignalPublisher } from './notifications/wake-signal-publisher.js';
 import { MediaBridgeClient } from './services/media-bridge-client.js';
 import { MediaBridgeEventListener } from './services/media-bridge-event-listener.js';
@@ -55,10 +58,6 @@ function createProviderFactory(serverWebhookBaseUrl: string) {
           webhookBaseUrl: (config.webhook_base_url as string) || serverWebhookBaseUrl,
           supportsSips: config.supports_sips != null ? Boolean(config.supports_sips) : undefined,
         });
-      case 'modemmanager':
-        return new ModemManagerTelephonyProvider({
-          numberOverrides: config.number_overrides as Record<string, string> | undefined,
-        });
       case '46elks':
         return new Elks46TelephonyProvider({
           apiUsername: (config.api_username as string) ?? '',
@@ -70,6 +69,10 @@ function createProviderFactory(serverWebhookBaseUrl: string) {
       case 'dummy':
         return new DummyTelephonyProvider({
           numbers: config.numbers as string[] | undefined,
+        });
+      case 'modem-gateway':
+        return new ModemGatewayTelephonyProvider({
+          registryId: config._registryId as string,
         });
       default:
         throw new Error(`Unknown telephony provider type: ${type}`);
@@ -153,6 +156,16 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
 
   // Load all enabled providers from the database
   await registry.loadAll();
+
+  // Wire up ModemGatewayWsHandler for each active modem-gateway provider
+  for (const entry of registry.listProviders()) {
+    if (entry.type === 'modem-gateway' && entry.status === 'active' && entry.instance) {
+      const persistence = new ModemGatewayDbPersistence(db, entry.id);
+      const wsHandler = new ModemGatewayWsHandler(persistence, server.log);
+      (entry.instance as ModemGatewayTelephonyProvider).setWsHandler(wsHandler);
+      server.log.info(`WsHandler attached to modem-gateway provider "${entry.displayName}" (${entry.id})`);
+    }
+  }
 
   // Get the first active provider instance for services that still need a single provider
   // (ConversationService, legacy webhook routes, call routes)
@@ -457,45 +470,43 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
         }
       } else if (event.type === 'incoming_call') {
         // Skip if this call is already tracked by the orchestrator (handleInbound already notified devices).
-        // The event.callId here is the Vonage UUID; the orchestrator tracks it via providerCallToInternal.
         if (callOrchestrator.getCallIdByProviderCallId(event.callId)) {
           return;
         }
 
-        // Track ringing call for late-joining clients
-        activeCalls.set(event.callId, {
-          callId: event.callId,
-          status: 'ringing',
-          from: event.from,
-          providerNumber: event.to,
-          startedAt: Date.now(),
-        });
+        // A missing caller ID means the caller withheld their number (CLIR).
+        // Represent it as "anonymous", matching the 46elks provider behavior.
+        const callerFrom = event.from && event.from.trim() !== '' ? event.from : 'anonymous';
 
-        const wsEvent = {
-          type: 'call_event' as const,
-          data: {
-            callId: event.callId,
-            status: 'ringing',
-            from: event.from,
-            providerNumber: event.to,
-          },
-        };
-        wsBroadcaster.broadcast(wsEvent);
-
-        deviceRegistryManager.getActiveDevicesWithPushInfo().then((devices) => {
-          if (devices.length > 0) {
-            wakeSignalPublisher.sendToAllDevices(devices, {
-              id: event.callId,
-              priority: 'high',
-            }).catch((err) => {
-              server.log.error(err, 'Failed to send wake signals for incoming call');
-            });
-          }
-        }).catch((err) => {
-          server.log.error(err, 'Failed to get devices for incoming call wake signal');
-        });
+        // Route through the CallOrchestrator for proper call history, notifications,
+        // and MediaBridge session management.
+        callOrchestrator.handleInbound(providerEntry.id, event.callId, callerFrom, event.to)
+          .then((result) => {
+            server.log.info(
+              { callId: result.callId, providerCallId: event.callId, from: callerFrom, to: event.to },
+              'Inbound call routed through orchestrator',
+            );
+          })
+          .catch((err) => {
+            server.log.error(err, `Failed to handle inbound call via orchestrator for provider "${providerEntry.displayName}"`);
+          });
       }
     });
+  }
+
+  // Wire up automatic number sync for modem-gateway providers.
+  // When a number_report is received, trigger syncNumbers() so the number
+  // is persisted to the database immediately without requiring manual sync.
+  for (const providerEntry of activeProviders) {
+    if (providerEntry.type === 'modem-gateway') {
+      const modemProvider = providerEntry.instance as ModemGatewayTelephonyProvider;
+      const providerId = providerEntry.id;
+      modemProvider.onNumberReport(() => {
+        numberManagementService.syncNumbers(providerId).catch((err) => {
+          server.log.error(err, `Auto-sync numbers failed for provider "${providerEntry.displayName}" after number_report`);
+        });
+      });
+    }
   }
 
   // Middleware
@@ -503,6 +514,9 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
 
   // WebSocket endpoint for real-time sync
   await wsBroadcaster.register(server);
+
+  // Modem-gateway signaling WebSocket endpoint
+  registerModemGatewaySignalingRoute(server, registry);
 
   // Routes
   registerAuthRoutes(server, authService, wsTicketService, wsBroadcaster, wakeSignalPublisher, () =>
