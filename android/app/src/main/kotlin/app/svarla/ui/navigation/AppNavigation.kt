@@ -354,6 +354,13 @@ private fun HomeScreen(
         return
     }
 
+    // Back navigation: on any non-DialPad tab, back returns to the Dial Pad tab
+    // instead of closing the app. On the Dial Pad tab this handler is disabled,
+    // so back propagates to the system and closes the app as expected.
+    androidx.activity.compose.BackHandler(enabled = selectedTab != BottomNavDestination.DIAL_PAD) {
+        selectedTabIndex = BottomNavDestination.entries.indexOf(BottomNavDestination.DIAL_PAD)
+    }
+
     Scaffold(
         bottomBar = {
             SvarlaBottomNavigation(
