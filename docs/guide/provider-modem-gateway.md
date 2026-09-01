@@ -56,7 +56,7 @@ The SIM7600G-H is the primary reference modem. It provides:
 - AT command interface over USB serial (`/dev/ttyUSB2` typically)
 - PCM audio streaming over a dedicated USB serial port (`AT+CPCMREG` support)
 
-Other SIMCom models in the SIM7600, SIM7500, and A7600 families are also supported.
+Other SIMCom models in the SIM7600, SIM7500, and A7600 families may also be supported.
 
 ### Compatibility Check
 
