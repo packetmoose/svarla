@@ -64,6 +64,19 @@ interface MockProviderRow {
   display_name: string;
 }
 
+// Build a predicate for a single Kysely-style where clause against a number row.
+function mkPred(col: string, op: string, val: unknown): (n: MockNumberRow) => boolean {
+  return (n: MockNumberRow) => {
+    const cell = (n as unknown as Record<string, unknown>)[col];
+    if (op === 'is not' && val === null) return cell != null;
+    if (op === 'is' && val === null) return cell == null;
+    if (op === '!=') return cell !== val;
+    // Subquery objects (used by color reclaim) never match a scalar cell.
+    if (val !== null && typeof val === 'object') return false;
+    return cell === val;
+  };
+}
+
 function createMockDb(initialNumbers: MockNumberRow[] = [], providers: MockProviderRow[] = []) {
   let numbers = [...initialNumbers];
   let settings: Record<string, string | null> = {};
@@ -182,38 +195,31 @@ function createMockDb(initialNumbers: MockNumberRow[] = [], providers: MockProvi
               return selectResult;
             },
           }),
-          select: (col: string | string[]) => ({
-            where: (filterCol: string, _op: string, filterVal: unknown) => ({
-              where: (filterCol2: string, _op2: string, filterVal2: unknown) => ({
-                executeTakeFirst: async () => {
-                  const found = numbers.find((n) => {
-                    const match1 = filterCol === 'number' ? n.number === filterVal : true;
-                    const match2 = filterCol2 === 'is_active' ? n.is_active === filterVal2 : true;
-                    return match1 && match2;
-                  });
-                  if (!found) return undefined;
-                  if (col === 'provider_id' || (Array.isArray(col) && col.includes('provider_id'))) {
-                    return { provider_id: found.provider_id };
-                  }
-                  if (col === 'block_inbound_calls') {
-                    return { block_inbound_calls: found.block_inbound_calls };
-                  }
-                  return found;
-                },
-              }),
+          select: (col: string | string[]) => {
+            const makeWhere = (preds: Array<(n: MockNumberRow) => boolean>) => ({
+              where: (fc: string, op: string, fv: unknown) =>
+                makeWhere([...preds, mkPred(fc, op, fv)]),
               executeTakeFirst: async () => {
-                const found = numbers.find((n) => {
-                  if (filterCol === 'number') return n.number === filterVal;
-                  return true;
-                });
+                const found = numbers.find((n) => preds.every((p) => p(n)));
                 if (!found) return undefined;
                 if (col === 'provider_id' || (Array.isArray(col) && col.includes('provider_id'))) {
                   return { provider_id: found.provider_id };
                 }
+                if (col === 'block_inbound_calls') {
+                  return { block_inbound_calls: found.block_inbound_calls };
+                }
                 return found;
               },
-            }),
-          }),
+              execute: async () => {
+                const filtered = numbers.filter((n) => preds.every((p) => p(n)));
+                return filtered.map((n) => ({
+                  color: n.color ?? null,
+                  is_active: n.is_active,
+                }));
+              },
+            });
+            return makeWhere([]);
+          },
         };
       }
       return {};

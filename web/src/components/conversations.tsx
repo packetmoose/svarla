@@ -24,7 +24,7 @@ interface NumberEntry {
   number: string;
   label: string | null;
   isActive: boolean;
-  color: string;
+  color: string | null;
 }
 
 interface ConversationsResponse {

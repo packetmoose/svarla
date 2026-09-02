@@ -40,7 +40,7 @@ export interface NumbersTable {
   number: string;
   provider_id: string | null;
   label: string | null;
-  color: Generated<string>;
+  color: string | null;
   is_active: Generated<boolean>;
   added_at: Generated<Date>;
   last_used_at: Date | null;

@@ -67,9 +67,10 @@ fun NumberBadge(
 
 /**
  * Parses a hex color string (e.g. "#6750A4") to a Compose Color.
- * Falls back to primary purple if parsing fails.
+ * Falls back to primary purple if the color is null or parsing fails.
  */
-fun parseNumberColor(hex: String): Color {
+fun parseNumberColor(hex: String?): Color {
+    if (hex == null) return Color(0xFF6750A4)
     return try {
         Color(android.graphics.Color.parseColor(hex))
     } catch (_: Exception) {

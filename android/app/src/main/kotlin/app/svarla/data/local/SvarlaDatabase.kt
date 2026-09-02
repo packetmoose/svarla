@@ -23,7 +23,7 @@ import app.svarla.data.local.entity.ProviderNumber
         Message::class,
         DeviceState::class
     ],
-    version = 5,
+    version = 6,
     exportSchema = false
 )
 abstract class SvarlaDatabase : RoomDatabase() {
@@ -62,6 +62,35 @@ abstract class SvarlaDatabase : RoomDatabase() {
         val MIGRATION_4_5 = object : Migration(4, 5) {
             override fun migrate(db: SupportSQLiteDatabase) {
                 db.execSQL("ALTER TABLE call_history ADD COLUMN realCallerNumber TEXT DEFAULT NULL")
+            }
+        }
+
+        // Make provider_numbers.color nullable. SQLite cannot drop NOT NULL in
+        // place, so recreate the table. The color is refreshed from the server
+        // on the next sync, so no data is lost by relaxing the constraint.
+        val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE provider_numbers_new (
+                        number TEXT NOT NULL PRIMARY KEY,
+                        label TEXT,
+                        color TEXT,
+                        isActive INTEGER NOT NULL DEFAULT 1,
+                        lastUsedAt INTEGER,
+                        blockInboundCalls INTEGER NOT NULL DEFAULT 0,
+                        isDefault INTEGER NOT NULL DEFAULT 0
+                    )
+                    """.trimIndent()
+                )
+                db.execSQL(
+                    """
+                    INSERT INTO provider_numbers_new (number, label, color, isActive, lastUsedAt, blockInboundCalls, isDefault)
+                    SELECT number, label, color, isActive, lastUsedAt, blockInboundCalls, isDefault FROM provider_numbers
+                    """.trimIndent()
+                )
+                db.execSQL("DROP TABLE provider_numbers")
+                db.execSQL("ALTER TABLE provider_numbers_new RENAME TO provider_numbers")
             }
         }
     }
