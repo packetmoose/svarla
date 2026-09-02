@@ -23,22 +23,22 @@ import { sql } from 'kysely';
 // Keep in sync with NUMBER_COLOR_PALETTE in
 // src/services/number-management-service.ts
 const PALETTE = [
-  '#6750A4', // purple
-  '#006B5F', // teal
-  '#B5485E', // rose
-  '#526E2D', // olive
-  '#7C5635', // brown
-  '#00658E', // blue
-  '#8B4F8A', // mauve
-  '#5D5F30', // moss
-  '#3F6C3A', // green
-  '#9A4A2E', // terracotta
-  '#455CC7', // indigo
-  '#0A6E73', // deep cyan
-  '#8A5A00', // amber
-  '#A03E6E', // magenta
-  '#4C6A8F', // slate blue
-  '#7A5CA6', // violet
+  '#D32F2F', // red
+  '#1976D2', // blue
+  '#388E3C', // green
+  '#F9A825', // amber
+  '#7B1FA2', // purple
+  '#0097A7', // cyan
+  '#E64A19', // deep orange
+  '#5C6BC0', // indigo
+  '#689F38', // lime green
+  '#C2185B', // pink
+  '#00897B', // teal
+  '#F57F17', // dark amber
+  '#512DA8', // deep purple
+  '#0288D1', // light blue
+  '#AFB42B', // olive/lime
+  '#AD1457', // magenta
 ];
 
 /**

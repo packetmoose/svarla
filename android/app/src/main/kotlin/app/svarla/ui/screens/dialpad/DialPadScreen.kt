@@ -231,7 +231,7 @@ private fun ProviderNumberIndicator(
                     )
                     .background(
                         color = if (selectedNumber != null) {
-                            app.svarla.ui.components.parseNumberColor(selectedNumber.color).copy(alpha = 0.25f)
+                            app.svarla.ui.components.parseNumberColor(selectedNumber.color)
                         } else {
                             MaterialTheme.colorScheme.surfaceVariant
                         },
@@ -241,14 +241,20 @@ private fun ProviderNumberIndicator(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.Center
             ) {
+                val chipContentColor = if (selectedNumber != null) {
+                    app.svarla.ui.components.contrastTextColor(
+                        app.svarla.ui.components.parseNumberColor(selectedNumber.color)
+                    )
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
                 if (selectedNumber != null) {
                     val display = selectedNumber.label ?: selectedNumber.number
-                    val badgeColor = app.svarla.ui.components.parseNumberColor(selectedNumber.color)
                     Text(
                         text = display,
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = androidx.compose.ui.text.font.FontWeight.SemiBold,
-                        color = badgeColor
+                        color = chipContentColor
                     )
                 }
                 if (canSwitch) {
@@ -256,7 +262,7 @@ private fun ProviderNumberIndicator(
                     Text(
                         text = "▾",
                         style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        color = chipContentColor
                     )
                 }
             }
@@ -334,6 +340,10 @@ private fun NumberDisplayField(
 ) {
     val context = LocalContext.current
     var showMenu by remember { mutableStateOf(false) }
+    // The dial-valid number currently in the clipboard (empty if none). Captured
+    // when the long-press menu opens so "Paste" only appears when the clipboard
+    // actually holds a number.
+    var clipboardNumber by remember { mutableStateOf("") }
 
     Box(
         modifier = Modifier
@@ -342,7 +352,15 @@ private fun NumberDisplayField(
             .padding(horizontal = MaterialTheme.spacing.medium)
             .combinedClickable(
                 onClick = {},
-                onLongClick = { showMenu = true }
+                onLongClick = {
+                    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                    val clipText = clipboard.primaryClip?.getItemAt(0)?.text?.toString().orEmpty()
+                    clipboardNumber = DialPadViewModel.sanitizeDialInput(clipText)
+                    // Only open the menu if there is at least one available action.
+                    if (clipboardNumber.isNotEmpty() || rawInput.isNotEmpty()) {
+                        showMenu = true
+                    }
+                }
             ),
         contentAlignment = Alignment.Center
     ) {
@@ -385,17 +403,13 @@ private fun NumberDisplayField(
             expanded = showMenu,
             onDismissRequest = { showMenu = false }
         ) {
-            // Show "Paste" if clipboard has text content
-            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            if (clipboard.hasPrimaryClip()) {
+            // Show "Paste" only when the clipboard holds a dial-valid number.
+            if (clipboardNumber.isNotEmpty()) {
                 DropdownMenuItem(
                     text = { Text("Paste") },
                     onClick = {
                         showMenu = false
-                        val clipText = clipboard.primaryClip?.getItemAt(0)?.text?.toString()
-                        if (clipText != null) {
-                            onPaste(clipText)
-                        }
+                        onPaste(clipboardNumber)
                     }
                 )
             }
@@ -405,6 +419,7 @@ private fun NumberDisplayField(
                     text = { Text("Copy") },
                     onClick = {
                         showMenu = false
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                         val number = onCopy()
                         val clip = ClipData.newPlainText("Phone number", number)
                         clipboard.setPrimaryClip(clip)

@@ -38,7 +38,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import app.svarla.ui.components.ContactAvatar
-import app.svarla.ui.components.NumberBadge
+import app.svarla.ui.components.NumberLabelWithDot
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -189,7 +189,7 @@ private fun ConversationListItemRow(
                 )
                 if (item.providerNumberLabel.isNotEmpty()) {
                     Spacer(modifier = Modifier.width(8.dp))
-                    NumberBadge(
+                    NumberLabelWithDot(
                         label = item.providerNumberLabel,
                         color = item.providerNumberColor
                     )

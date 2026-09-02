@@ -318,11 +318,14 @@ class DialPadViewModel @Inject constructor(
             providerNumberDao.getActive().collect { numbers ->
                 Log.d("DialPadVM", "loadProviderNumbers: Room emitted ${numbers.size} numbers")
                 _availableNumbers.value = numbers
-                if (_selectedProviderNumber.value == null ||
-                    numbers.none { it.number == _selectedProviderNumber.value?.number }
-                ) {
+                val selected = _selectedProviderNumber.value
+                if (selected == null || numbers.none { it.number == selected.number }) {
                     _selectedProviderNumber.value = selectDefaultNumber(numbers)
                     Log.d("DialPadVM", "loadProviderNumbers: selected default = ${_selectedProviderNumber.value?.number}")
+                } else {
+                    // Keep the same selection but refresh it from the emitted data so
+                    // updated fields (e.g. a newly-set label or color) are reflected.
+                    _selectedProviderNumber.value = numbers.first { it.number == selected.number }
                 }
             }
         }

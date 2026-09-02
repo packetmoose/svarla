@@ -85,6 +85,8 @@ fun AppNavigation(
     versionCheckService: VersionCheckService,
     autoStartHelper: AutoStartHelper? = null,
     initialRoute: String? = null,
+    dialNumber: String? = null,
+    onDialNumberConsumed: () -> Unit = {},
     navController: NavHostController = rememberNavController()
 ) {
     val isAuthenticated by authManager.isAuthenticated.collectAsState()
@@ -224,6 +226,8 @@ fun AppNavigation(
                 HomeScreen(
                     currentRoute = Screen.Home.route,
                     initialTab = when {
+                        // An external dial request lands on the dial pad tab.
+                        dialNumber != null -> BottomNavDestination.DIAL_PAD
                         initialRoute == "home?tab=calls" -> BottomNavDestination.CALLS
                         initialRoute == "home?tab=settings" -> BottomNavDestination.SETTINGS
                         else -> null
@@ -236,7 +240,9 @@ fun AppNavigation(
                     },
                     contactResolver = contactResolver,
                     voiceCallManager = voiceCallManager,
-                    audioRouter = audioRouter
+                    audioRouter = audioRouter,
+                    dialNumber = dialNumber,
+                    onDialNumberConsumed = onDialNumberConsumed
                 )
                 if (!versionBannerDismissed) {
                     Box(
@@ -277,7 +283,9 @@ private fun HomeScreen(
     onConversationClick: (providerNumber: String, phoneNumber: String) -> Unit,
     contactResolver: ContactResolver,
     voiceCallManager: VoiceCallManager,
-    audioRouter: AudioRouter
+    audioRouter: AudioRouter,
+    dialNumber: String? = null,
+    onDialNumberConsumed: () -> Unit = {}
 ) {
     val initialIndex = initialTab?.let { BottomNavDestination.entries.indexOf(it) } ?: 0
     var selectedTabIndex by rememberSaveable { mutableStateOf(initialIndex) }
@@ -383,6 +391,13 @@ private fun HomeScreen(
             when (selectedTab) {
                 BottomNavDestination.DIAL_PAD -> {
                     val dialPadViewModel: DialPadViewModel = hiltViewModel()
+                    // Apply an external dial request (tel:/PROCESS_TEXT) once.
+                    LaunchedEffect(dialNumber) {
+                        if (dialNumber != null) {
+                            dialPadViewModel.pasteNumber(dialNumber)
+                            onDialNumberConsumed()
+                        }
+                    }
                     DialPadScreen(
                         viewModel = dialPadViewModel,
                         onCallPressed = { number -> requireMicPermission { dialPadViewModel.makeCall(number) } },

@@ -70,10 +70,12 @@ class SettingsViewModel @Inject constructor(
     }
 
     private fun loadNumbers() {
-        // Observe local DB immediately — shows cached data without waiting for network
+        // Observe local DB immediately — shows cached data without waiting for network.
+        // Only active numbers are shown; inactive rows can linger in the local cache
+        // (e.g. a number removed from its provider) and must not appear in settings.
         Log.d("SettingsVM", "loadNumbers: starting Room observation")
         viewModelScope.launch {
-            providerNumberDao.getAll().collect { numbers ->
+            providerNumberDao.getActive().collect { numbers ->
                 Log.d("SettingsVM", "loadNumbers: Room emitted ${numbers.size} numbers")
                 _numbers.value = numbers
                 _hasLoadedNumbers.value = true
@@ -91,7 +93,10 @@ class SettingsViewModel @Inject constructor(
                 val response = numbersApi.getNumbers()
                 Log.d("SettingsVM", "loadNumbers: server returned ${response.numbers.size} numbers")
                 _defaultNumber.value = response.defaultNumber
-                // Batch insert all numbers to minimize Room Flow re-emissions
+                // Batch insert all numbers, then deactivate any local rows the
+                // server no longer returns — minimizes Room Flow re-emissions and
+                // keeps stale (removed) numbers out of the settings list.
+                val activeNumbers = response.numbers.map { it.number }
                 kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                     val entities = response.numbers.map { dto ->
                         val isDefault = dto.number == response.defaultNumber
@@ -106,6 +111,9 @@ class SettingsViewModel @Inject constructor(
                         )
                     }
                     providerNumberDao.insertAll(entities)
+                    if (activeNumbers.isNotEmpty()) {
+                        providerNumberDao.deactivateExcept(activeNumbers)
+                    }
                 }
                 Log.d("SettingsVM", "loadNumbers: server sync complete")
             } catch (e: Exception) {

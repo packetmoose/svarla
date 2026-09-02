@@ -6,35 +6,34 @@ import { validateLabel } from '../validators/label-validator.js';
 /**
  * Color palette for provider numbers.
  *
- * Colors are mid-tone hues (roughly 45-60% lightness) chosen so they remain
- * legible as text on both light and dark surfaces AND read clearly as solid
- * fills. Both clients use the same hex as a foreground text color (web badge,
- * Android) and as a fill (web dot / translucent badge background), so overly
- * light or overly saturated values are avoided. Hues are spread around the
- * wheel to keep adjacent numbers visually distinct.
+ * The badge fills a solid swatch with these colors and picks a black/white text
+ * color for contrast, so the palette can use saturated, clearly-distinct hues.
+ * Hues are spread evenly around the color wheel and ORDERED so that sequential
+ * assignments (numbers get colors in palette order) land far apart on the wheel,
+ * maximizing the visual difference between numbers added around the same time.
  *
  * Fallback color used by clients when a number has no color (inactive numbers
- * carry a null color). Keep in sync with the client fallbacks.
+ * may carry a null color). Keep in sync with the client fallbacks.
  */
 export const NUMBER_COLOR_FALLBACK = '#6750A4';
 
 export const NUMBER_COLOR_PALETTE = [
-  '#6750A4', // purple
-  '#006B5F', // teal
-  '#B5485E', // rose
-  '#526E2D', // olive
-  '#7C5635', // brown
-  '#00658E', // blue
-  '#8B4F8A', // mauve
-  '#5D5F30', // moss
-  '#3F6C3A', // green
-  '#9A4A2E', // terracotta
-  '#455CC7', // indigo
-  '#0A6E73', // deep cyan
-  '#8A5A00', // amber
-  '#A03E6E', // magenta
-  '#4C6A8F', // slate blue
-  '#7A5CA6', // violet
+  '#D32F2F', // red          (hue   0)
+  '#1976D2', // blue         (hue 210)
+  '#388E3C', // green        (hue 120)
+  '#F9A825', // amber        (hue  45)
+  '#7B1FA2', // purple       (hue 285)
+  '#0097A7', // cyan         (hue 187)
+  '#E64A19', // deep orange  (hue  15)
+  '#5C6BC0', // indigo       (hue 230)
+  '#689F38', // lime green   (hue  90)
+  '#C2185B', // pink         (hue 337)
+  '#00897B', // teal         (hue 172)
+  '#F57F17', // dark amber   (hue  38)
+  '#512DA8', // deep purple  (hue 262)
+  '#0288D1', // light blue   (hue 202)
+  '#AFB42B', // olive/lime   (hue  64)
+  '#AD1457', // magenta      (hue 330)
 ];
 
 /**
