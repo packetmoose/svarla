@@ -179,8 +179,10 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
   // Services
   const deviceRegistryManager = new DeviceRegistryManager(db);
 
-  // Wake signal publisher for UnifiedPush notifications
-  const wakeSignalPublisher = new WakeSignalPublisher();
+  // Wake signal publisher for UnifiedPush notifications.
+  // Pass the server logger so per-device delivery results (including HTTP status
+  // for stale/expired push endpoints) are visible in logs.
+  const wakeSignalPublisher = new WakeSignalPublisher(server.log);
 
   // In-memory active call tracking for late-joining clients.
   // Tracks calls that are currently in RINGING or CONNECTED state.
@@ -231,22 +233,35 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
   // Pass the first active provider from the registry if available.
   // If no provider is active, create a no-op stub to avoid null errors.
   const conversationProvider: TelephonyProvider = primaryProvider ?? createNoOpProvider();
-  const conversationService = new ConversationService(db, conversationProvider, (event) => {
-    // Send lightweight notification — client will sync the actual data
-    if (event.type === 'new_message') {
-      const data = event.data as { conversationNumber: string; message: { id: string; direction: string } };
-      wsBroadcaster.broadcast({
-        type: 'new_message',
-        data: {
-          conversationNumber: data.conversationNumber,
-          messageId: data.message.id,
-          direction: data.message.direction,
-        },
-      });
-    } else {
-      wsBroadcaster.broadcast({ type: event.type, data: event.data as unknown as Record<string, unknown> });
-    }
-  });
+  const conversationService = new ConversationService(
+    db,
+    conversationProvider,
+    (event) => {
+      // Send lightweight notification — client will sync the actual data
+      if (event.type === 'new_message') {
+        const data = event.data as { conversationNumber: string; message: { id: string; direction: string } };
+        wsBroadcaster.broadcast({
+          type: 'new_message',
+          data: {
+            conversationNumber: data.conversationNumber,
+            messageId: data.message.id,
+            direction: data.message.direction,
+          },
+        });
+      } else {
+        wsBroadcaster.broadcast({ type: event.type, data: event.data as unknown as Record<string, unknown> });
+      }
+    },
+    // Route each outbound SMS to the provider that actually owns the `from`
+    // number (e.g. the modem-gateway), instead of always using the first
+    // active provider. Throws ProviderUnavailableError if that provider is
+    // disabled/unavailable, so the message is correctly marked FAILED rather
+    // than silently dispatched to the wrong provider.
+    async (from: string) => {
+      const entry = await numberManagementService.requireProviderForNumber(from);
+      return entry.instance;
+    },
+  );
   const readStateService = new ReadStateService(db, () => {});
 
   // --- NotificationService ---
@@ -438,7 +453,7 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
                     wakeSignalPublisher.sendToAllDevices(devices, {
                       id: updatedEntry.id,
                       priority: 'normal',
-                    }).catch((err) => {
+                    }, 'missed_call').catch((err) => {
                       server.log.error(err, 'Failed to send missed_call wake signals');
                     });
                   }

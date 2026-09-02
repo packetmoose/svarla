@@ -80,7 +80,7 @@ export function registerAuthRoutes(
           wakeSignalPublisher.sendToAllDevices(otherDevices, {
             id: result.deviceId!,
             priority: 'normal',
-          });
+          }, 'new_device_login');
         }
       }).catch((err) => {
         server.log.error(err, 'Failed to send new_device_login wake signal');

@@ -125,9 +125,11 @@ fun AppNavigation(
                 showNotificationSetup = false
             },
             onDismiss = {
-                // User skipped — default to NONE
-                deliveryPreferences.setMode(NotificationDeliveryMode.NONE)
-                deliveryPreferences.markSetupCompleted()
+                // User dismissed without choosing. Do NOT commit NONE and do NOT mark
+                // setup complete — dismissing is not the same as explicitly opting out of
+                // notifications. Leaving setup incomplete means we re-prompt on the next
+                // launch, so a stray tap can't silently disable all background delivery.
+                // NONE is only ever set via an explicit selection in onModeSelected.
                 showNotificationSetup = false
             }
         )

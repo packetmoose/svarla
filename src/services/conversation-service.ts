@@ -39,6 +39,15 @@ export type ConversationEvent =
 
 export type ConversationBroadcastCallback = (event: ConversationEvent) => void;
 
+/**
+ * Resolves the telephony provider that owns a given "from" number.
+ * Returning null/undefined (or throwing) means no specific provider could be
+ * resolved; callers fall back to the default injected provider.
+ */
+export type ProviderResolver = (
+  from: string
+) => Promise<TelephonyProvider | null> | TelephonyProvider | null;
+
 const MAX_RETRIES = 3;
 
 /**
@@ -53,15 +62,36 @@ export class ConversationService {
   private readonly db: Kysely<Database>;
   private readonly provider: TelephonyProvider;
   private readonly broadcast: ConversationBroadcastCallback;
+  private readonly resolveProvider?: ProviderResolver;
 
   constructor(
     db: Kysely<Database>,
     provider: TelephonyProvider,
-    broadcast: ConversationBroadcastCallback
+    broadcast: ConversationBroadcastCallback,
+    resolveProvider?: ProviderResolver
   ) {
     this.db = db;
     this.provider = provider;
     this.broadcast = broadcast;
+    this.resolveProvider = resolveProvider;
+  }
+
+  /**
+   * Resolve the provider that should dispatch an outbound message from the
+   * given number. Uses the per-number resolver when available so the message
+   * is routed to the provider that actually owns the "from" number (e.g. the
+   * modem-gateway), instead of a single statically-chosen provider.
+   * Falls back to the injected default provider when no resolver is configured
+   * or the resolver cannot determine a provider.
+   */
+  private async providerFor(from: string): Promise<TelephonyProvider> {
+    if (this.resolveProvider) {
+      const resolved = await this.resolveProvider(from);
+      if (resolved) {
+        return resolved;
+      }
+    }
+    return this.provider;
   }
 
   /**
@@ -105,10 +135,12 @@ export class ConversationService {
 
     let message: Message = this.mapRow(inserted);
 
-    // Send via provider (use normalizedTo for E.164 providers, original for local-capable providers)
+    // Send via the provider that owns the `from` number (use normalizedTo for
+    // E.164 providers, original for local-capable providers)
     let result: SmsResult;
     try {
-      result = await this.provider.sendSms(from, normalizedTo, body);
+      const provider = await this.providerFor(from);
+      result = await provider.sendSms(from, normalizedTo, body);
     } catch {
       // Provider threw — mark as FAILED
       message = await this.updateStatus(message.id, 'FAILED');
@@ -265,10 +297,11 @@ export class ConversationService {
       .where('id', '=', messageId)
       .execute();
 
-    // Re-send via provider
+    // Re-send via the provider that owns the `from` number
     let result: SmsResult;
     try {
-      result = await this.provider.sendSms(
+      const provider = await this.providerFor(existing.provider_number ?? '');
+      result = await provider.sendSms(
         existing.provider_number ?? '',
         existing.conversation_number,
         existing.body

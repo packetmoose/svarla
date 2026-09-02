@@ -159,7 +159,7 @@ export function registerWebhookRouter(
           await wakeSignalPublisher.sendToAllDevices(devices, {
             id: callId,
             priority: 'normal',
-          });
+          }, 'blocked_call');
         }
       } catch (err) {
         server.log.error(err, '[BlockedCall] Failed to send wake signals');
@@ -622,7 +622,7 @@ export function registerWebhookRouter(
               wakeSignalPublisher.sendToAllDevices(devices, {
                 id: body.uuid!,
                 priority: 'high',
-              }).catch((err) => {
+              }, 'incoming_call_legacy').catch((err) => {
                 server.log.error(err, 'Failed to send wake signals for incoming call');
               });
             }

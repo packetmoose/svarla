@@ -22,6 +22,9 @@ interface CallHistoryDao {
     @Query("SELECT * FROM call_history WHERE phoneNumber = :phoneNumber ORDER BY timestamp DESC")
     fun getByPhoneNumber(phoneNumber: String): Flow<List<CallHistoryEntry>>
 
+    @Query("SELECT * FROM call_history WHERE phoneNumber = :phoneNumber AND providerNumber = :providerNumber ORDER BY timestamp DESC")
+    fun getByPhoneAndProvider(phoneNumber: String, providerNumber: String): Flow<List<CallHistoryEntry>>
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(entry: CallHistoryEntry)
 

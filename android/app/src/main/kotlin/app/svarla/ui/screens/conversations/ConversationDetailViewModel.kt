@@ -232,9 +232,14 @@ class ConversationDetailViewModel @Inject constructor(
 
     private fun observeMessages() {
         viewModelScope.launch {
+            val callHistoryFlow = if (providerNumber.isNotEmpty()) {
+                callHistoryDao.getByPhoneAndProvider(phoneNumber, providerNumber)
+            } else {
+                callHistoryDao.getByPhoneNumber(phoneNumber)
+            }
             combine(
                 conversationRepository.observeMessages(providerNumber, phoneNumber, 100),
-                callHistoryDao.getByPhoneNumber(phoneNumber)
+                callHistoryFlow
             ) { messages, callHistory ->
                 Pair(messages, callHistory)
             }

@@ -19,6 +19,10 @@
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- Exact alarm to reliably restart the WebSocket foreground service after the app
+         is swiped away, without Doze/OEM batching deferring the restart. User-grantable
+         and revocable; the code falls back to an inexact alarm when not permitted. -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <application
         android:name=".SvarlaApplication"
