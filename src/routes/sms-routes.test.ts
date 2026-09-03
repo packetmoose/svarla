@@ -234,7 +234,18 @@ describe('SMS Routes', () => {
       expect(body.messages[1].id).toBe('msg-2');
       expect(body.messages[1].body).toBe('Reply');
       expect(body.messages[1].direction).toBe('RECEIVED');
-      expect(mockService.getMessages).toHaveBeenCalledWith('+14155551234', 100);
+      expect(mockService.getMessages).toHaveBeenCalledWith('+14155551234', 100, undefined);
+    });
+
+    it('should scope messages to a provider thread when `from` is supplied', async () => {
+      (mockService.getMessages as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+      await server.inject({
+        method: 'GET',
+        url: '/api/conversations/%2B14155551234?from=%2B14155550000&limit=50',
+      });
+
+      expect(mockService.getMessages).toHaveBeenCalledWith('+14155551234', 50, '+14155550000');
     });
 
     it('should return empty messages array for a thread with no messages', async () => {
@@ -258,7 +269,7 @@ describe('SMS Routes', () => {
         url: '/api/conversations/%2B447911123456',
       });
 
-      expect(mockService.getMessages).toHaveBeenCalledWith('+447911123456', 100);
+      expect(mockService.getMessages).toHaveBeenCalledWith('+447911123456', 100, undefined);
     });
   });
 });

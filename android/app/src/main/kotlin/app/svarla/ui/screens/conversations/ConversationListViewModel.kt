@@ -81,9 +81,14 @@ class ConversationListViewModel @Inject constructor(
                         val contactPhotoUris = contactResolver.resolveContactPhotoUris(phoneNumbers)
                         Log.d(TAG, "observeConversations: contact resolve took ${System.currentTimeMillis() - contactResolveStart}ms for ${phoneNumbers.size} numbers (${contactNames.size} resolved)")
 
-                        // Batch resolve unread message counts per conversation
+                        // Batch resolve unread message counts per conversation thread.
+                        // Keyed by the full (providerNumber, phoneNumber) pair so that two
+                        // conversations with the same recipient but different provider numbers
+                        // are tracked independently.
                         val unreadCounts = messageDao.getUnreadCountsPerConversation()
-                        val unreadCountMap = unreadCounts.associate { it.conversationNumber to it.count }
+                        val unreadCountMap = unreadCounts.associate {
+                            (it.providerNumber to it.conversationNumber) to it.count
+                        }
 
                         // Batch resolve all provider numbers in a single query
                         val providerResolveStart = System.currentTimeMillis()
@@ -101,7 +106,7 @@ class ConversationListViewModel @Inject constructor(
                             val providerColor = providerInfo?.color ?: "#6750A4"
                             // Use the DAO count if messages are synced locally, otherwise
                             // fall back to timestamp-based detection (shows 1 if unread)
-                            val daoCount = unreadCountMap[conv.phoneNumber] ?: 0
+                            val daoCount = unreadCountMap[conv.providerNumber to conv.phoneNumber] ?: 0
                             val unreadCount = if (daoCount > 0) {
                                 daoCount
                             } else {

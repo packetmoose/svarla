@@ -152,23 +152,42 @@ function createMockDb(
                   },
                 }),
               }),
-              where: (_col2: string, _op2: string, _matchValue2: unknown) => ({
-                orderBy: (_orderCol: string, dir: string) => ({
-                  limit: (lim: number) => ({
-                    execute: async () => {
-                      const filtered = messages.filter((m) => {
-                        if (_col === 'conversation_number') return m.conversation_number === matchValue;
-                        return false;
-                      });
-                      const sorted = [...filtered].sort((a, b) => {
-                        if (dir === 'desc') return b.timestamp.getTime() - a.timestamp.getTime();
-                        return a.timestamp.getTime() - b.timestamp.getTime();
-                      });
-                      return sorted.slice(0, lim).map((m) => ({ ...m }));
-                    },
+              where: (_col2: string, _op2: string, _matchValue2: unknown) => {
+                // Filters applied so far: conversation_number (from the outer where)
+                // and `removed` (this where). getMessages may add an optional third
+                // where on provider_number.
+                const applyBaseFilter = (m: MockMessageRow) =>
+                  _col === 'conversation_number' ? m.conversation_number === matchValue : false;
+
+                const runQuery = (dir: string, lim: number, providerFilter?: unknown) => {
+                  const filtered = messages.filter((m) => {
+                    if (!applyBaseFilter(m)) return false;
+                    if (providerFilter !== undefined) return m.provider_number === providerFilter;
+                    return true;
+                  });
+                  const sorted = [...filtered].sort((a, b) => {
+                    if (dir === 'desc') return b.timestamp.getTime() - a.timestamp.getTime();
+                    return a.timestamp.getTime() - b.timestamp.getTime();
+                  });
+                  return sorted.slice(0, lim).map((m) => ({ ...m }));
+                };
+
+                return {
+                  // Optional third where — provider_number scoping.
+                  where: (_col3: string, _op3: string, matchValue3: unknown) => ({
+                    orderBy: (_orderCol: string, dir: string) => ({
+                      limit: (lim: number) => ({
+                        execute: async () => runQuery(dir, lim, matchValue3),
+                      }),
+                    }),
                   }),
-                }),
-              }),
+                  orderBy: (_orderCol: string, dir: string) => ({
+                    limit: (lim: number) => ({
+                      execute: async () => runQuery(dir, lim),
+                    }),
+                  }),
+                };
+              },
             }),
           }),
           select: (_cols: string[]) => ({
@@ -841,6 +860,40 @@ describe('ConversationService', () => {
       // Should be the 2 most recent, in chronological order
       expect(messages[0].body).toBe('Middle');
       expect(messages[1].body).toBe('Newest');
+    });
+
+    it('should scope messages to a single provider thread when providerNumber is given', async () => {
+      const now = Date.now();
+      dbHelper.setMessages([
+        {
+          id: 'msg-a',
+          provider_message_id: null,
+          conversation_number: '+14155551234',
+          provider_number: '+14155550000',
+          body: 'From provider A',
+          direction: 'RECEIVED',
+          status: 'DELIVERED',
+          timestamp: new Date(now - 3000),
+          retry_count: 0,
+        },
+        {
+          id: 'msg-b',
+          provider_message_id: null,
+          conversation_number: '+14155551234',
+          provider_number: '+14155559999',
+          body: 'From provider B',
+          direction: 'RECEIVED',
+          status: 'DELIVERED',
+          timestamp: new Date(now - 2000),
+          retry_count: 0,
+        },
+      ]);
+
+      const messages = await service.getMessages('+14155551234', 100, '+14155550000');
+
+      // Only the message belonging to provider A's thread should be returned.
+      expect(messages).toHaveLength(1);
+      expect(messages[0].body).toBe('From provider A');
     });
 
     it('should return empty array for a number with no messages', async () => {

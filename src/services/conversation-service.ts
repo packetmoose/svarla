@@ -482,14 +482,24 @@ export class ConversationService {
   /**
    * Get the last N messages in a thread ordered chronologically (oldest first).
    */
-  async getMessages(phoneNumber: string, limit: number = 100): Promise<Message[]> {
+  async getMessages(phoneNumber: string, limit: number = 100, providerNumber?: string): Promise<Message[]> {
     const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
 
-    const messages = await this.db
+    let query = this.db
       .selectFrom('messages')
       .selectAll()
       .where('conversation_number', '=', phoneNumber)
-      .where('removed', '=', false)
+      .where('removed', '=', false);
+
+    // A conversation thread is identified by the (provider_number, conversation_number)
+    // pair. When a provider number is supplied, scope the messages to that specific
+    // thread so two conversations with the same recipient but different own-numbers
+    // don't bleed into each other.
+    if (providerNumber) {
+      query = query.where('provider_number', '=', providerNumber);
+    }
+
+    const messages = await query
       .orderBy('timestamp', 'desc')
       .limit(safeLimit)
       .execute();

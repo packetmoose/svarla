@@ -127,6 +127,7 @@ export function registerSmsRoutes(
    */
   server.get('/api/conversations/:number', async (request: FastifyRequest, reply: FastifyReply) => {
     const { number } = request.params as { number: string };
+    const query = request.query as { limit?: string; from?: string };
 
     if (!number || number.trim() === '') {
       return reply.status(400).send({
@@ -138,7 +139,13 @@ export function registerSmsRoutes(
     // URL-decode the number parameter (+ is encoded as %2B in URLs)
     const decodedNumber = decodeURIComponent(number);
 
-    const messages = await conversationService.getMessages(decodedNumber, 100);
+    // Optional filters: limit caps the result count; `from` scopes messages to a
+    // single conversation thread by its provider (own) number so that two
+    // conversations with the same recipient but different own-numbers stay separate.
+    const limit = Math.min(Math.max(parseInt(query.limit ?? '100', 10) || 100, 1), 100);
+    const providerNumber = query.from && query.from.trim() !== '' ? query.from : undefined;
+
+    const messages = await conversationService.getMessages(decodedNumber, limit, providerNumber);
 
     return reply.status(200).send({
       phoneNumber: decodedNumber,
