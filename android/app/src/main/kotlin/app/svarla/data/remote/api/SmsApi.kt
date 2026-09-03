@@ -27,9 +27,11 @@ interface SmsApi {
     suspend fun getMessages(phoneNumber: String, limit: Int = 100, providerNumber: String? = null): MessageListResponse
 
     /**
-     * DELETE /api/conversations/{number} — Mark a conversation as removed.
+     * DELETE /api/conversations/{number}?from={providerNumber} — Mark a
+     * conversation as removed. A thread is identified by the (providerNumber,
+     * phoneNumber) pair, so the provider number is required.
      */
-    suspend fun removeConversation(phoneNumber: String)
+    suspend fun removeConversation(providerNumber: String, phoneNumber: String)
 
     /**
      * DELETE /api/messages/{id} — Mark a message as removed.

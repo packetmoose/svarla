@@ -28,7 +28,7 @@ object DatabaseModule {
             SvarlaDatabase::class.java,
             SvarlaDatabase.DATABASE_NAME
         )
-            .addMigrations(SvarlaDatabase.MIGRATION_1_2, SvarlaDatabase.MIGRATION_2_3, SvarlaDatabase.MIGRATION_3_4, SvarlaDatabase.MIGRATION_4_5, SvarlaDatabase.MIGRATION_5_6, SvarlaDatabase.MIGRATION_6_7)
+            .addMigrations(SvarlaDatabase.MIGRATION_1_2, SvarlaDatabase.MIGRATION_2_3, SvarlaDatabase.MIGRATION_3_4, SvarlaDatabase.MIGRATION_4_5, SvarlaDatabase.MIGRATION_5_6, SvarlaDatabase.MIGRATION_6_7, SvarlaDatabase.MIGRATION_7_8)
             .build()
     }
 

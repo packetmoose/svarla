@@ -27,6 +27,7 @@ import app.svarla.domain.notifications.NotificationHandler
 import app.svarla.domain.notifications.PushEndpointManager
 import app.svarla.domain.version.VersionCheckService
 import app.svarla.ui.navigation.AppNavigation
+import app.svarla.ui.navigation.Screen
 import app.svarla.ui.theme.SvarlaTheme
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -209,7 +210,9 @@ class MainActivity : ComponentActivity() {
                 val phoneNumber = intent.getStringExtra(NotificationHandler.EXTRA_PHONE_NUMBER)
                 val providerNumber = intent.getStringExtra(NotificationHandler.EXTRA_PROVIDER_NUMBER)
                 if (phoneNumber != null && providerNumber != null) {
-                    "conversation_detail/${java.net.URLEncoder.encode(providerNumber, "UTF-8")}/${java.net.URLEncoder.encode(phoneNumber, "UTF-8")}"
+                    // Use createRoute so an empty provider number is mapped to the
+                    // NO_PROVIDER sentinel (empty path segments can't be routed).
+                    Screen.ConversationDetail.createRoute(providerNumber, phoneNumber)
                 } else null
             }
             // Incoming call: no route needed, HomeScreen shows IncomingCallScreen when RINGING

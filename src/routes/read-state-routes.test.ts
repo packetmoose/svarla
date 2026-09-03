@@ -73,14 +73,27 @@ describe('Read State Routes', () => {
     it('should mark a thread as read and return updated counts', async () => {
       const response = await server.inject({
         method: 'POST',
-        url: '/api/read-state/messages/+15551234567',
+        url: '/api/read-state/messages/+15551234567?from=%2B15550000000',
       });
 
       expect(response.statusCode).toBe(200);
       const body = JSON.parse(response.body);
       expect(body.unreadMessages).toBe(3);
       expect(body.unseenMissedCalls).toBe(2);
-      expect(mockReadStateService.markThreadAsRead).toHaveBeenCalledWith('+15551234567', 'test-device-id');
+      expect(mockReadStateService.markThreadAsRead).toHaveBeenCalledWith(
+        '+15550000000',
+        '+15551234567',
+        'test-device-id'
+      );
+    });
+
+    it('should return 400 when the from (provider number) query param is missing', async () => {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/api/read-state/messages/+15551234567',
+      });
+
+      expect(response.statusCode).toBe(400);
     });
 
     it('should return 400 for empty phone number', async () => {

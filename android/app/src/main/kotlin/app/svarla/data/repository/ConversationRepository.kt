@@ -251,20 +251,9 @@ class ConversationRepository @Inject constructor(
     }
 
     /**
-     * Mark a conversation thread as read locally and on the server.
-     */
-    suspend fun markThreadAsRead(phoneNumber: String) {
-        val now = System.currentTimeMillis()
-        conversationDao.markAsReadByPhone(phoneNumber, now)
-        try {
-            readStateApi.markThreadAsRead(phoneNumber)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to sync read state to server for $phoneNumber", e)
-        }
-    }
-
-    /**
-     * Mark a specific conversation thread (provider + phone) as read locally and on the server.
+     * Mark a specific conversation thread (provider + phone) as read locally and
+     * on the server. A thread is identified by the (providerNumber, phoneNumber)
+     * pair; an empty providerNumber is the unknown/legacy sentinel.
      */
     suspend fun markThreadAsRead(providerNumber: String, phoneNumber: String) {
         val now = System.currentTimeMillis()
@@ -274,7 +263,7 @@ class ConversationRepository @Inject constructor(
             conversationDao.markAsReadByPhone(phoneNumber, now)
         }
         try {
-            readStateApi.markThreadAsRead(phoneNumber)
+            readStateApi.markThreadAsRead(providerNumber, phoneNumber)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to sync read state to server for $providerNumber -> $phoneNumber", e)
         }
@@ -282,16 +271,18 @@ class ConversationRepository @Inject constructor(
 
     /**
      * Remove a conversation (hide it from the list).
-     * Deletes locally and marks as removed on the server.
+     * Deletes locally and marks as removed on the server. Scoped to the
+     * (providerNumber, phoneNumber) pair so the sibling thread with the same
+     * recipient is not affected.
      */
     suspend fun removeConversation(providerNumber: String, phoneNumber: String) {
         // Remove from local DB
         conversationDao.deleteByProviderAndPhone(providerNumber, phoneNumber)
         // Mark as removed on the server
         try {
-            smsApi.removeConversation(phoneNumber)
+            smsApi.removeConversation(providerNumber, phoneNumber)
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to remove conversation on server for $phoneNumber", e)
+            Log.w(TAG, "Failed to remove conversation on server for $providerNumber -> $phoneNumber", e)
         }
     }
 
@@ -368,12 +359,10 @@ class ConversationRepository @Inject constructor(
             val eventProviderNumber = data["providerNumber"]?.jsonPrimitive?.content ?: ""
             val direction = data["direction"]?.jsonPrimitive?.content
 
-            // Resolve the provider number for the specific thread. When the event omits
-            // it, fall back to the provider number last used for this conversation so we
-            // don't collapse two same-recipient threads into one ambiguous lookup.
-            val providerNumber = eventProviderNumber.ifEmpty {
-                messageDao.getLastProviderNumberForConversation(conversationNumber) ?: ""
-            }
+            // The server always includes the providerNumber on new_message, which
+            // identifies the exact (providerNumber, conversationNumber) thread.
+            // Empty string is the unknown/legacy sentinel.
+            val providerNumber = eventProviderNumber
 
             // Optimistically update lastReceivedAt for incoming messages so the
             // unread indicator in the conversation list shows immediately without

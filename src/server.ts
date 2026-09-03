@@ -252,11 +252,16 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
     (event) => {
       // Send lightweight notification — client will sync the actual data
       if (event.type === 'new_message') {
-        const data = event.data as { conversationNumber: string; message: { id: string; direction: string } };
+        const data = event.data as {
+          conversationNumber: string;
+          providerNumber: string;
+          message: { id: string; direction: string };
+        };
         wsBroadcaster.broadcast({
           type: 'new_message',
           data: {
             conversationNumber: data.conversationNumber,
+            providerNumber: data.providerNumber,
             messageId: data.message.id,
             direction: data.message.direction,
           },

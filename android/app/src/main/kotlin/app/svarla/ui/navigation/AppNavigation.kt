@@ -64,8 +64,17 @@ sealed class Screen(val route: String) {
     data object Calls : Screen("calls")
     data object Conversations : Screen("conversations")
     data object ConversationDetail : Screen("conversation_detail/{providerNumber}/{phoneNumber}") {
-        fun createRoute(providerNumber: String, phoneNumber: String): String =
-            "conversation_detail/${java.net.URLEncoder.encode(providerNumber, "UTF-8")}/${java.net.URLEncoder.encode(phoneNumber, "UTF-8")}"
+        // Sentinel for a thread whose provider number is unknown/legacy (empty
+        // string). An empty path segment produces "conversation_detail//<phone>",
+        // which Compose Navigation's StringType cannot match, so it would crash on
+        // navigate(). A real provider number is always E.164 (starts with '+'),
+        // so this token can never collide with one.
+        const val NO_PROVIDER = "none"
+
+        fun createRoute(providerNumber: String, phoneNumber: String): String {
+            val provider = providerNumber.ifEmpty { NO_PROVIDER }
+            return "conversation_detail/${java.net.URLEncoder.encode(provider, "UTF-8")}/${java.net.URLEncoder.encode(phoneNumber, "UTF-8")}"
+        }
     }
     data object DialPad : Screen("dial_pad")
     data object Settings : Screen("settings")

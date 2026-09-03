@@ -26,7 +26,7 @@ import app.svarla.data.local.entity.ProviderNumber
         DeviceState::class,
         ActiveNotification::class
     ],
-    version = 7,
+    version = 8,
     exportSchema = false
 )
 abstract class SvarlaDatabase : RoomDatabase() {
@@ -114,6 +114,90 @@ abstract class SvarlaDatabase : RoomDatabase() {
                     )
                     """.trimIndent()
                 )
+            }
+        }
+
+        // Make a conversation's identity the (providerNumber, phoneNumber) pair.
+        // Previously the conversations table was keyed by phoneNumber alone, so
+        // two threads with the same recipient but different provider (own)
+        // numbers collapsed into one row and one thread went missing. Rebuild the
+        // table with the composite primary key and backfill providerNumber from
+        // the newest message per recipient (SQLite cannot change a PK in place).
+        val MIGRATION_7_8 = object : Migration(7, 8) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                // Column definitions must match what Room generates for the
+                // Conversation entity exactly (no SQL DEFAULT, since the entity
+                // declares none) or Room's open-time schema validation fails.
+                // The backfill below always supplies providerNumber, so no
+                // default is needed.
+                db.execSQL(
+                    """
+                    CREATE TABLE conversations_new (
+                        providerNumber TEXT NOT NULL,
+                        phoneNumber TEXT NOT NULL,
+                        lastMessagePreview TEXT,
+                        lastMessageTimestamp INTEGER,
+                        lastReceivedAt INTEGER,
+                        lastReadAt INTEGER,
+                        createdAt INTEGER NOT NULL,
+                        PRIMARY KEY (providerNumber, phoneNumber)
+                    )
+                    """.trimIndent()
+                )
+
+                // Copy existing rows, backfilling providerNumber from the newest
+                // message for that recipient (empty string when none exists).
+                db.execSQL(
+                    """
+                    INSERT OR IGNORE INTO conversations_new
+                        (providerNumber, phoneNumber, lastMessagePreview, lastMessageTimestamp, lastReceivedAt, lastReadAt, createdAt)
+                    SELECT
+                        COALESCE((
+                            SELECT m.providerNumber FROM messages m
+                            WHERE m.conversationNumber = c.phoneNumber
+                              AND m.providerNumber IS NOT NULL
+                            ORDER BY m.timestamp DESC
+                            LIMIT 1
+                        ), '') AS providerNumber,
+                        c.phoneNumber,
+                        c.lastMessagePreview,
+                        c.lastMessageTimestamp,
+                        c.lastReceivedAt,
+                        c.lastReadAt,
+                        c.createdAt
+                    FROM conversations c
+                    """.trimIndent()
+                )
+
+                // Create the additional rows for recipients that have messages
+                // under other provider numbers, so no thread is lost.
+                db.execSQL(
+                    """
+                    INSERT OR IGNORE INTO conversations_new
+                        (providerNumber, phoneNumber, lastMessagePreview, lastMessageTimestamp, lastReceivedAt, lastReadAt, createdAt)
+                    SELECT
+                        m.providerNumber,
+                        m.conversationNumber AS phoneNumber,
+                        (SELECT body FROM messages mm
+                         WHERE mm.conversationNumber = m.conversationNumber
+                           AND mm.providerNumber = m.providerNumber
+                         ORDER BY mm.timestamp DESC LIMIT 1) AS lastMessagePreview,
+                        (SELECT timestamp FROM messages mm
+                         WHERE mm.conversationNumber = m.conversationNumber
+                           AND mm.providerNumber = m.providerNumber
+                         ORDER BY mm.timestamp DESC LIMIT 1) AS lastMessageTimestamp,
+                        NULL AS lastReceivedAt,
+                        NULL AS lastReadAt,
+                        (SELECT createdAt FROM conversations c WHERE c.phoneNumber = m.conversationNumber) AS createdAt
+                    FROM messages m
+                    WHERE m.providerNumber IS NOT NULL
+                      AND EXISTS (SELECT 1 FROM conversations c WHERE c.phoneNumber = m.conversationNumber)
+                    GROUP BY m.conversationNumber, m.providerNumber
+                    """.trimIndent()
+                )
+
+                db.execSQL("DROP TABLE conversations")
+                db.execSQL("ALTER TABLE conversations_new RENAME TO conversations")
             }
         }
     }

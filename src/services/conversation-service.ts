@@ -34,7 +34,10 @@ export interface PaginatedConversations {
 }
 
 export type ConversationEvent =
-  | { type: 'new_message'; data: { conversationNumber: string; message: Message } }
+  | {
+      type: 'new_message';
+      data: { conversationNumber: string; providerNumber: string; message: Message };
+    }
   | { type: 'message_status'; data: { messageId: string; status: string } };
 
 export type ConversationBroadcastCallback = (event: ConversationEvent) => void;
@@ -49,6 +52,16 @@ export type ProviderResolver = (
 ) => Promise<TelephonyProvider | null> | TelephonyProvider | null;
 
 const MAX_RETRIES = 3;
+
+/**
+ * Build the composite read-state / thread key for a conversation. A thread is
+ * identified by the (provider_number, phone_number) pair; the key is stored in
+ * read_state.item_key as `<provider_number>|<phone_number>`. The empty string
+ * is used for an unknown/legacy provider number.
+ */
+export function threadKey(providerNumber: string, phoneNumber: string): string {
+  return `${providerNumber}|${phoneNumber}`;
+}
 
 /**
  * ConversationService manages SMS conversation threads:
@@ -116,8 +129,8 @@ export class ConversationService {
     // Normalize local numbers to E.164 using the from number's country code
     const normalizedTo = normalizeToE164(to, from);
 
-    // Upsert conversation (keyed by normalized number)
-    await this.upsertConversation(normalizedTo);
+    // Upsert conversation (keyed by the (provider_number, phone_number) pair)
+    await this.upsertConversation(from, normalizedTo);
 
     // Insert message with PENDING status
     const inserted = await this.db
@@ -144,8 +157,11 @@ export class ConversationService {
     } catch {
       // Provider threw — mark as FAILED
       message = await this.updateStatus(message.id, 'FAILED');
-      await this.updateConversationMetadata(normalizedTo, body);
-      this.broadcast({ type: 'new_message', data: { conversationNumber: normalizedTo, message } });
+      await this.updateConversationMetadata(from, normalizedTo, body);
+      this.broadcast({
+        type: 'new_message',
+        data: { conversationNumber: normalizedTo, providerNumber: from, message },
+      });
       return message;
     }
 
@@ -178,10 +194,13 @@ export class ConversationService {
     }
 
     // Update conversation metadata
-    await this.updateConversationMetadata(normalizedTo, body);
+    await this.updateConversationMetadata(from, normalizedTo, body);
 
     // Broadcast new message event
-    this.broadcast({ type: 'new_message', data: { conversationNumber: normalizedTo, message } });
+    this.broadcast({
+      type: 'new_message',
+      data: { conversationNumber: normalizedTo, providerNumber: from, message },
+    });
 
     return message;
   }
@@ -211,8 +230,9 @@ export class ConversationService {
       }
     }
 
-    // Upsert conversation (keyed by E.164 normalized `from`)
-    await this.upsertConversation(from);
+    // Upsert conversation (keyed by the (provider_number, phone_number) pair;
+    // `to` is our own/provider number, `from` is the remote party)
+    await this.upsertConversation(to, from);
 
     // Insert message with RECEIVED/DELIVERED
     const inserted = await this.db
@@ -233,10 +253,13 @@ export class ConversationService {
     const message = this.mapRow(inserted);
 
     // Update conversation metadata
-    await this.updateConversationMetadata(from, body, timestamp);
+    await this.updateConversationMetadata(to, from, body, timestamp);
 
     // Broadcast new message event
-    this.broadcast({ type: 'new_message', data: { conversationNumber: from, message } });
+    this.broadcast({
+      type: 'new_message',
+      data: { conversationNumber: from, providerNumber: to, message },
+    });
 
     return message;
   }
@@ -349,21 +372,8 @@ export class ConversationService {
     const safePageSize = Math.max(1, Math.min(100, Math.floor(pageSize)));
     const offset = (safePage - 1) * safePageSize;
 
-    // If filtering by provider number, find conversations that have messages with that provider number
-    let filteredPhoneNumbers: string[] | null = null;
-    if (providerNumber) {
-      const rows = await this.db
-        .selectFrom('messages')
-        .select('conversation_number')
-        .where('provider_number', '=', providerNumber)
-        .groupBy('conversation_number')
-        .execute();
-      filteredPhoneNumbers = rows.map((r) => r.conversation_number);
-      if (filteredPhoneNumbers.length === 0) {
-        return { conversations: [], page: safePage, pageSize: safePageSize, total: 0, totalPages: 0 };
-      }
-    }
-
+    // A conversation is identified by the (provider_number, phone_number) pair,
+    // so filtering by provider number is a direct column filter on the row.
     let conversationsQuery = this.db
       .selectFrom('conversations')
       .selectAll()
@@ -377,9 +387,9 @@ export class ConversationService {
       .select((eb) => eb.fn.countAll<string>().as('count'))
       .where('removed', '=', false);
 
-    if (filteredPhoneNumbers) {
-      conversationsQuery = conversationsQuery.where('phone_number', 'in', filteredPhoneNumbers);
-      countQuery = countQuery.where('phone_number', 'in', filteredPhoneNumbers);
+    if (providerNumber) {
+      conversationsQuery = conversationsQuery.where('provider_number', '=', providerNumber);
+      countQuery = countQuery.where('provider_number', '=', providerNumber);
     }
 
     const [conversations, countResult] = await Promise.all([
@@ -390,14 +400,12 @@ export class ConversationService {
     const total = parseInt(countResult.count, 10);
     const totalPages = Math.ceil(total / safePageSize);
 
-    // Look up most recent provider_number for each conversation
-    const phoneNumbers = conversations.map((c) => c.phone_number);
-    const providerNumbers = await this.getConversationProviderNumbers(phoneNumbers);
-
     return {
       conversations: conversations.map((c) => ({
         phone_number: c.phone_number,
-        provider_number: providerNumbers.get(c.phone_number) ?? null,
+        // Empty string is the sentinel for "unknown/legacy provider"; surface it
+        // as null to API clients that treat missing provider as null.
+        provider_number: c.provider_number === '' ? null : c.provider_number,
         last_message_preview: c.last_message_preview,
         last_message_timestamp: c.last_message_timestamp,
         created_at: c.created_at,
@@ -410,69 +418,54 @@ export class ConversationService {
   }
 
   /**
-   * Get the most recently used provider_number for each conversation.
-   * Returns a Map of phoneNumber → provider_number.
+   * Get per-thread read_at timestamps for a list of thread keys.
+   * Each key is the composite `<provider_number>|<phone_number>` identifying a
+   * single thread. Returns a Map of threadKey → read_at Date.
    */
-  private async getConversationProviderNumbers(phoneNumbers: string[]): Promise<Map<string, string>> {
-    if (phoneNumbers.length === 0) return new Map();
-
-    // For each conversation, get the provider_number from the most recent message that has one
-    const rows = await this.db
-      .selectFrom('messages')
-      .select(['conversation_number', 'provider_number'])
-      .where('conversation_number', 'in', phoneNumbers)
-      .where('provider_number', 'is not', null)
-      .orderBy('timestamp', 'desc')
-      .execute();
-
-    const map = new Map<string, string>();
-    for (const row of rows) {
-      // Only take the first (most recent) provider_number per conversation
-      if (!map.has(row.conversation_number) && row.provider_number) {
-        map.set(row.conversation_number, row.provider_number);
-      }
-    }
-    return map;
-  }
-
-  /**
-   * Get per-thread read_at timestamps for a list of phone numbers.
-   * Returns a Map of phoneNumber → read_at Date.
-   */
-  async getThreadReadStates(phoneNumbers: string[]): Promise<Map<string, Date>> {
-    if (phoneNumbers.length === 0) return new Map();
+  async getThreadReadStates(threadKeys: string[]): Promise<Map<string, Date>> {
+    if (threadKeys.length === 0) return new Map();
 
     const readStates = await this.db
       .selectFrom('read_state')
       .select(['item_key', 'read_at'])
       .where('item_type', '=', 'messages')
-      .where('item_key', 'in', phoneNumbers)
+      .where('item_key', 'in', threadKeys)
       .execute();
 
     return new Map(readStates.map((rs) => [rs.item_key, rs.read_at]));
   }
 
   /**
-   * Get the timestamp of the last RECEIVED message per conversation thread.
-   * Returns a Map of phoneNumber → timestamp.
+   * Get the timestamp of the last RECEIVED message per conversation thread,
+   * scoped to the (provider_number, phone_number) pair. Returns a Map keyed by
+   * the composite thread key `<provider_number>|<phone_number>`.
    */
-  async getLastReceivedTimestamps(phoneNumbers: string[]): Promise<Map<string, Date>> {
-    if (phoneNumbers.length === 0) return new Map();
+  async getLastReceivedTimestamps(
+    threads: Array<{ providerNumber: string; phoneNumber: string }>
+  ): Promise<Map<string, Date>> {
+    if (threads.length === 0) return new Map();
 
     const results = new Map<string, Date>();
 
-    for (const phoneNumber of phoneNumbers) {
-      const row = await this.db
+    for (const { providerNumber, phoneNumber } of threads) {
+      let query = this.db
         .selectFrom('messages')
         .select('timestamp')
         .where('conversation_number', '=', phoneNumber)
-        .where('direction', '=', 'RECEIVED')
-        .orderBy('timestamp', 'desc')
-        .limit(1)
-        .executeTakeFirst();
+        .where('direction', '=', 'RECEIVED');
+
+      // Empty provider means "unknown/legacy" — match messages without a
+      // provider number so those threads still resolve a last-received time.
+      if (providerNumber === '') {
+        query = query.where('provider_number', 'is', null);
+      } else {
+        query = query.where('provider_number', '=', providerNumber);
+      }
+
+      const row = await query.orderBy('timestamp', 'desc').limit(1).executeTakeFirst();
 
       if (row) {
-        results.set(phoneNumber, row.timestamp);
+        results.set(threadKey(providerNumber, phoneNumber), row.timestamp);
       }
     }
 
@@ -512,10 +505,11 @@ export class ConversationService {
    * Mark a conversation as removed. It won't be returned in getConversations.
    * Does not permanently delete the data.
    */
-  async removeConversation(phoneNumber: string): Promise<void> {
+  async removeConversation(providerNumber: string, phoneNumber: string): Promise<void> {
     await this.db
       .updateTable('conversations')
       .set({ removed: true })
+      .where('provider_number', '=', providerNumber)
       .where('phone_number', '=', phoneNumber)
       .execute();
   }
@@ -544,12 +538,15 @@ export class ConversationService {
   }
 
   /**
-   * Upsert a conversation entry. If it already exists, un-remove it so it reappears.
+   * Upsert a conversation entry, keyed by the (provider_number, phone_number)
+   * pair so two threads with the same recipient but different own-numbers stay
+   * distinct. If it already exists, un-remove it so it reappears.
    */
-  private async upsertConversation(phoneNumber: string): Promise<void> {
+  private async upsertConversation(providerNumber: string, phoneNumber: string): Promise<void> {
     const existing = await this.db
       .selectFrom('conversations')
       .selectAll()
+      .where('provider_number', '=', providerNumber)
       .where('phone_number', '=', phoneNumber)
       .executeTakeFirst();
 
@@ -558,6 +555,7 @@ export class ConversationService {
         .insertInto('conversations')
         .values({
           phone_number: phoneNumber,
+          provider_number: providerNumber,
           last_message_preview: null,
           last_message_timestamp: null,
         })
@@ -567,15 +565,18 @@ export class ConversationService {
       await this.db
         .updateTable('conversations')
         .set({ removed: false })
+        .where('provider_number', '=', providerNumber)
         .where('phone_number', '=', phoneNumber)
         .execute();
     }
   }
 
   /**
-   * Update conversation's last_message_preview and last_message_timestamp.
+   * Update the thread's last_message_preview and last_message_timestamp, scoped
+   * to the (provider_number, phone_number) pair.
    */
   private async updateConversationMetadata(
+    providerNumber: string,
     phoneNumber: string,
     body: string,
     timestamp?: Date
@@ -587,6 +588,7 @@ export class ConversationService {
         last_message_preview: preview,
         last_message_timestamp: timestamp ?? new Date(),
       })
+      .where('provider_number', '=', providerNumber)
       .where('phone_number', '=', phoneNumber)
       .execute();
   }

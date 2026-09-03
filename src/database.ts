@@ -61,6 +61,7 @@ export interface CallHistoryTable {
 
 export interface ConversationsTable {
   phone_number: string;
+  provider_number: Generated<string>;
   last_message_preview: string | null;
   last_message_timestamp: Date | null;
   removed: Generated<boolean>;

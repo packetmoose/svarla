@@ -102,7 +102,11 @@ class ConversationDetailViewModel @Inject constructor(
 ) : ViewModel() {
 
     private val phoneNumber: String = savedStateHandle.get<String>("phoneNumber") ?: ""
-    private val providerNumber: String = savedStateHandle.get<String>("providerNumber") ?: ""
+    // The nav route uses the "none" sentinel for a thread whose provider number
+    // is unknown/legacy (empty), because an empty path segment can't be routed.
+    // Map it back to the empty-string sentinel used throughout the data layer.
+    private val providerNumber: String =
+        (savedStateHandle.get<String>("providerNumber") ?: "").let { if (it == "none") "" else it }
 
     private val _uiState = MutableStateFlow(
         ConversationDetailUiState(
@@ -331,7 +335,13 @@ class ConversationDetailViewModel @Inject constructor(
                             val data = event.data?.jsonObject
                             val conversationNumber = data?.get("conversationNumber")
                                 ?.jsonPrimitive?.content
-                            if (conversationNumber == phoneNumber) {
+                            val eventProviderNumber = data?.get("providerNumber")
+                                ?.jsonPrimitive?.content ?: ""
+                            // Only re-sync when the event belongs to THIS thread,
+                            // i.e. the (providerNumber, phoneNumber) pair matches.
+                            // This avoids re-syncing when a message arrives for a
+                            // sibling thread with the same recipient.
+                            if (conversationNumber == phoneNumber && eventProviderNumber == providerNumber) {
                                 conversationRepository.syncMessages(providerNumber, phoneNumber)
                             }
                         } catch (_: Exception) {}
