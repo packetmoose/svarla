@@ -298,11 +298,14 @@ export class NumberManagementService {
     }
 
     // Find removed numbers (in DB and active, but not in provider).
-    // Orphan them: deactivate, detach, clear label. The color is PRESERVED so
-    // the number keeps it if re-added; it is only reclaimed later if the palette
-    // runs out of colors for active numbers. This hides them from the settings
-    // UI (INNER JOIN on providers excludes NULL provider_id) while preserving
-    // them for historical reference in messages and call_history.
+    // Orphan them: deactivate and detach. The color AND label are PRESERVED so
+    // the number keeps them if re-added (labels are user data and must survive
+    // an orphan -> reactivate cycle, which happens routinely when a
+    // modem-gateway restarts/reconnects and transiently reports a partial number
+    // set). The color is only reclaimed later if the palette runs out of colors
+    // for active numbers. Orphaning hides these numbers from the settings UI
+    // (INNER JOIN on providers excludes NULL provider_id) while preserving them
+    // for historical reference in messages and call_history.
     for (const dbNum of dbNumbers) {
       if (dbNum.is_active && !providerNumberSet.has(dbNum.number)) {
         this.logger.debug(`Number no longer in provider, orphaning: ${dbNum.number}`);
@@ -311,7 +314,6 @@ export class NumberManagementService {
           .set({
             is_active: false,
             provider_id: null,
-            label: null,
           })
           .where('number', '=', dbNum.number)
           .execute();
