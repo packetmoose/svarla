@@ -4,6 +4,7 @@ import android.media.AudioManager
 import android.media.ToneGenerator
 import android.util.Log
 import app.svarla.data.local.dao.CallHistoryDao
+import app.svarla.data.local.dao.ProviderNumberDao
 import app.svarla.data.local.entity.CallHistoryEntry
 import app.svarla.data.local.entity.CallType
 import app.svarla.data.remote.AuthManager
@@ -57,6 +58,7 @@ class VoiceCallManager @Inject constructor(
     private val audioRouter: AudioRouter,
     private val callServiceController: CallServiceController,
     private val callHistoryDao: CallHistoryDao,
+    private val providerNumberDao: ProviderNumberDao,
     private val missedCallNotifier: MissedCallNotifier,
     private val incomingCallRinger: IncomingCallRinger,
     private val json: Json
@@ -494,13 +496,20 @@ class VoiceCallManager @Inject constructor(
             } else {
                 Log.d(TAG, "Incoming call $callId: replacing temp callId=$existingCallId with real callId (from=$fromNumber, provider=$providerNumber)")
             }
+            val resolvedProviderNumber = providerNumber.ifEmpty { currentState.activeCallInfo.providerNumber }
+            // If the provider number changed, the previously resolved color is stale and
+            // must be dropped (it belongs to a different provider number or a prior call).
+            // A fresh color is resolved asynchronously below.
+            val colorStillValid = resolvedProviderNumber == currentState.activeCallInfo.providerNumber
             val updatedInfo = currentState.activeCallInfo.copy(
                 callId = callId,
                 remoteNumber = fromNumber.ifEmpty { currentState.activeCallInfo.remoteNumber },
-                providerNumber = providerNumber.ifEmpty { currentState.activeCallInfo.providerNumber },
-                providerNumberLabel = providerNumberLabel ?: currentState.activeCallInfo.providerNumberLabel
+                providerNumber = resolvedProviderNumber,
+                providerNumberLabel = providerNumberLabel ?: currentState.activeCallInfo.providerNumberLabel,
+                providerNumberColor = if (colorStillValid) currentState.activeCallInfo.providerNumberColor else null
             )
             _callState.value = currentState.copy(activeCallInfo = updatedInfo)
+            resolveProviderNumberColor(callId, resolvedProviderNumber)
             return
         }
 
@@ -524,6 +533,7 @@ class VoiceCallManager @Inject constructor(
             remoteNumber = fromNumber,
             providerNumber = providerNumber,
             providerNumberLabel = providerNumberLabel,
+            providerNumberColor = null,
             startTime = System.currentTimeMillis(),
             isInbound = true
         )
@@ -532,6 +542,11 @@ class VoiceCallManager @Inject constructor(
             status = CallStatus.RINGING,
             activeCallInfo = callInfo
         )
+
+        // Resolve the provider number's assigned color from the local DB and patch it
+        // into the call state once available. Done asynchronously so the incoming-call
+        // UI can render immediately without blocking on a DB lookup.
+        resolveProviderNumberColor(callId, providerNumber)
 
         // Start ringing and vibration immediately when call enters RINGING state.
         // This is the canonical place for starting the ringer regardless of the
@@ -555,6 +570,39 @@ class VoiceCallManager @Inject constructor(
 
         // Start 45-second inbound timeout
         startInboundTimeout()
+    }
+
+    /**
+     * Asynchronously resolves the color assigned to [providerNumber] from the local
+     * provider-number store and patches it into the active call state.
+     *
+     * The color lookup is a suspending DB call, so it is deliberately kept off the
+     * synchronous incoming-call path: the UI renders the caller immediately and the
+     * colored provider-number badge fills in once the lookup completes.
+     *
+     * The update is guarded by [callId] so that a lookup for a stale/superseded call
+     * cannot overwrite the color of a newer active call — a real risk given the shared
+     * singleton [_callState].
+     */
+    private fun resolveProviderNumberColor(callId: String, providerNumber: String) {
+        if (providerNumber.isEmpty()) return
+        scope.launch {
+            val color = try {
+                providerNumberDao.getByNumber(providerNumber)?.color
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to resolve provider number color for $providerNumber", e)
+                null
+            } ?: return@launch
+
+            val state = _callState.value
+            val info = state.activeCallInfo
+            // Only apply if this is still the same call and still on the same provider number.
+            if (info != null && info.callId == callId && info.providerNumber == providerNumber) {
+                _callState.value = state.copy(
+                    activeCallInfo = info.copy(providerNumberColor = color)
+                )
+            }
+        }
     }
 
     /**
@@ -592,6 +640,7 @@ class VoiceCallManager @Inject constructor(
             remoteNumber = callerNumber,
             providerNumber = "",
             providerNumberLabel = null,
+            providerNumberColor = null,
             startTime = System.currentTimeMillis(),
             isInbound = true
         )
