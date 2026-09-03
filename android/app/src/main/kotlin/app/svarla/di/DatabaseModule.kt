@@ -3,6 +3,7 @@ package app.svarla.di
 import android.content.Context
 import androidx.room.Room
 import app.svarla.data.local.SvarlaDatabase
+import app.svarla.data.local.dao.ActiveNotificationDao
 import app.svarla.data.local.dao.CallHistoryDao
 import app.svarla.data.local.dao.ConversationDao
 import app.svarla.data.local.dao.DeviceStateDao
@@ -27,7 +28,7 @@ object DatabaseModule {
             SvarlaDatabase::class.java,
             SvarlaDatabase.DATABASE_NAME
         )
-            .addMigrations(SvarlaDatabase.MIGRATION_1_2, SvarlaDatabase.MIGRATION_2_3, SvarlaDatabase.MIGRATION_3_4, SvarlaDatabase.MIGRATION_4_5, SvarlaDatabase.MIGRATION_5_6)
+            .addMigrations(SvarlaDatabase.MIGRATION_1_2, SvarlaDatabase.MIGRATION_2_3, SvarlaDatabase.MIGRATION_3_4, SvarlaDatabase.MIGRATION_4_5, SvarlaDatabase.MIGRATION_5_6, SvarlaDatabase.MIGRATION_6_7)
             .build()
     }
 
@@ -54,5 +55,10 @@ object DatabaseModule {
     @Provides
     fun provideDeviceStateDao(database: SvarlaDatabase): DeviceStateDao {
         return database.deviceStateDao()
+    }
+
+    @Provides
+    fun provideActiveNotificationDao(database: SvarlaDatabase): ActiveNotificationDao {
+        return database.activeNotificationDao()
     }
 }

@@ -262,8 +262,6 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
       return entry.instance;
     },
   );
-  const readStateService = new ReadStateService(db, () => {});
-
   // --- NotificationService ---
   // Manages the full notification lifecycle: creation, state mutations, delivery, and cross-device sync.
   const notificationService = new NotificationService({
@@ -273,6 +271,13 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
     deviceRegistryManager,
     logger: server.log,
   });
+
+  // --- ReadStateService ---
+  // Tracks thread/missed-call read state. The notification hook keeps the
+  // notifications table in sync so marking a thread read (or missed calls
+  // viewed) also clears the corresponding pending notifications, preventing
+  // already-read items from being re-delivered on reconnect / cold start.
+  const readStateService = new ReadStateService(db, () => {}, notificationService);
 
   // --- CallOrchestrator ---
   // Coordinates the full call lifecycle between clients, MediaBridge, and providers.

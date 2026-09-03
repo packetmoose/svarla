@@ -74,6 +74,8 @@ class NotificationHandler @Inject constructor(
     private val newDeviceLoginNotifier: NewDeviceLoginNotifier,
     private val syncManager: SyncManager,
     private val notificationsApi: NotificationsApi,
+    private val activeNotificationDao: app.svarla.data.local.dao.ActiveNotificationDao,
+    private val conversationDao: app.svarla.data.local.dao.ConversationDao,
     private val json: Json
 ) {
     companion object {
@@ -104,6 +106,14 @@ class NotificationHandler @Inject constructor(
 
         // Notification group for missed/blocked calls
         private const val GROUP_MISSED_CALLS = "app.svarla.GROUP_MISSED_CALLS"
+
+        // Number of trailing digits used to match phone numbers across formats
+        // (e.g. "+46701234567" vs "0701234567").
+        private const val NUMBER_MATCH_DIGITS = 7
+
+        // Records older than this are evicted from the persisted active-notification
+        // table on rehydration.
+        private const val ACTIVE_NOTIFICATION_TTL_MS = 48L * 60 * 60 * 1000
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -152,9 +162,36 @@ class NotificationHandler @Inject constructor(
         try {
             NotificationChannels.createAll(context)
             Log.d(TAG, "Notification channels created")
+            rehydrateActiveNotifications()
             observeWebSocketEvents()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to create notification channels", e)
+        }
+    }
+
+    /**
+     * Rehydrates the in-memory tracking maps from the persisted active-notification
+     * table on cold start, so notifications posted by a previous process can still
+     * be located for dismissal and de-duplication. Evicts stale records first.
+     *
+     * Only the id→androidId and id→type maps are restored; the full payload cache
+     * is not persisted (matching now falls back to the persisted normalizedNumber
+     * and the messages-channel activeNotifications scan).
+     */
+    private fun rehydrateActiveNotifications() {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val cutoff = System.currentTimeMillis() - ACTIVE_NOTIFICATION_TTL_MS
+                activeNotificationDao.deleteOlderThan(cutoff)
+                val records = activeNotificationDao.getAll()
+                for (record in records) {
+                    serverNotificationIdMap[record.serverId] = record.androidId
+                    serverNotificationTypeMap[record.serverId] = record.type
+                }
+                Log.d(TAG, "Rehydrated ${records.size} persisted notification record(s)")
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to rehydrate persisted notifications", e)
+            }
         }
     }
 
@@ -229,10 +266,19 @@ class NotificationHandler @Inject constructor(
 
                 // Filter out notifications that were dismissed locally but not yet confirmed
                 val locallyDismissed = NotificationDismissReceiver.getPendingDismissalIds(context)
-                val toShow = if (locallyDismissed.isEmpty()) {
+                val notLocallyDismissed = if (locallyDismissed.isEmpty()) {
                     pendingNotifications
                 } else {
                     pendingNotifications.filter { it.id !in locallyDismissed }
+                }
+
+                // Defense-in-depth for already-read items (in case the server hasn't
+                // yet reconciled the notification's status with thread read-state):
+                // skip an incoming_sms notification whose conversation was read locally
+                // after the notification was created.
+                val toShow = notLocallyDismissed.filter { notification ->
+                    if (notification.type != TYPE_INCOMING_SMS) return@filter true
+                    !isSmsNotificationAlreadyRead(notification)
                 }
 
                 for (notification in toShow) {
@@ -245,6 +291,41 @@ class NotificationHandler @Inject constructor(
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to fetch pending notifications on reconnect", e)
             }
+        }
+    }
+
+    /**
+     * Returns true if this pending SMS notification corresponds to a conversation
+     * that was already read locally after the notification was created — meaning it
+     * should not be re-posted on reconnect / cold start.
+     */
+    private suspend fun isSmsNotificationAlreadyRead(notification: NotificationApiResponse): Boolean {
+        return try {
+            val senderNumber = notification.payload?.let {
+                try { it.jsonObject["senderNumber"]?.jsonPrimitive?.contentOrNull } catch (_: Exception) { null }
+            } ?: return false
+
+            val createdAtMs = notification.createdAt?.let { parseIsoToEpochMillis(it) } ?: return false
+
+            val matchKey = numberMatchKey(senderNumber)
+            val conversation = conversationDao.getByNumber(senderNumber)
+                ?: conversationDao.getAllOnce().firstOrNull { numberMatchKey(it.phoneNumber) == matchKey }
+                ?: return false
+
+            val lastReadAt = conversation.lastReadAt ?: return false
+            // Already read if the thread was read at/after the notification was created.
+            lastReadAt >= createdAtMs
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to evaluate read-state for pending notification ${notification.id}", e)
+            false
+        }
+    }
+
+    private fun parseIsoToEpochMillis(iso: String): Long? {
+        return try {
+            java.time.Instant.parse(iso).toEpochMilli()
+        } catch (_: Exception) {
+            null
         }
     }
 
@@ -744,6 +825,25 @@ class NotificationHandler @Inject constructor(
         serverNotificationIdMap[serverNotificationId] = androidNotificationId
         serverNotificationTypeMap[serverNotificationId] = notificationType
         serverNotificationPayloadCache[serverNotificationId] = event
+
+        // Persist so dismissal/de-dup survives process death. Extract the number
+        // (sender for SMS, caller for calls) so we can match by conversation later.
+        val rawNumber = extractPayloadField(event, "senderNumber")
+            ?: extractPayloadField(event, "callerNumber")
+        val record = app.svarla.data.local.entity.ActiveNotification(
+            serverId = serverNotificationId,
+            androidId = androidNotificationId,
+            type = notificationType,
+            normalizedNumber = rawNumber?.let { numberMatchKey(it) },
+            createdAt = System.currentTimeMillis()
+        )
+        scope.launch(Dispatchers.IO) {
+            try {
+                activeNotificationDao.upsert(record)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to persist active notification $serverNotificationId", e)
+            }
+        }
     }
 
     /**
@@ -754,6 +854,13 @@ class NotificationHandler @Inject constructor(
         serverNotificationIdMap.remove(serverNotificationId)
         serverNotificationTypeMap.remove(serverNotificationId)
         serverNotificationPayloadCache.remove(serverNotificationId)
+        scope.launch(Dispatchers.IO) {
+            try {
+                activeNotificationDao.deleteByServerId(serverNotificationId)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to remove persisted active notification $serverNotificationId", e)
+            }
+        }
     }
 
     /**
@@ -1179,45 +1286,77 @@ class NotificationHandler @Inject constructor(
      * Called when the user opens the conversation thread.
      */
     fun dismissConversationNotifications(phoneNumber: String) {
-        val normalizedNumber = normalizePhoneNumber(phoneNumber)
+        val targetKey = numberMatchKey(phoneNumber)
 
-        // Find SMS notifications matching this phone number by checking the cached payload
+        // 1) In-memory pass: find SMS notifications matching this phone number
+        //    via the cached payload.
         val toRemove = mutableListOf<String>()
         for ((serverNotificationId, cachedEvent) in serverNotificationPayloadCache) {
-            // Only dismiss SMS notifications
             val type = serverNotificationTypeMap[serverNotificationId]
             if (type != TYPE_INCOMING_SMS) continue
 
             val senderNumber = extractPayloadField(cachedEvent, "senderNumber") ?: continue
-            val normalizedSender = normalizePhoneNumber(senderNumber)
-            if (normalizedSender == normalizedNumber) {
+            if (numberMatchKey(senderNumber) == targetKey) {
                 toRemove.add(serverNotificationId)
             }
         }
 
         for (serverNotificationId in toRemove) {
             val androidId = serverNotificationIdMap[serverNotificationId] ?: continue
-            notificationManager.cancel(androidId)
-            untrackServerNotification(serverNotificationId)
-            // Mark as read on the server so it doesn't reappear on next fetch
-            val intent = Intent(context, NotificationDismissReceiver::class.java).apply {
-                action = NotificationDismissReceiver.ACTION_DISMISS
-                putExtra(NotificationDismissReceiver.EXTRA_SERVER_NOTIFICATION_ID, serverNotificationId)
-            }
-            context.sendBroadcast(intent)
+            cancelAndMarkRead(serverNotificationId, androidId)
         }
 
-        // Fallback: also cancel any notifications in the SMS range that match by key content
-        val iterator = serverNotificationIdMap.entries.iterator()
-        while (iterator.hasNext()) {
-            val entry = iterator.next()
-            if (entry.key.contains(normalizedNumber)) {
-                notificationManager.cancel(entry.value)
-                iterator.remove()
-                serverNotificationTypeMap.remove(entry.key)
-                serverNotificationPayloadCache.remove(entry.key)
+        // 2) Persisted pass + activeNotifications fallback (survives process death).
+        //    If the app was restarted, the in-memory maps are empty, so use the
+        //    Room-backed records to locate the Android notification ids for this
+        //    conversation, and cancel any lingering message-channel notifications.
+        scope.launch(Dispatchers.IO) {
+            try {
+                val persisted = activeNotificationDao.getByType(TYPE_INCOMING_SMS)
+                    .filter { it.normalizedNumber != null && it.normalizedNumber == targetKey }
+                for (record in persisted) {
+                    withContext(Dispatchers.Main) {
+                        cancelAndMarkRead(record.serverId, record.androidId)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to query persisted notifications for dismissal", e)
             }
+
+            // Last-resort fallback: cancel active notifications on the messages
+            // channel that we can't otherwise attribute (e.g. posted by a prior
+            // process with no persisted record). Mirrors the missed-call path.
+            try {
+                val nm = context.getSystemService(android.app.NotificationManager::class.java)
+                val persistedAndroidIds = activeNotificationDao.getAll()
+                    .filter { it.normalizedNumber == targetKey }
+                    .map { it.androidId }
+                    .toSet()
+                withContext(Dispatchers.Main) {
+                    nm?.activeNotifications?.forEach { sbn ->
+                        if (sbn.notification.channelId == NotificationChannels.CHANNEL_ID_MESSAGES &&
+                            sbn.id in persistedAndroidIds
+                        ) {
+                            nm.cancel(sbn.id)
+                        }
+                    }
+                }
+            } catch (_: Exception) {}
         }
+    }
+
+    /**
+     * Cancel the Android notification, untrack it, and mark it read on the server
+     * so it doesn't reappear on the next pending-notification fetch.
+     */
+    private fun cancelAndMarkRead(serverNotificationId: String, androidId: Int) {
+        notificationManager.cancel(androidId)
+        untrackServerNotification(serverNotificationId)
+        val intent = Intent(context, NotificationDismissReceiver::class.java).apply {
+            action = NotificationDismissReceiver.ACTION_DISMISS
+            putExtra(NotificationDismissReceiver.EXTRA_SERVER_NOTIFICATION_ID, serverNotificationId)
+        }
+        context.sendBroadcast(intent)
     }
 
     /**
@@ -1310,5 +1449,24 @@ class NotificationHandler @Inject constructor(
      */
     private fun normalizePhoneNumber(number: String): String {
         return number.replace(Regex("[^+\\d]"), "")
+    }
+
+    /**
+     * Produces a stable match key for comparing two phone numbers that may differ
+     * in formatting (e.g. "+46701234567" vs "0701234567" vs "070-123 45 67").
+     *
+     * Strategy: strip to digits only, then use the last [NUMBER_MATCH_DIGITS]
+     * significant digits. This tolerates country-code / leading-zero differences
+     * between the pushed sender number and the locally stored conversation number,
+     * which the previous exact-normalized comparison did not.
+     */
+    private fun numberMatchKey(number: String): String {
+        val digits = number.filter { it.isDigit() }
+        if (digits.isEmpty()) return normalizePhoneNumber(number)
+        return if (digits.length <= NUMBER_MATCH_DIGITS) {
+            digits
+        } else {
+            digits.takeLast(NUMBER_MATCH_DIGITS)
+        }
     }
 }

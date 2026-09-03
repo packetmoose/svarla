@@ -290,6 +290,52 @@ describe('ReadStateService', () => {
     });
   });
 
+  describe('notification hook', () => {
+    it('markThreadAsRead should mark the conversation notifications as read', async () => {
+      const markConversationRead = vi.fn().mockResolvedValue(2);
+      const markAllRead = vi.fn().mockResolvedValue(0);
+      const hookedService = new ReadStateService(mockDb as any, broadcastCallback, {
+        markConversationRead,
+        markAllRead,
+      });
+
+      await hookedService.markThreadAsRead('+15551234567', 'device-1');
+
+      expect(markConversationRead).toHaveBeenCalledWith('+15551234567');
+      expect(markAllRead).not.toHaveBeenCalled();
+    });
+
+    it('markMissedCallsAsViewed should mark missed/blocked call notifications as read', async () => {
+      const markConversationRead = vi.fn().mockResolvedValue(0);
+      const markAllRead = vi.fn().mockResolvedValue(3);
+      const hookedService = new ReadStateService(mockDb as any, broadcastCallback, {
+        markConversationRead,
+        markAllRead,
+      });
+
+      await hookedService.markMissedCallsAsViewed('device-1');
+
+      expect(markAllRead).toHaveBeenCalledWith(['missed_call', 'blocked_call']);
+      expect(markConversationRead).not.toHaveBeenCalled();
+    });
+
+    it('should not fail the request if the notification hook throws', async () => {
+      const hookedService = new ReadStateService(mockDb as any, broadcastCallback, {
+        markConversationRead: vi.fn().mockRejectedValue(new Error('db down')),
+        markAllRead: vi.fn().mockRejectedValue(new Error('db down')),
+      });
+
+      // Both should resolve to counts despite the hook rejecting
+      await expect(hookedService.markThreadAsRead('+15551234567')).resolves.toHaveProperty('unreadMessages');
+      await expect(hookedService.markMissedCallsAsViewed()).resolves.toHaveProperty('unseenMissedCalls');
+    });
+
+    it('should still work when no notification hook is provided', async () => {
+      // service (from beforeEach) has no hook — must not throw
+      await expect(service.markThreadAsRead('+15551234567')).resolves.toHaveProperty('unreadMessages');
+    });
+  });
+
   describe('markThreadAsRead', () => {
     it('should broadcast read_state_updated event with excludeDeviceId', async () => {
       await service.markThreadAsRead('+15551234567', 'device-456');

@@ -1,5 +1,6 @@
 import type { Kysely } from 'kysely';
 import type { Database } from '../database.js';
+import type { NotificationType } from './notification-service.js';
 
 /**
  * Counts of unread/unseen items for badge display.
@@ -7,6 +8,23 @@ import type { Database } from '../database.js';
 export interface ReadStateCounts {
   unreadMessages: number;
   unseenMissedCalls: number;
+}
+
+/**
+ * Narrow view of NotificationService used by ReadStateService to keep the
+ * notifications table in sync with read-state changes.
+ *
+ * The notifications table (status pending/read) and the read_state table
+ * (read_at timestamps) are otherwise independent. Marking a thread read or
+ * missed calls viewed must ALSO mark the corresponding pending notifications
+ * as read, otherwise they reappear in GET /api/notifications (the pending list)
+ * and get re-delivered to the client on the next reconnect / cold start.
+ */
+export interface NotificationReadHook {
+  /** Mark all pending incoming_sms notifications for a conversation as read. */
+  markConversationRead(conversationNumber: string): Promise<number>;
+  /** Mark all pending notifications of the given types as read. */
+  markAllRead(types?: NotificationType[]): Promise<number>;
 }
 
 /**
@@ -33,10 +51,16 @@ export type ReadStateBroadcastCallback = (event: ReadStateUpdatedEvent, excludeD
 export class ReadStateService {
   private readonly db: Kysely<Database>;
   private readonly broadcast: ReadStateBroadcastCallback;
+  private readonly notificationHook?: NotificationReadHook;
 
-  constructor(db: Kysely<Database>, broadcast: ReadStateBroadcastCallback) {
+  constructor(
+    db: Kysely<Database>,
+    broadcast: ReadStateBroadcastCallback,
+    notificationHook?: NotificationReadHook
+  ) {
     this.db = db;
     this.broadcast = broadcast;
+    this.notificationHook = notificationHook;
   }
 
   /**
@@ -71,6 +95,19 @@ export class ReadStateService {
           read_at: now,
         })
         .execute();
+    }
+
+    // Keep the notifications table in sync: mark pending missed/blocked call
+    // notifications as read so they don't reappear in the pending list on the
+    // next reconnect / cold start. markAllRead also broadcasts notification_updated
+    // events so other devices dismiss their surfaced notifications.
+    if (this.notificationHook) {
+      try {
+        await this.notificationHook.markAllRead(['missed_call', 'blocked_call']);
+      } catch {
+        // Non-fatal: read_state was still updated. Notification sync can be
+        // retried on the next mark. Do not fail the request.
+      }
     }
 
     const counts = await this.getCounts();
@@ -116,6 +153,19 @@ export class ReadStateService {
           read_at: now,
         })
         .execute();
+    }
+
+    // Keep the notifications table in sync: mark pending incoming_sms
+    // notifications for this conversation as read so they don't reappear in the
+    // pending list on the next reconnect / cold start. markConversationRead also
+    // broadcasts notification_updated events so other devices dismiss theirs.
+    if (this.notificationHook) {
+      try {
+        await this.notificationHook.markConversationRead(phoneNumber);
+      } catch {
+        // Non-fatal: read_state was still updated. Notification sync can be
+        // retried on the next mark. Do not fail the request.
+      }
     }
 
     const counts = await this.getCounts();

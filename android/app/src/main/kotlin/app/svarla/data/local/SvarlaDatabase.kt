@@ -4,11 +4,13 @@ import androidx.room.Database
 import androidx.room.RoomDatabase
 import androidx.room.migration.Migration
 import androidx.sqlite.db.SupportSQLiteDatabase
+import app.svarla.data.local.dao.ActiveNotificationDao
 import app.svarla.data.local.dao.CallHistoryDao
 import app.svarla.data.local.dao.ConversationDao
 import app.svarla.data.local.dao.DeviceStateDao
 import app.svarla.data.local.dao.MessageDao
 import app.svarla.data.local.dao.ProviderNumberDao
+import app.svarla.data.local.entity.ActiveNotification
 import app.svarla.data.local.entity.CallHistoryEntry
 import app.svarla.data.local.entity.Conversation
 import app.svarla.data.local.entity.DeviceState
@@ -21,9 +23,10 @@ import app.svarla.data.local.entity.ProviderNumber
         CallHistoryEntry::class,
         Conversation::class,
         Message::class,
-        DeviceState::class
+        DeviceState::class,
+        ActiveNotification::class
     ],
-    version = 6,
+    version = 7,
     exportSchema = false
 )
 abstract class SvarlaDatabase : RoomDatabase() {
@@ -37,6 +40,8 @@ abstract class SvarlaDatabase : RoomDatabase() {
     abstract fun messageDao(): MessageDao
 
     abstract fun deviceStateDao(): DeviceStateDao
+
+    abstract fun activeNotificationDao(): ActiveNotificationDao
 
     companion object {
         const val DATABASE_NAME = "svarla_db"
@@ -91,6 +96,24 @@ abstract class SvarlaDatabase : RoomDatabase() {
                 )
                 db.execSQL("DROP TABLE provider_numbers")
                 db.execSQL("ALTER TABLE provider_numbers_new RENAME TO provider_numbers")
+            }
+        }
+
+        // Add active_notifications: persists displayed-notification tracking so
+        // dismissal and de-duplication survive app process death.
+        val MIGRATION_6_7 = object : Migration(6, 7) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS active_notifications (
+                        serverId TEXT NOT NULL PRIMARY KEY,
+                        androidId INTEGER NOT NULL,
+                        type TEXT NOT NULL,
+                        normalizedNumber TEXT,
+                        createdAt INTEGER NOT NULL
+                    )
+                    """.trimIndent()
+                )
             }
         }
     }
