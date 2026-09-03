@@ -81,6 +81,19 @@ function createProviderFactory(serverWebhookBaseUrl: string) {
 }
 
 /**
+ * Send an inbound-SMS acknowledgement to the provider if it supports one.
+ *
+ * Only the modem-gateway provider maintains a durable, ack-to-remove buffer for
+ * inbound SMS. Webhook-based providers (Vonage, 46elks) have no such buffer and
+ * require no ack, so this is a no-op for them.
+ */
+function ackIncomingSmsIfSupported(provider: TelephonyProvider, messageId: string): void {
+  if (provider instanceof ModemGatewayTelephonyProvider) {
+    provider.ackIncomingSms(messageId);
+  }
+}
+
+/**
  * Build and configure the Fastify server instance.
  * Sets up Pino logging, plugin registration, and error handling.
  */
@@ -344,6 +357,15 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
         conversationService
           .receiveMessage(event.messageId, event.from, event.to, event.body, new Date(event.timestamp))
           .then(async (msg) => {
+            // Acknowledge durable receipt back to the provider. This fires for
+            // both a newly-persisted message (msg truthy) and a duplicate
+            // (msg === null) — in both cases the message is durably accounted
+            // for, so it is safe for the gateway to drop it from its buffer.
+            // The ack is sent only AFTER receiveMessage resolves, which is what
+            // guarantees the gateway never releases a message the server has
+            // not yet persisted.
+            ackIncomingSmsIfSupported(providerInstance, event.messageId);
+
             if (msg) {
               server.log.info(`Received inbound SMS from ${event.from} → ${event.to}`);
 
@@ -369,6 +391,8 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
             }
           })
           .catch((err) => {
+            // Persistence failed — do NOT ack. The gateway keeps the message
+            // buffered and re-delivers it later.
             server.log.error(err, 'Failed to process incoming SMS event');
           });
       } else if (event.type === 'call_state_changed') {

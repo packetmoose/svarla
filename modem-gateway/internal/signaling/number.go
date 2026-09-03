@@ -38,6 +38,13 @@ func NewNumberReporter(m *modem.Modem, client MessageSender, cfg *config.Config)
 	}
 }
 
+// Number returns the last discovered SIM phone number (E.164), or an empty
+// string if no number has been discovered yet. Thread-safe for use from the
+// SMS receive path to populate the "to" field of incoming messages.
+func (nr *NumberReporter) Number() string {
+	return nr.cachedNumber
+}
+
 // Discover attempts to determine the SIM phone number.
 // It first tries AT+CNUM; if that fails or returns no number, it falls
 // back to the phoneNumber field in the modem configuration.
