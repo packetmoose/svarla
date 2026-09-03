@@ -158,6 +158,19 @@ export class CallOrchestrator {
   /** Maps provider callId → internal callId for webhook correlation */
   private readonly providerCallToInternal = new Map<string, string>();
 
+  /**
+   * Maps notification id → internal callId.
+   *
+   * The wake signal delivered to devices carries only the notification id (by
+   * design, to avoid leaking call metadata over the push channel). The client
+   * rings using that id as a temporary callId and is supposed to enrich it into
+   * the internal callId before the user acts. When the user answers first, the
+   * client posts the notification id to the answer/offer/ice endpoints. This
+   * map lets the orchestrator resolve that id to the internal callId
+   * synchronously, without a DB round-trip.
+   */
+  private readonly notificationToCall = new Map<string, string>();
+
   constructor(deps: CallOrchestratorDeps) {
     this.mediaBridge = deps.mediaBridgeClient;
     this.providerRegistry = deps.providerRegistry;
@@ -416,6 +429,14 @@ export class CallOrchestrator {
           timestamp: new Date().toISOString(),
         },
       })
+      .then((notification) => {
+        // Register notification id → internal callId so the client can act on
+        // the call using the id delivered in the wake signal, even before it
+        // has enriched the id into the internal callId.
+        if (notification && this.activeCalls.has(callId)) {
+          this.notificationToCall.set(notification.id, callId);
+        }
+      })
       .catch((err) => {
         this.logger.error(
           { err, callId } as Record<string, unknown>,
@@ -445,7 +466,11 @@ export class CallOrchestrator {
    *
    * Requirements: 5.2, 8.5
    */
-  async answerCall(callId: string, deviceId: string): Promise<AnswerResult> {
+  async answerCall(requestedId: string, deviceId: string): Promise<AnswerResult> {
+    // The client may pass the internal callId, the notification id, or the
+    // provider call id. Resolve to the internal callId so answering does not
+    // depend on the client having enriched the temporary id in time.
+    const callId = this.resolveToCallId(requestedId);
     const activeCall = this.activeCalls.get(callId);
     if (!activeCall) {
       return { success: false, errorReason: 'Call not found or already ended' };
@@ -543,13 +568,17 @@ export class CallOrchestrator {
    * Requirements: 5.1, 5.2
    */
   async handleWebRtcOffer(
-    callId: string,
+    requestedId: string,
     _deviceId: string,
     sdpOffer: string,
   ): Promise<OfferResult> {
+    // Accept the internal callId, the notification id, or the provider call id
+    // for the same reason as answerCall: the client may still be holding the
+    // temporary (notification) id when it submits the WebRTC offer.
+    const callId = this.resolveToCallId(requestedId);
     const activeCall = this.activeCalls.get(callId);
     if (!activeCall) {
-      throw new CallNotFoundError(callId);
+      throw new CallNotFoundError(requestedId);
     }
 
     try {
@@ -576,10 +605,13 @@ export class CallOrchestrator {
    * Requirements: 3.2, 6.2
    */
   handleIceCandidate(
-    callId: string,
+    requestedId: string,
     _deviceId: string,
     candidate: { candidate: string; sdpMid: string; sdpMLineIndex: number },
   ): void {
+    // Resolve the client-supplied id (may be the notification id) to the
+    // internal callId, matching the answer/offer paths.
+    const callId = this.resolveToCallId(requestedId);
     const activeCall = this.activeCalls.get(callId);
     if (!activeCall) {
       this.logger.debug(
@@ -650,7 +682,11 @@ export class CallOrchestrator {
    *
    * Requirements: 5.3, 5.5, 5.6
    */
-  async endCall(callId: string, trigger?: string): Promise<void> {
+  async endCall(requestedId: string, trigger?: string): Promise<void> {
+    // Callers may pass the internal callId (internal triggers), the notification
+    // id, or the provider call id (client decline). Resolve to the internal
+    // callId; an internal callId that is still active resolves to itself.
+    const callId = this.resolveToCallId(requestedId);
     const activeCall = this.activeCalls.get(callId);
     if (!activeCall) {
       return; // Already ended or not found — no-op
@@ -771,6 +807,11 @@ export class CallOrchestrator {
     this.activeCalls.delete(callId);
     this.sessionToCall.delete(activeCall.sessionId);
     this.providerCallToInternal.delete(activeCall.providerCallId);
+    for (const [notificationId, mappedCallId] of this.notificationToCall) {
+      if (mappedCallId === callId) {
+        this.notificationToCall.delete(notificationId);
+      }
+    }
 
     this.logger.info(
       { callId, direction: activeCall.direction, durationSeconds } as Record<string, unknown>,
@@ -884,10 +925,57 @@ export class CallOrchestrator {
   }
 
   /**
+   * Resolve a client-supplied id to the internal callId of an active call.
+   *
+   * Clients may legitimately hold one of several ids for the same call:
+   * - the internal callId (what `activeCalls` is keyed by),
+   * - the notification id delivered via the wake signal / push (the client
+   *   often rings using this as a temporary callId before it has been enriched
+   *   with the real callId from the WebSocket/REST notification payload), or
+   * - the provider call id.
+   *
+   * The Android client races to "enrich" the temporary (notification) id into
+   * the internal callId before the user answers. When the user answers first —
+   * e.g. the device WebSocket connected after the notification was created and
+   * the REST enrichment had not completed — the client posts the notification
+   * id and the answer would otherwise fail with 409, leaving the modem
+   * un-answered while the caller keeps ringing. Resolving the id here makes the
+   * answer/decline flow independent of that timing race.
+   *
+   * @returns the internal callId of a matching active call, or the original id
+   *   if no mapping is found (so callers still get a clean "not found" path).
+   */
+  resolveToCallId(id: string): string {
+    // 1. Already an internal callId of an active call — the common case.
+    if (this.activeCalls.has(id)) {
+      return id;
+    }
+
+    // 2. A notification id registered at inbound time.
+    const fromNotification = this.notificationToCall.get(id);
+    if (fromNotification && this.activeCalls.has(fromNotification)) {
+      this.logger.info(
+        { notificationId: id, callId: fromNotification } as Record<string, unknown>,
+        'Resolved notification id to internal callId',
+      );
+      return fromNotification;
+    }
+
+    // 3. A provider call id (e.g. modem-gateway "call-...-1").
+    const fromProvider = this.providerCallToInternal.get(id);
+    if (fromProvider) {
+      return fromProvider;
+    }
+
+    // 4. No mapping found — return as-is so the caller reports "not found".
+    return id;
+  }
+
+  /**
    * Get active call info by callId. Returns null if not found.
    */
-  getActiveCall(callId: string): { callId: string; from: string; to: string; direction: string; answered: boolean } | null {
-    const call = this.activeCalls.get(callId);
+  getActiveCall(id: string): { callId: string; from: string; to: string; direction: string; answered: boolean } | null {
+    const call = this.activeCalls.get(this.resolveToCallId(id));
     if (!call) return null;
     return {
       callId: call.callId,
@@ -940,5 +1028,6 @@ export class CallOrchestrator {
     this.activeCalls.clear();
     this.sessionToCall.clear();
     this.providerCallToInternal.clear();
+    this.notificationToCall.clear();
   }
 }

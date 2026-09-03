@@ -144,6 +144,7 @@ function createMockNotificationService() {
     markCallResolved: vi.fn().mockResolvedValue(true),
     getPendingNotifications: vi.fn().mockResolvedValue([]),
     deliverPendingToDevice: vi.fn().mockResolvedValue(undefined),
+    getNotificationById: vi.fn().mockResolvedValue(null),
   };
 }
 
@@ -396,6 +397,36 @@ describe('CallOrchestrator', () => {
 
       expect(deps.notificationService.markCallResolved).toHaveBeenCalledWith(callId);
     });
+
+    it('should answer when given the notification id instead of the internal callId', async () => {
+      const { orchestrator, deps } = createOrchestrator();
+
+      // createNotification resolves with { id: 'notification-1', ... }, and the
+      // orchestrator registers notification-1 → internal callId. Simulate the
+      // client posting the notification id (as it does before it has enriched
+      // the temporary id into the real callId).
+      await orchestrator.handleInbound('provider-entry-1', 'prov-call-1', '+46709876543', '+46701234567');
+      const callId = orchestrator.getAllActiveCalls()[0].callId;
+
+      // Allow the fire-and-forget createNotification().then() to register the map.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const result = await orchestrator.answerCall('notification-1', 'device-1');
+
+      expect(result.success).toBe(true);
+      expect(deps.notificationService.markCallResolved).toHaveBeenCalledWith(callId);
+    });
+
+    it('should answer when given the provider call id instead of the internal callId', async () => {
+      const { orchestrator } = createOrchestrator();
+
+      await orchestrator.handleInbound('provider-entry-1', 'prov-call-1', '+46709876543', '+46701234567');
+
+      const result = await orchestrator.answerCall('prov-call-1', 'device-1');
+
+      expect(result.success).toBe(true);
+    });
   });
 
   describe('handleWebRtcOffer', () => {
@@ -426,6 +457,27 @@ describe('CallOrchestrator', () => {
       await expect(
         orchestrator.handleWebRtcOffer('unknown-call', 'device-1', 'v=0\r\no=- offer'),
       ).rejects.toThrow(CallNotFoundError);
+    });
+
+    it('should accept the notification id in place of the internal callId', async () => {
+      const { orchestrator, deps } = createOrchestrator();
+
+      // Inbound call registers notification-1 → internal callId.
+      await orchestrator.handleInbound('provider-entry-1', 'prov-call-1', '+46709876543', '+46701234567');
+      const callId = orchestrator.getAllActiveCalls()[0].callId;
+      await Promise.resolve();
+      await Promise.resolve();
+      (deps.mediaBridgeClient.submitOffer as any).mockClear();
+
+      // Client posts the WebRTC offer using the notification id (the same id it
+      // answered with before enrichment completed).
+      const result = await orchestrator.handleWebRtcOffer('notification-1', 'device-1', 'v=0\r\no=- offer');
+
+      expect(result.sdpAnswer).toBe('v=0\r\no=- answer');
+      // The offer must be routed to the active call's session, not the raw id.
+      const session = orchestrator.getActiveCall(callId);
+      expect(session).not.toBeNull();
+      expect(deps.mediaBridgeClient.submitOffer).toHaveBeenCalledTimes(1);
     });
 
     it('should throw CallOrchestratorError when MediaBridge is unavailable', async () => {
