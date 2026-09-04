@@ -295,6 +295,24 @@ export class Elks46TelephonyProvider implements TelephonyProvider {
   }
 
   /**
+   * Build the absolute `whenhangup` webhook URL for this provider.
+   *
+   * 46elks calls this URL (via POST) when a call leg ends, including when the
+   * remote CALLER hangs up. Both outbound (via {@link makeCall}) and inbound
+   * (via the voice_start connect response) calls must register it so the server
+   * receives a control-plane hangup signal in addition to the media-plane
+   * WebSocket close. Without it, an inbound call that hangs up while the audio
+   * WebSocket lingers would never be torn down.
+   *
+   * The URL targets this provider's `voice_event` endpoint, which flows through
+   * {@link handleVoiceEvent} → `call_state_changed` → CallOrchestrator.endCall.
+   */
+  getHangupWebhookUrl(): string {
+    const webhookProviderId = this.config.registryId ?? this.providerId;
+    return `${this.config.webhookBaseUrl}/webhooks/${webhookProviderId}/voice_event`;
+  }
+
+  /**
    * Handle an incoming webhook request from 46elks.
    *
    * - voice_start: Incoming call or outbound call connected — return SIP connect JSON

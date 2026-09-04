@@ -138,11 +138,44 @@ class PushWebSocketService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
-        alarmManager.setAndAllowWhileIdle(
-            android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
-            android.os.SystemClock.elapsedRealtime() + RESTART_DELAY_MS,
-            pendingIntent
-        )
+        val triggerAt = android.os.SystemClock.elapsedRealtime() + RESTART_DELAY_MS
+
+        // Prefer an exact alarm so the restart isn't deferred by Doze/OEM batching.
+        // canScheduleExactAlarms() is only meaningful on API 31+; below that,
+        // exact allow-while-idle alarms are always permitted.
+        val canScheduleExact = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            alarmManager.canScheduleExactAlarms()
+        } else {
+            true
+        }
+
+        try {
+            if (canScheduleExact) {
+                alarmManager.setExactAndAllowWhileIdle(
+                    android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    triggerAt,
+                    pendingIntent
+                )
+                Log.d(TAG, "Scheduled exact restart alarm in ${RESTART_DELAY_MS}ms")
+            } else {
+                // Exact alarms not permitted (user revoked SCHEDULE_EXACT_ALARM).
+                // Fall back to the inexact allow-while-idle alarm, which Doze may defer.
+                alarmManager.setAndAllowWhileIdle(
+                    android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    triggerAt,
+                    pendingIntent
+                )
+                Log.d(TAG, "Exact alarms not permitted; scheduled inexact restart alarm")
+            }
+        } catch (e: SecurityException) {
+            // Defensive: some OEMs throw despite canScheduleExactAlarms() returning true.
+            Log.w(TAG, "Exact alarm rejected, falling back to inexact restart", e)
+            alarmManager.setAndAllowWhileIdle(
+                android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                triggerAt,
+                pendingIntent
+            )
+        }
     }
 
     private fun goForeground(notification: Notification) {

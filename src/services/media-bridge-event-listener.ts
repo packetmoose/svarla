@@ -50,6 +50,12 @@ export type MediaBridgeEvent = MediaBridgeSessionEvent | MediaBridgeHealthEvent;
 export type SessionEventHandler = (event: MediaBridgeSessionEvent) => void;
 
 /**
+ * Handler invoked when the event WebSocket reconnects after a prior disconnect.
+ * Used to reconcile call state, since events emitted while disconnected are lost.
+ */
+export type ReconnectHandler = () => void;
+
+/**
  * Health status of the MediaBridge connection.
  */
 export interface MediaBridgeHealthStatus {
@@ -112,8 +118,11 @@ export class MediaBridgeEventListener {
   private readonly logger: Logger;
   private ws: WebSocket | null = null;
   private sessionEventHandler: SessionEventHandler | null = null;
+  private reconnectHandler: ReconnectHandler | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private stopped = false;
+  /** True once the socket has connected at least once, so we can tell a reconnect from the first connect. */
+  private hasConnectedBefore = false;
   private healthStatus: MediaBridgeHealthStatus = {
     connected: false,
     lastHealthEvent: null,
@@ -132,6 +141,14 @@ export class MediaBridgeEventListener {
    */
   onSessionEvent(handler: SessionEventHandler): void {
     this.sessionEventHandler = handler;
+  }
+
+  /**
+   * Register a handler invoked when the event socket reconnects after a drop.
+   * Not called on the initial connection — only on genuine reconnects.
+   */
+  onReconnect(handler: ReconnectHandler): void {
+    this.reconnectHandler = handler;
   }
 
   /**
@@ -195,6 +212,20 @@ export class MediaBridgeEventListener {
     this.ws.on('open', () => {
       this.healthStatus.connected = true;
       this.logger.info(`Connected to MediaBridge event WebSocket at ${this.url}`);
+      // On a genuine reconnect (not the first connect), notify the handler so it
+      // can reconcile call state — session events emitted while we were
+      // disconnected are lost and never redelivered.
+      if (this.hasConnectedBefore && this.reconnectHandler) {
+        try {
+          this.reconnectHandler();
+        } catch (err) {
+          this.logger.warn(
+            { err } as Record<string, unknown>,
+            'MediaBridge reconnect handler threw',
+          );
+        }
+      }
+      this.hasConnectedBefore = true;
     });
 
     this.ws.on('message', (data: WebSocket.Data) => {

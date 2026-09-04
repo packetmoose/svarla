@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import type { ConversationService } from '../services/conversation-service.js';
+import { threadKey } from '../services/conversation-service.js';
 import type { NumberManagementService } from '../services/number-management-service.js';
 import { validateMessage } from '../validators/message-validator.js';
 import { validatePhoneNumber } from '../validators/phone-number-validator.js';
@@ -98,21 +99,29 @@ export function registerSmsRoutes(
 
     const result = await conversationService.getConversations(page, pageSize, providerNumber);
 
-    // Fetch per-thread read state
-    const phoneNumbers = result.conversations.map((c) => c.phone_number);
-    const readStates = await conversationService.getThreadReadStates(phoneNumbers);
-    const lastReceivedTimes = await conversationService.getLastReceivedTimestamps(phoneNumbers);
+    // Fetch per-thread read state, keyed by the (provider_number, phone_number)
+    // pair so two threads with the same recipient track reads independently.
+    const threads = result.conversations.map((c) => ({
+      providerNumber: c.provider_number ?? '',
+      phoneNumber: c.phone_number,
+    }));
+    const threadKeys = threads.map((t) => threadKey(t.providerNumber, t.phoneNumber));
+    const readStates = await conversationService.getThreadReadStates(threadKeys);
+    const lastReceivedTimes = await conversationService.getLastReceivedTimestamps(threads);
 
     return reply.status(200).send({
-      conversations: result.conversations.map((c) => ({
-        phoneNumber: c.phone_number,
-        providerNumber: c.provider_number,
-        lastMessagePreview: c.last_message_preview,
-        lastMessageTimestamp: c.last_message_timestamp?.toISOString() ?? null,
-        lastReceivedAt: lastReceivedTimes.get(c.phone_number)?.toISOString() ?? null,
-        createdAt: c.created_at.toISOString(),
-        lastReadAt: readStates.get(c.phone_number)?.toISOString() ?? null,
-      })),
+      conversations: result.conversations.map((c) => {
+        const key = threadKey(c.provider_number ?? '', c.phone_number);
+        return {
+          phoneNumber: c.phone_number,
+          providerNumber: c.provider_number,
+          lastMessagePreview: c.last_message_preview,
+          lastMessageTimestamp: c.last_message_timestamp?.toISOString() ?? null,
+          lastReceivedAt: lastReceivedTimes.get(key)?.toISOString() ?? null,
+          createdAt: c.created_at.toISOString(),
+          lastReadAt: readStates.get(key)?.toISOString() ?? null,
+        };
+      }),
       page: result.page,
       pageSize: result.pageSize,
       total: result.total,
@@ -127,6 +136,7 @@ export function registerSmsRoutes(
    */
   server.get('/api/conversations/:number', async (request: FastifyRequest, reply: FastifyReply) => {
     const { number } = request.params as { number: string };
+    const query = request.query as { limit?: string; from?: string };
 
     if (!number || number.trim() === '') {
       return reply.status(400).send({
@@ -138,7 +148,13 @@ export function registerSmsRoutes(
     // URL-decode the number parameter (+ is encoded as %2B in URLs)
     const decodedNumber = decodeURIComponent(number);
 
-    const messages = await conversationService.getMessages(decodedNumber, 100);
+    // Optional filters: limit caps the result count; `from` scopes messages to a
+    // single conversation thread by its provider (own) number so that two
+    // conversations with the same recipient but different own-numbers stay separate.
+    const limit = Math.min(Math.max(parseInt(query.limit ?? '100', 10) || 100, 1), 100);
+    const providerNumber = query.from && query.from.trim() !== '' ? query.from : undefined;
+
+    const messages = await conversationService.getMessages(decodedNumber, limit, providerNumber);
 
     return reply.status(200).send({
       phoneNumber: decodedNumber,
@@ -157,12 +173,15 @@ export function registerSmsRoutes(
   });
 
   /**
-   * DELETE /api/conversations/:number
+   * DELETE /api/conversations/:number?from=<providerNumber>
    * Mark a conversation as removed. It won't appear in the conversation list.
    * Does not permanently delete messages.
+   * A thread is identified by the (providerNumber, number) pair, so `from` is
+   * required so only the intended thread is removed.
    */
   server.delete('/api/conversations/:number', async (request: FastifyRequest, reply: FastifyReply) => {
     const { number } = request.params as { number: string };
+    const query = request.query as { from?: string };
 
     if (!number || number.trim() === '') {
       return reply.status(400).send({
@@ -171,10 +190,18 @@ export function registerSmsRoutes(
       });
     }
 
+    if (!query.from || query.from.trim() === '') {
+      return reply.status(400).send({
+        error: 'from (provider number) query parameter is required',
+        statusCode: 400,
+      });
+    }
+
     const decodedNumber = decodeURIComponent(number);
+    const providerNumber = query.from;
 
     try {
-      await conversationService.removeConversation(decodedNumber);
+      await conversationService.removeConversation(providerNumber, decodedNumber);
       return reply.status(200).send({ success: true });
     } catch (err) {
       server.log.error(err, 'DELETE /api/conversations/:number error');

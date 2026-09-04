@@ -36,8 +36,9 @@ function createMockRegistry(entries: Map<string, ProviderRegistryEntry> = new Ma
 
 interface MockNumberRow {
   number: string;
-  provider_id: string;
+  provider_id: string | null;
   label: string | null;
+  color?: string | null;
   added_at: Date;
   is_active: boolean;
   last_used_at: Date | null;
@@ -46,6 +47,19 @@ interface MockNumberRow {
 interface MockProviderRow {
   id: string;
   display_name: string;
+}
+
+// Build a predicate for a single Kysely-style where clause against a number row.
+function mkPred(col: string, op: string, val: unknown): (n: MockNumberRow) => boolean {
+  return (n: MockNumberRow) => {
+    const cell = (n as unknown as Record<string, unknown>)[col];
+    if (op === 'is not' && val === null) return cell != null;
+    if (op === 'is' && val === null) return cell == null;
+    if (op === '!=') return cell !== val;
+    // Subquery objects (used by color reclaim) never match a scalar cell.
+    if (val !== null && typeof val === 'object') return false;
+    return cell === val;
+  };
 }
 
 function createMockDb(initialNumbers: MockNumberRow[] = [], providers: MockProviderRow[] = []) {
@@ -137,35 +151,32 @@ function createMockDb(initialNumbers: MockNumberRow[] = [], providers: MockProvi
               }),
             }),
           }),
-          select: (col: string | string[]) => ({
-            where: (filterCol: string, _op: string, filterVal: unknown) => ({
-              where: (filterCol2: string, _op2: string, filterVal2: unknown) => ({
-                executeTakeFirst: async () => {
-                  const found = numbers.find((n) => {
-                    const match1 = filterCol === 'number' ? n.number === filterVal : true;
-                    const match2 = filterCol2 === 'is_active' ? n.is_active === filterVal2 : true;
-                    return match1 && match2;
-                  });
-                  if (!found) return undefined;
-                  if (col === 'provider_id' || (Array.isArray(col) && col.includes('provider_id'))) {
-                    return { provider_id: found.provider_id };
-                  }
-                  return found;
-                },
-              }),
+          select: (col: string | string[]) => {
+            // Predicate builder shared across chained .where() calls, so
+            // getColorUsage()'s `.where('color','is not',null)[.where('number','!=',x)].execute()`
+            // and the lookup `.where('number','=',x).where('is_active','=',true).executeTakeFirst()`
+            // are both supported.
+            const makeWhere = (preds: Array<(n: MockNumberRow) => boolean>) => ({
+              where: (fc: string, op: string, fv: unknown) =>
+                makeWhere([...preds, mkPred(fc, op, fv)]),
               executeTakeFirst: async () => {
-                const found = numbers.find((n) => {
-                  if (filterCol === 'number') return n.number === filterVal;
-                  return true;
-                });
+                const found = numbers.find((n) => preds.every((p) => p(n)));
                 if (!found) return undefined;
                 if (col === 'provider_id' || (Array.isArray(col) && col.includes('provider_id'))) {
                   return { provider_id: found.provider_id };
                 }
                 return found;
               },
-            }),
-          }),
+              execute: async () => {
+                const filtered = numbers.filter((n) => preds.every((p) => p(n)));
+                return filtered.map((n) => ({
+                  color: n.color ?? null,
+                  is_active: n.is_active,
+                }));
+              },
+            });
+            return makeWhere([]);
+          },
         };
       }
       return {};
@@ -196,6 +207,7 @@ function createMockDb(initialNumbers: MockNumberRow[] = [], providers: MockProvi
               number: values.number as string,
               provider_id: values.provider_id as string,
               label: (values.label as string | null) ?? null,
+              color: (values.color as string | null) ?? null,
               added_at: new Date(),
               is_active: values.is_active as boolean,
               last_used_at: (values.last_used_at as Date | null) ?? null,

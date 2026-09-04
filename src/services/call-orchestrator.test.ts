@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   CallOrchestrator,
   CallNotFoundError,
@@ -144,6 +144,7 @@ function createMockNotificationService() {
     markCallResolved: vi.fn().mockResolvedValue(true),
     getPendingNotifications: vi.fn().mockResolvedValue([]),
     deliverPendingToDevice: vi.fn().mockResolvedValue(undefined),
+    getNotificationById: vi.fn().mockResolvedValue(null),
   };
 }
 
@@ -396,6 +397,36 @@ describe('CallOrchestrator', () => {
 
       expect(deps.notificationService.markCallResolved).toHaveBeenCalledWith(callId);
     });
+
+    it('should answer when given the notification id instead of the internal callId', async () => {
+      const { orchestrator, deps } = createOrchestrator();
+
+      // createNotification resolves with { id: 'notification-1', ... }, and the
+      // orchestrator registers notification-1 → internal callId. Simulate the
+      // client posting the notification id (as it does before it has enriched
+      // the temporary id into the real callId).
+      await orchestrator.handleInbound('provider-entry-1', 'prov-call-1', '+46709876543', '+46701234567');
+      const callId = orchestrator.getAllActiveCalls()[0].callId;
+
+      // Allow the fire-and-forget createNotification().then() to register the map.
+      await Promise.resolve();
+      await Promise.resolve();
+
+      const result = await orchestrator.answerCall('notification-1', 'device-1');
+
+      expect(result.success).toBe(true);
+      expect(deps.notificationService.markCallResolved).toHaveBeenCalledWith(callId);
+    });
+
+    it('should answer when given the provider call id instead of the internal callId', async () => {
+      const { orchestrator } = createOrchestrator();
+
+      await orchestrator.handleInbound('provider-entry-1', 'prov-call-1', '+46709876543', '+46701234567');
+
+      const result = await orchestrator.answerCall('prov-call-1', 'device-1');
+
+      expect(result.success).toBe(true);
+    });
   });
 
   describe('handleWebRtcOffer', () => {
@@ -426,6 +457,27 @@ describe('CallOrchestrator', () => {
       await expect(
         orchestrator.handleWebRtcOffer('unknown-call', 'device-1', 'v=0\r\no=- offer'),
       ).rejects.toThrow(CallNotFoundError);
+    });
+
+    it('should accept the notification id in place of the internal callId', async () => {
+      const { orchestrator, deps } = createOrchestrator();
+
+      // Inbound call registers notification-1 → internal callId.
+      await orchestrator.handleInbound('provider-entry-1', 'prov-call-1', '+46709876543', '+46701234567');
+      const callId = orchestrator.getAllActiveCalls()[0].callId;
+      await Promise.resolve();
+      await Promise.resolve();
+      (deps.mediaBridgeClient.submitOffer as any).mockClear();
+
+      // Client posts the WebRTC offer using the notification id (the same id it
+      // answered with before enrichment completed).
+      const result = await orchestrator.handleWebRtcOffer('notification-1', 'device-1', 'v=0\r\no=- offer');
+
+      expect(result.sdpAnswer).toBe('v=0\r\no=- answer');
+      // The offer must be routed to the active call's session, not the raw id.
+      const session = orchestrator.getActiveCall(callId);
+      expect(session).not.toBeNull();
+      expect(deps.mediaBridgeClient.submitOffer).toHaveBeenCalledTimes(1);
     });
 
     it('should throw CallOrchestratorError when MediaBridge is unavailable', async () => {
@@ -731,6 +783,134 @@ describe('CallOrchestrator', () => {
 
       const calls = orchestrator.getAllActiveCalls();
       expect(calls).toHaveLength(0);
+    });
+  });
+
+  describe('reconcileActiveSessions', () => {
+    it('should end an answered call whose MediaBridge session is missing', async () => {
+      const mediaBridge = createMockMediaBridgeClient();
+      // Session lookup throws → session gone on the media side.
+      mediaBridge.getSessionStatus.mockRejectedValue(new Error('404 Not Found'));
+      const { orchestrator, deps } = createOrchestrator({ mediaBridgeClient: mediaBridge as any });
+
+      await orchestrator.handleInbound('provider-entry-1', 'prov-call-1', '+46709876543', '+46701234567');
+      const callId = orchestrator.getAllActiveCalls()[0].callId;
+      await orchestrator.answerCall(callId, 'device-1');
+      (deps.wsBroadcaster.broadcast as any).mockClear();
+
+      await orchestrator.reconcileActiveSessions();
+
+      expect(orchestrator.getAllActiveCalls()).toHaveLength(0);
+      expect(deps.wsBroadcaster.broadcast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'call_event',
+          data: expect.objectContaining({ callId, status: 'disconnected' }),
+        }),
+      );
+    });
+
+    it('should end an answered call whose provider leg is no longer connected', async () => {
+      const mediaBridge = createMockMediaBridgeClient();
+      mediaBridge.getSessionStatus.mockResolvedValue({
+        sessionId: 's', status: 'active', clientConnected: true,
+        providerConnected: false, durationSeconds: 10, codec: 'opus',
+      });
+      const { orchestrator } = createOrchestrator({ mediaBridgeClient: mediaBridge as any });
+
+      await orchestrator.handleInbound('provider-entry-1', 'prov-call-1', '+46709876543', '+46701234567');
+      const callId = orchestrator.getAllActiveCalls()[0].callId;
+      await orchestrator.answerCall(callId, 'device-1');
+
+      await orchestrator.reconcileActiveSessions();
+
+      expect(orchestrator.getAllActiveCalls()).toHaveLength(0);
+    });
+
+    it('should keep an answered call whose provider leg is still connected', async () => {
+      const mediaBridge = createMockMediaBridgeClient();
+      mediaBridge.getSessionStatus.mockResolvedValue({
+        sessionId: 's', status: 'active', clientConnected: true,
+        providerConnected: true, durationSeconds: 10, codec: 'opus',
+      });
+      const { orchestrator } = createOrchestrator({ mediaBridgeClient: mediaBridge as any });
+
+      await orchestrator.handleInbound('provider-entry-1', 'prov-call-1', '+46709876543', '+46701234567');
+      const callId = orchestrator.getAllActiveCalls()[0].callId;
+      await orchestrator.answerCall(callId, 'device-1');
+
+      await orchestrator.reconcileActiveSessions();
+
+      expect(orchestrator.getAllActiveCalls()).toHaveLength(1);
+    });
+
+    it('should not reconcile an unanswered (still ringing) call', async () => {
+      const mediaBridge = createMockMediaBridgeClient();
+      // Even if the media session looks gone, an unanswered call is left to the
+      // unanswered watchdog — reconcile must skip it.
+      mediaBridge.getSessionStatus.mockRejectedValue(new Error('404 Not Found'));
+      const { orchestrator } = createOrchestrator({ mediaBridgeClient: mediaBridge as any });
+
+      await orchestrator.handleInbound('provider-entry-1', 'prov-call-1', '+46709876543', '+46701234567');
+
+      await orchestrator.reconcileActiveSessions();
+
+      expect(orchestrator.getAllActiveCalls()).toHaveLength(1);
+      expect(mediaBridge.getSessionStatus).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('watchdog', () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('should force-end an unanswered call after the unanswered timeout', async () => {
+      const { orchestrator, deps } = createOrchestrator();
+
+      await orchestrator.handleInbound('provider-entry-1', 'prov-call-1', '+46709876543', '+46701234567');
+      expect(orchestrator.getAllActiveCalls()).toHaveLength(1);
+      (deps.wsBroadcaster.broadcast as any).mockClear();
+
+      // Advance past the 90s unanswered watchdog.
+      await vi.advanceTimersByTimeAsync(91_000);
+
+      expect(orchestrator.getAllActiveCalls()).toHaveLength(0);
+      expect(deps.wsBroadcaster.broadcast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'call_event',
+          data: expect.objectContaining({ status: 'disconnected' }),
+        }),
+      );
+    });
+
+    it('should not fire the unanswered watchdog once the call is answered', async () => {
+      const { orchestrator } = createOrchestrator();
+
+      await orchestrator.handleInbound('provider-entry-1', 'prov-call-1', '+46709876543', '+46701234567');
+      const callId = orchestrator.getAllActiveCalls()[0].callId;
+      await orchestrator.answerCall(callId, 'device-1');
+
+      // Well past the unanswered timeout but far short of the max-duration cap.
+      await vi.advanceTimersByTimeAsync(120_000);
+
+      expect(orchestrator.getAllActiveCalls()).toHaveLength(1);
+    });
+
+    it('should clear the watchdog when the call ends normally', async () => {
+      const { orchestrator, deps } = createOrchestrator();
+
+      const result = await orchestrator.initiateOutbound('device-1', '+46701234567', '+46709876543');
+      await orchestrator.endCall(result.callId);
+      (deps.wsBroadcaster.broadcast as any).mockClear();
+
+      // Advancing time must not trigger a second teardown broadcast.
+      await vi.advanceTimersByTimeAsync(200_000);
+
+      expect(deps.wsBroadcaster.broadcast).not.toHaveBeenCalled();
     });
   });
 });

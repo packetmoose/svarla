@@ -4,6 +4,7 @@ import android.media.AudioManager
 import android.media.ToneGenerator
 import android.util.Log
 import app.svarla.data.local.dao.CallHistoryDao
+import app.svarla.data.local.dao.ProviderNumberDao
 import app.svarla.data.local.entity.CallHistoryEntry
 import app.svarla.data.local.entity.CallType
 import app.svarla.data.remote.AuthManager
@@ -57,6 +58,7 @@ class VoiceCallManager @Inject constructor(
     private val audioRouter: AudioRouter,
     private val callServiceController: CallServiceController,
     private val callHistoryDao: CallHistoryDao,
+    private val providerNumberDao: ProviderNumberDao,
     private val missedCallNotifier: MissedCallNotifier,
     private val incomingCallRinger: IncomingCallRinger,
     private val json: Json
@@ -67,6 +69,14 @@ class VoiceCallManager @Inject constructor(
         private const val INBOUND_TIMEOUT_MS = 45_000L
         private const val DURATION_UPDATE_INTERVAL_MS = 1000L
         private const val RESET_TO_IDLE_DELAY_MS = 3000L
+
+        /**
+         * How long inbound media may be absent during a CONNECTED call before the
+         * media-inactivity watchdog ends it as a remote hangup. This is a last-resort
+         * backstop for when the explicit server "disconnected" signal is missed and
+         * WebRTC stays nominally connected (only the far PSTN leg dropped).
+         */
+        private const val MEDIA_INACTIVITY_TIMEOUT_MS = 12_000L
     }
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -97,6 +107,8 @@ class VoiceCallManager @Inject constructor(
     private var networkMonitorJob: Job? = null
     private var eventListenerJob: Job? = null
     private var webRtcStateJob: Job? = null
+    private var mediaReceivingJob: Job? = null
+    private var mediaInactivityJob: Job? = null
     private var resetToIdleJob: Job? = null
     private var ringbackToneGenerator: ToneGenerator? = null
     private var ringbackJob: Job? = null
@@ -139,6 +151,9 @@ class VoiceCallManager @Inject constructor(
     init {
         observeWebSocketEvents()
         observeWebRtcConnectionState()
+        // Media-inactivity watchdog: last-resort teardown if inbound media stops
+        // during a CONNECTED call and no explicit "disconnected" signal arrives.
+        observeMediaReceiving()
         // Poll active calls on WebSocket connect/reconnect for late-joining awareness
         observeConnectionStateForActiveCalls()
     }
@@ -494,13 +509,20 @@ class VoiceCallManager @Inject constructor(
             } else {
                 Log.d(TAG, "Incoming call $callId: replacing temp callId=$existingCallId with real callId (from=$fromNumber, provider=$providerNumber)")
             }
+            val resolvedProviderNumber = providerNumber.ifEmpty { currentState.activeCallInfo.providerNumber }
+            // If the provider number changed, the previously resolved color is stale and
+            // must be dropped (it belongs to a different provider number or a prior call).
+            // A fresh color is resolved asynchronously below.
+            val colorStillValid = resolvedProviderNumber == currentState.activeCallInfo.providerNumber
             val updatedInfo = currentState.activeCallInfo.copy(
                 callId = callId,
                 remoteNumber = fromNumber.ifEmpty { currentState.activeCallInfo.remoteNumber },
-                providerNumber = providerNumber.ifEmpty { currentState.activeCallInfo.providerNumber },
-                providerNumberLabel = providerNumberLabel ?: currentState.activeCallInfo.providerNumberLabel
+                providerNumber = resolvedProviderNumber,
+                providerNumberLabel = providerNumberLabel ?: currentState.activeCallInfo.providerNumberLabel,
+                providerNumberColor = if (colorStillValid) currentState.activeCallInfo.providerNumberColor else null
             )
             _callState.value = currentState.copy(activeCallInfo = updatedInfo)
+            resolveProviderNumberColor(callId, resolvedProviderNumber)
             return
         }
 
@@ -524,6 +546,7 @@ class VoiceCallManager @Inject constructor(
             remoteNumber = fromNumber,
             providerNumber = providerNumber,
             providerNumberLabel = providerNumberLabel,
+            providerNumberColor = null,
             startTime = System.currentTimeMillis(),
             isInbound = true
         )
@@ -532,6 +555,11 @@ class VoiceCallManager @Inject constructor(
             status = CallStatus.RINGING,
             activeCallInfo = callInfo
         )
+
+        // Resolve the provider number's assigned color from the local DB and patch it
+        // into the call state once available. Done asynchronously so the incoming-call
+        // UI can render immediately without blocking on a DB lookup.
+        resolveProviderNumberColor(callId, providerNumber)
 
         // Start ringing and vibration immediately when call enters RINGING state.
         // This is the canonical place for starting the ringer regardless of the
@@ -555,6 +583,39 @@ class VoiceCallManager @Inject constructor(
 
         // Start 45-second inbound timeout
         startInboundTimeout()
+    }
+
+    /**
+     * Asynchronously resolves the color assigned to [providerNumber] from the local
+     * provider-number store and patches it into the active call state.
+     *
+     * The color lookup is a suspending DB call, so it is deliberately kept off the
+     * synchronous incoming-call path: the UI renders the caller immediately and the
+     * colored provider-number badge fills in once the lookup completes.
+     *
+     * The update is guarded by [callId] so that a lookup for a stale/superseded call
+     * cannot overwrite the color of a newer active call — a real risk given the shared
+     * singleton [_callState].
+     */
+    private fun resolveProviderNumberColor(callId: String, providerNumber: String) {
+        if (providerNumber.isEmpty()) return
+        scope.launch {
+            val color = try {
+                providerNumberDao.getByNumber(providerNumber)?.color
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to resolve provider number color for $providerNumber", e)
+                null
+            } ?: return@launch
+
+            val state = _callState.value
+            val info = state.activeCallInfo
+            // Only apply if this is still the same call and still on the same provider number.
+            if (info != null && info.callId == callId && info.providerNumber == providerNumber) {
+                _callState.value = state.copy(
+                    activeCallInfo = info.copy(providerNumberColor = color)
+                )
+            }
+        }
     }
 
     /**
@@ -592,6 +653,7 @@ class VoiceCallManager @Inject constructor(
             remoteNumber = callerNumber,
             providerNumber = "",
             providerNumberLabel = null,
+            providerNumberColor = null,
             startTime = System.currentTimeMillis(),
             isInbound = true
         )
@@ -631,13 +693,7 @@ class VoiceCallManager @Inject constructor(
         // Cancel inbound timeout since remote event occurred
         cancelInboundTimeout()
 
-        val endReason = when (reason) {
-            "answered_elsewhere" -> CallEndReason.ANSWERED_ELSEWHERE
-            "declined" -> CallEndReason.DECLINED
-            "caller_disconnect" -> CallEndReason.REMOTE_HANGUP
-            "timeout" -> CallEndReason.TIMEOUT
-            else -> CallEndReason.REMOTE_HANGUP
-        }
+        val endReason = CallTeardownDecider.mapCancelReason(reason)
 
         endCallInternal(endReason)
     }
@@ -688,6 +744,54 @@ class VoiceCallManager @Inject constructor(
         }
     }
 
+    /**
+     * Media-inactivity watchdog.
+     *
+     * Observes [WebRtcAudioClient.mediaReceiving]. While a call is CONNECTED and the
+     * peer connection reports it is NOT receiving media, a timer runs; if media does
+     * not resume within [MEDIA_INACTIVITY_TIMEOUT_MS], the call is ended as a remote
+     * hangup. This is the last-resort local backstop for the reported bug: a remote
+     * caller hangs up, the far leg goes silent, but the app↔MediaBridge WebRTC leg
+     * stays ICE-connected so [observeWebRtcConnectionState] never fires and the
+     * explicit server "disconnected" signal was missed.
+     *
+     * When media is flowing (or the call isn't CONNECTED), any pending timer is
+     * cancelled so normal brief dips in receiving don't end healthy calls.
+     */
+    private fun observeMediaReceiving() {
+        mediaReceivingJob = scope.launch {
+            webRtcAudioClient.mediaReceiving.collect { receiving ->
+                val status = _callState.value.status
+                if (receiving || status != CallStatus.CONNECTED) {
+                    // Media is flowing or we're not in a connected call — clear any timer.
+                    mediaInactivityJob?.cancel()
+                    mediaInactivityJob = null
+                    return@collect
+                }
+
+                // Not receiving during a CONNECTED call — start the inactivity timer
+                // if one isn't already running.
+                if (mediaInactivityJob?.isActive == true) return@collect
+                mediaInactivityJob = scope.launch {
+                    Log.w(TAG, "Media inactivity detected during CONNECTED call — starting watchdog")
+                    delay(MEDIA_INACTIVITY_TIMEOUT_MS)
+                    // Re-check state after the delay: only tear down if still CONNECTED
+                    // and still not receiving.
+                    if (_callState.value.status == CallStatus.CONNECTED &&
+                        !webRtcAudioClient.mediaReceiving.value
+                    ) {
+                        Log.w(
+                            TAG,
+                            "Media inactivity watchdog fired after ${MEDIA_INACTIVITY_TIMEOUT_MS}ms — " +
+                                "ending call as remote hangup"
+                        )
+                        endCallInternal(CallEndReason.REMOTE_HANGUP)
+                    }
+                }
+            }
+        }
+    }
+
     private fun observeWebSocketEvents() {
         eventListenerJob = scope.launch {
             syncManager.events.collect { event ->
@@ -712,8 +816,21 @@ class VoiceCallManager @Inject constructor(
     }
 
     private suspend fun fetchActiveCallsFromServer() {
-        // Only fetch if we're currently idle — don't overwrite an active call state
-        if (_callState.value.status != CallStatus.IDLE) return
+        val currentStatus = _callState.value.status
+
+        // Reconciliation path: if we believe we're in a CONNECTED call but the server
+        // no longer lists it as active, the caller-hangup teardown signal was missed
+        // (e.g. the WebSocket dropped exactly when the server broadcast "disconnected",
+        // and MutableSharedFlow(replay=0) does not redeliver it). End the local call so
+        // it doesn't hang forever on-device. This runs on every WS (re)connect.
+        if (currentStatus == CallStatus.CONNECTED) {
+            reconcileConnectedCallWithServer()
+            return
+        }
+
+        // Only proceed with the "adopt an in-progress call" path when idle — don't
+        // overwrite an active/ringing/dialing local call state.
+        if (currentStatus != CallStatus.IDLE) return
 
         try {
             val response = callsApi.getActiveCalls()
@@ -758,6 +875,48 @@ class VoiceCallManager @Inject constructor(
             }
         } catch (e: Exception) {
             Log.d(TAG, "Failed to fetch active calls from server: ${e.message}")
+        }
+    }
+
+    /**
+     * Reconcile a locally-CONNECTED call against the server's active-call list.
+     *
+     * Called on WebSocket (re)connect while a call is CONNECTED. If the server no
+     * longer reports the call as active, the teardown signal was lost in transit and
+     * we end the call locally with [CallEndReason.REMOTE_HANGUP]. This is a backstop
+     * for the single-point-of-failure where the only "disconnected" broadcast was
+     * dropped during a WebSocket gap.
+     *
+     * Matching is intentionally lenient: because inbound callIds can diverge between
+     * the notification/temp id and the server's internal callId, we consider the call
+     * still active if the server lists ANY connected/ringing call whose id OR remote
+     * number matches. Only when there is no plausible match do we tear down.
+     */
+    private suspend fun reconcileConnectedCallWithServer() {
+        val activeInfo = _callState.value.activeCallInfo ?: return
+        try {
+            val response = callsApi.getActiveCalls()
+            val stillActive = response.calls.any { serverCall ->
+                val idMatch = serverCall.callId.isNotEmpty() && serverCall.callId == activeInfo.callId
+                val numberMatch = !serverCall.from.isNullOrEmpty() &&
+                    serverCall.from == activeInfo.remoteNumber
+                (serverCall.status == "connected" || serverCall.status == "ringing") &&
+                    (idMatch || numberMatch)
+            }
+            if (!stillActive) {
+                Log.w(
+                    TAG,
+                    "Reconciliation: server no longer lists active call ${activeInfo.callId} " +
+                        "(from=${activeInfo.remoteNumber}) — ending locally as remote hangup"
+                )
+                endCallInternal(CallEndReason.REMOTE_HANGUP)
+            } else {
+                Log.d(TAG, "Reconciliation: call ${activeInfo.callId} still active on server")
+            }
+        } catch (e: Exception) {
+            // Network/API error — do NOT tear down on ambiguity; a transient failure
+            // must not kill a live call. Leave state untouched.
+            Log.d(TAG, "Reconciliation skipped (fetch failed): ${e.message}")
         }
     }
 
@@ -862,12 +1021,28 @@ class VoiceCallManager @Inject constructor(
         // end the active call — that's handled by strict mode.
         val activeCallId = currentState.activeCallInfo?.callId
         if (!activeCallId.isNullOrEmpty() && callId != activeCallId) {
-            if (!strict && (currentState.status == CallStatus.CONNECTED || currentState.status == CallStatus.DIALING)) {
-                // A "completed" event with a non-matching ID during an active call.
-                // This likely means the provider callId (not internal UUID) was broadcast.
-                // Accept it as a safety net since "completed" means the full call ended.
-                Log.w(TAG, "Accepting 'completed' for non-matching callId: $callId (active: $activeCallId) — " +
-                    "call is in ${currentState.status}, treating as remote hangup")
+            // Safety net for non-matching callIds during an active/connecting call.
+            //
+            // Two failure modes are covered here:
+            //  - A "completed" event (strict=false) whose id is the provider callId
+            //    rather than the internal UUID.
+            //  - A "disconnected" event (strict=true) that arrives for an inbound call
+            //    whose local activeCallInfo.callId is still the notification/temp id
+            //    because the enrichment that swaps it for the server's internal callId
+            //    never completed (or arrived out of order). Without this branch the
+            //    remote hangup is silently dropped and the call hangs forever on-device.
+            //
+            // In both cases, if the device is in an active/connecting call there is only
+            // ever one active call, so a termination signal is safe to honor regardless
+            // of the exact id. We still guard on state so stray events while IDLE/ENDED
+            // are ignored.
+            if (CallTeardownDecider.shouldEndOnNonMatchingCallId(currentState.status, strict)) {
+                Log.w(
+                    TAG,
+                    "Accepting ${if (strict) "'disconnected'" else "'completed'"} for non-matching " +
+                        "callId: $callId (active: $activeCallId) — call is in ${currentState.status}, " +
+                        "treating as remote hangup"
+                )
                 endCallInternal(CallEndReason.REMOTE_HANGUP)
             } else {
                 Log.d(TAG, "Ignoring disconnect for non-matching callId: $callId (active: $activeCallId)")
@@ -914,6 +1089,9 @@ class VoiceCallManager @Inject constructor(
         stopRingbackTone()
         stopDurationTimer()
         stopNetworkMonitoring()
+        // Stop the media-inactivity watchdog — the call is ending.
+        mediaInactivityJob?.cancel()
+        mediaInactivityJob = null
 
         // Only stop ringing if no new incoming call has already taken over.
         // This prevents a race where: decline call A → new call B arrives and starts

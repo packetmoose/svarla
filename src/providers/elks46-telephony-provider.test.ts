@@ -49,6 +49,19 @@ describe('Elks46TelephonyProvider', () => {
         'sms_incoming',
       ]);
     });
+
+    it('should build the hangup webhook URL pointing at voice_event', () => {
+      expect(provider.getHangupWebhookUrl()).toBe(
+        'https://example.com/webhooks/46elks/voice_event',
+      );
+    });
+
+    it('should use registryId in the hangup webhook URL when configured', () => {
+      const p = new Elks46TelephonyProvider({ ...config, registryId: 'elks-2' });
+      expect(p.getHangupWebhookUrl()).toBe(
+        'https://example.com/webhooks/elks-2/voice_event',
+      );
+    });
   });
 
   describe('makeCall', () => {

@@ -3,6 +3,7 @@ package app.svarla.ui.screens.conversations
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import app.svarla.data.local.dao.MessageDao
 import app.svarla.data.remote.api.ReadStateApi
 import app.svarla.data.repository.ConversationRepository
 import app.svarla.domain.contacts.ContactResolver
@@ -32,14 +33,16 @@ data class ConversationListItem(
     val timestamp: Long?,
     val providerNumberLabel: String,
     val providerNumberColor: String = "#6750A4",
-    val unreadCount: Int = 0
+    val unreadCount: Int = 0,
+    val photoUri: String? = null
 )
 
 @HiltViewModel
 class ConversationListViewModel @Inject constructor(
     private val conversationRepository: ConversationRepository,
     private val contactResolver: ContactResolver,
-    private val readStateApi: ReadStateApi
+    private val readStateApi: ReadStateApi,
+    private val messageDao: MessageDao
 ) : ViewModel() {
 
     companion object {
@@ -75,7 +78,17 @@ class ConversationListViewModel @Inject constructor(
                         val phoneNumbers = conversations.map { it.phoneNumber }.toSet()
                         val contactResolveStart = System.currentTimeMillis()
                         val contactNames = contactResolver.resolveContactNames(phoneNumbers)
+                        val contactPhotoUris = contactResolver.resolveContactPhotoUris(phoneNumbers)
                         Log.d(TAG, "observeConversations: contact resolve took ${System.currentTimeMillis() - contactResolveStart}ms for ${phoneNumbers.size} numbers (${contactNames.size} resolved)")
+
+                        // Batch resolve unread message counts per conversation thread.
+                        // Keyed by the full (providerNumber, phoneNumber) pair so that two
+                        // conversations with the same recipient but different provider numbers
+                        // are tracked independently.
+                        val unreadCounts = messageDao.getUnreadCountsPerConversation()
+                        val unreadCountMap = unreadCounts.associate {
+                            (it.providerNumber to it.conversationNumber) to it.count
+                        }
 
                         // Batch resolve all provider numbers in a single query
                         val providerResolveStart = System.currentTimeMillis()
@@ -91,8 +104,17 @@ class ConversationListViewModel @Inject constructor(
                             } else null
                             val providerLabel = providerInfo?.label ?: conv.providerNumber.ifEmpty { "" }
                             val providerColor = providerInfo?.color ?: "#6750A4"
-                            val isUnread = conv.lastReceivedAt != null &&
-                                (conv.lastReadAt == null || conv.lastReceivedAt > conv.lastReadAt)
+                            // Use the DAO count if messages are synced locally, otherwise
+                            // fall back to timestamp-based detection (shows 1 if unread)
+                            val daoCount = unreadCountMap[conv.providerNumber to conv.phoneNumber] ?: 0
+                            val unreadCount = if (daoCount > 0) {
+                                daoCount
+                            } else {
+                                // Fallback: if timestamps indicate unread but no local messages yet
+                                val isUnreadByTimestamp = conv.lastReceivedAt != null &&
+                                    (conv.lastReadAt == null || conv.lastReceivedAt > conv.lastReadAt)
+                                if (isUnreadByTimestamp) 1 else 0
+                            }
                             ConversationListItem(
                                 phoneNumber = conv.phoneNumber,
                                 providerNumber = conv.providerNumber,
@@ -101,7 +123,8 @@ class ConversationListViewModel @Inject constructor(
                                 timestamp = conv.lastMessageTimestamp,
                                 providerNumberLabel = providerLabel,
                                 providerNumberColor = providerColor,
-                                unreadCount = if (isUnread) 1 else 0
+                                unreadCount = unreadCount,
+                                photoUri = contactPhotoUris[conv.phoneNumber]
                             )
                         }
                         Log.d(TAG, "observeConversations: provider resolve took ${System.currentTimeMillis() - providerResolveStart}ms")

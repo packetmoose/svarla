@@ -38,6 +38,7 @@ export function registerReadStateRoutes(
    */
   server.post('/api/read-state/messages/:number', async (request: FastifyRequest, reply: FastifyReply) => {
     const { number } = request.params as { number: string };
+    const query = request.query as { from?: string };
 
     if (!number || number.trim() === '') {
       return reply.status(400).send({
@@ -46,8 +47,16 @@ export function registerReadStateRoutes(
       });
     }
 
+    if (!query.from || query.from.trim() === '') {
+      return reply.status(400).send({
+        error: 'from (provider number) query parameter is required',
+        statusCode: 400,
+      });
+    }
+
+    const decodedNumber = decodeURIComponent(number);
     const deviceId = request.deviceId;
-    const counts = await readStateService.markThreadAsRead(number, deviceId);
+    const counts = await readStateService.markThreadAsRead(query.from, decodedNumber, deviceId);
     return reply.status(200).send(counts);
   });
 }

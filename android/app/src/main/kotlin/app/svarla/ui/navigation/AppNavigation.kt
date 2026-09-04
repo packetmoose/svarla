@@ -64,8 +64,17 @@ sealed class Screen(val route: String) {
     data object Calls : Screen("calls")
     data object Conversations : Screen("conversations")
     data object ConversationDetail : Screen("conversation_detail/{providerNumber}/{phoneNumber}") {
-        fun createRoute(providerNumber: String, phoneNumber: String): String =
-            "conversation_detail/${java.net.URLEncoder.encode(providerNumber, "UTF-8")}/${java.net.URLEncoder.encode(phoneNumber, "UTF-8")}"
+        // Sentinel for a thread whose provider number is unknown/legacy (empty
+        // string). An empty path segment produces "conversation_detail//<phone>",
+        // which Compose Navigation's StringType cannot match, so it would crash on
+        // navigate(). A real provider number is always E.164 (starts with '+'),
+        // so this token can never collide with one.
+        const val NO_PROVIDER = "none"
+
+        fun createRoute(providerNumber: String, phoneNumber: String): String {
+            val provider = providerNumber.ifEmpty { NO_PROVIDER }
+            return "conversation_detail/${java.net.URLEncoder.encode(provider, "UTF-8")}/${java.net.URLEncoder.encode(phoneNumber, "UTF-8")}"
+        }
     }
     data object DialPad : Screen("dial_pad")
     data object Settings : Screen("settings")
@@ -85,6 +94,8 @@ fun AppNavigation(
     versionCheckService: VersionCheckService,
     autoStartHelper: AutoStartHelper? = null,
     initialRoute: String? = null,
+    dialNumber: String? = null,
+    onDialNumberConsumed: () -> Unit = {},
     navController: NavHostController = rememberNavController()
 ) {
     val isAuthenticated by authManager.isAuthenticated.collectAsState()
@@ -125,9 +136,11 @@ fun AppNavigation(
                 showNotificationSetup = false
             },
             onDismiss = {
-                // User skipped — default to NONE
-                deliveryPreferences.setMode(NotificationDeliveryMode.NONE)
-                deliveryPreferences.markSetupCompleted()
+                // User dismissed without choosing. Do NOT commit NONE and do NOT mark
+                // setup complete — dismissing is not the same as explicitly opting out of
+                // notifications. Leaving setup incomplete means we re-prompt on the next
+                // launch, so a stray tap can't silently disable all background delivery.
+                // NONE is only ever set via an explicit selection in onModeSelected.
                 showNotificationSetup = false
             }
         )
@@ -222,6 +235,8 @@ fun AppNavigation(
                 HomeScreen(
                     currentRoute = Screen.Home.route,
                     initialTab = when {
+                        // An external dial request lands on the dial pad tab.
+                        dialNumber != null -> BottomNavDestination.DIAL_PAD
                         initialRoute == "home?tab=calls" -> BottomNavDestination.CALLS
                         initialRoute == "home?tab=settings" -> BottomNavDestination.SETTINGS
                         else -> null
@@ -234,7 +249,9 @@ fun AppNavigation(
                     },
                     contactResolver = contactResolver,
                     voiceCallManager = voiceCallManager,
-                    audioRouter = audioRouter
+                    audioRouter = audioRouter,
+                    dialNumber = dialNumber,
+                    onDialNumberConsumed = onDialNumberConsumed
                 )
                 if (!versionBannerDismissed) {
                     Box(
@@ -275,7 +292,9 @@ private fun HomeScreen(
     onConversationClick: (providerNumber: String, phoneNumber: String) -> Unit,
     contactResolver: ContactResolver,
     voiceCallManager: VoiceCallManager,
-    audioRouter: AudioRouter
+    audioRouter: AudioRouter,
+    dialNumber: String? = null,
+    onDialNumberConsumed: () -> Unit = {}
 ) {
     val initialIndex = initialTab?.let { BottomNavDestination.entries.indexOf(it) } ?: 0
     var selectedTabIndex by rememberSaveable { mutableStateOf(initialIndex) }
@@ -354,6 +373,13 @@ private fun HomeScreen(
         return
     }
 
+    // Back navigation: on any non-DialPad tab, back returns to the Dial Pad tab
+    // instead of closing the app. On the Dial Pad tab this handler is disabled,
+    // so back propagates to the system and closes the app as expected.
+    androidx.activity.compose.BackHandler(enabled = selectedTab != BottomNavDestination.DIAL_PAD) {
+        selectedTabIndex = BottomNavDestination.entries.indexOf(BottomNavDestination.DIAL_PAD)
+    }
+
     Scaffold(
         bottomBar = {
             SvarlaBottomNavigation(
@@ -374,6 +400,13 @@ private fun HomeScreen(
             when (selectedTab) {
                 BottomNavDestination.DIAL_PAD -> {
                     val dialPadViewModel: DialPadViewModel = hiltViewModel()
+                    // Apply an external dial request (tel:/PROCESS_TEXT) once.
+                    LaunchedEffect(dialNumber) {
+                        if (dialNumber != null) {
+                            dialPadViewModel.pasteNumber(dialNumber)
+                            onDialNumberConsumed()
+                        }
+                    }
                     DialPadScreen(
                         viewModel = dialPadViewModel,
                         onCallPressed = { number -> requireMicPermission { dialPadViewModel.makeCall(number) } },

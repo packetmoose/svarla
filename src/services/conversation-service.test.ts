@@ -22,8 +22,10 @@ interface MockMessageRow {
 
 interface MockConversationRow {
   phone_number: string;
+  provider_number: string;
   last_message_preview: string | null;
   last_message_timestamp: Date | null;
+  removed: boolean;
   created_at: Date;
 }
 
@@ -65,8 +67,10 @@ function createMockDb(
             if (table === 'conversations') {
               const newConv: MockConversationRow = {
                 phone_number: values.phone_number as string,
+                provider_number: (values.provider_number as string) ?? '',
                 last_message_preview: (values.last_message_preview as string | null) ?? null,
                 last_message_timestamp: (values.last_message_timestamp as Date | null) ?? null,
+                removed: (values.removed as boolean) ?? false,
                 created_at: new Date(),
               };
               conversations.push(newConv);
@@ -77,42 +81,68 @@ function createMockDb(
     }),
     updateTable: vi.fn().mockImplementation((table: string) => {
       return {
-        set: (setValues: Record<string, unknown>) => ({
-          where: (_col: string, _op: string, matchValue: unknown) => ({
-            returningAll: () => ({
-              executeTakeFirstOrThrow: async () => {
-                if (table === 'messages') {
-                  const idx = messages.findIndex((m) => {
-                    if (_col === 'id') return m.id === matchValue;
-                    if (_col === 'provider_message_id') return m.provider_message_id === matchValue;
-                    return false;
-                  });
-                  if (idx === -1) throw new Error('Message not found');
-                  messages[idx] = { ...messages[idx], ...setValues } as MockMessageRow;
-                  return { ...messages[idx] };
-                }
-                return {};
-              },
-            }),
-            execute: async () => {
-              if (table === 'messages') {
-                const idx = messages.findIndex((m) => {
-                  if (_col === 'id') return m.id === matchValue;
-                  if (_col === 'provider_message_id') return m.provider_message_id === matchValue;
-                  return false;
-                });
-                if (idx !== -1) {
-                  messages[idx] = { ...messages[idx], ...setValues } as MockMessageRow;
-                }
-              } else if (table === 'conversations') {
-                const idx = conversations.findIndex((c) => c.phone_number === matchValue);
-                if (idx !== -1) {
-                  conversations[idx] = { ...conversations[idx], ...setValues } as MockConversationRow;
-                }
-              }
+        set: (setValues: Record<string, unknown>) => {
+          // Conversation updates are keyed by the (provider_number, phone_number)
+          // pair, i.e. two chained .where() calls. Track both filters.
+          const applyConversationUpdate = (filters: Record<string, unknown>) => {
+            const idx = conversations.findIndex((c) =>
+              Object.entries(filters).every(([col, val]) => {
+                if (col === 'phone_number') return c.phone_number === val;
+                if (col === 'provider_number') return c.provider_number === val;
+                return true;
+              })
+            );
+            if (idx !== -1) {
+              conversations[idx] = { ...conversations[idx], ...setValues } as MockConversationRow;
+            }
+          };
+
+          const applyMessageUpdate = (col: string, matchValue: unknown) => {
+            const idx = messages.findIndex((m) => {
+              if (col === 'id') return m.id === matchValue;
+              if (col === 'provider_message_id') return m.provider_message_id === matchValue;
+              return false;
+            });
+            return idx;
+          };
+
+          return {
+            where: (_col: string, _op: string, matchValue: unknown) => {
+              const filters: Record<string, unknown> = { [_col]: matchValue };
+              return {
+                // Optional second where for the conversation pair key.
+                where: (_col2: string, _op2: string, matchValue2: unknown) => ({
+                  execute: async () => {
+                    if (table === 'conversations') {
+                      applyConversationUpdate({ ...filters, [_col2]: matchValue2 });
+                    }
+                  },
+                }),
+                returningAll: () => ({
+                  executeTakeFirstOrThrow: async () => {
+                    if (table === 'messages') {
+                      const idx = applyMessageUpdate(_col, matchValue);
+                      if (idx === -1) throw new Error('Message not found');
+                      messages[idx] = { ...messages[idx], ...setValues } as MockMessageRow;
+                      return { ...messages[idx] };
+                    }
+                    return {};
+                  },
+                }),
+                execute: async () => {
+                  if (table === 'messages') {
+                    const idx = applyMessageUpdate(_col, matchValue);
+                    if (idx !== -1) {
+                      messages[idx] = { ...messages[idx], ...setValues } as MockMessageRow;
+                    }
+                  } else if (table === 'conversations') {
+                    applyConversationUpdate(filters);
+                  }
+                },
+              };
             },
-          }),
-        }),
+          };
+        },
       };
     }),
     selectFrom: vi.fn().mockImplementation((table: string) => {
@@ -152,23 +182,42 @@ function createMockDb(
                   },
                 }),
               }),
-              where: (_col2: string, _op2: string, _matchValue2: unknown) => ({
-                orderBy: (_orderCol: string, dir: string) => ({
-                  limit: (lim: number) => ({
-                    execute: async () => {
-                      const filtered = messages.filter((m) => {
-                        if (_col === 'conversation_number') return m.conversation_number === matchValue;
-                        return false;
-                      });
-                      const sorted = [...filtered].sort((a, b) => {
-                        if (dir === 'desc') return b.timestamp.getTime() - a.timestamp.getTime();
-                        return a.timestamp.getTime() - b.timestamp.getTime();
-                      });
-                      return sorted.slice(0, lim).map((m) => ({ ...m }));
-                    },
+              where: (_col2: string, _op2: string, _matchValue2: unknown) => {
+                // Filters applied so far: conversation_number (from the outer where)
+                // and `removed` (this where). getMessages may add an optional third
+                // where on provider_number.
+                const applyBaseFilter = (m: MockMessageRow) =>
+                  _col === 'conversation_number' ? m.conversation_number === matchValue : false;
+
+                const runQuery = (dir: string, lim: number, providerFilter?: unknown) => {
+                  const filtered = messages.filter((m) => {
+                    if (!applyBaseFilter(m)) return false;
+                    if (providerFilter !== undefined) return m.provider_number === providerFilter;
+                    return true;
+                  });
+                  const sorted = [...filtered].sort((a, b) => {
+                    if (dir === 'desc') return b.timestamp.getTime() - a.timestamp.getTime();
+                    return a.timestamp.getTime() - b.timestamp.getTime();
+                  });
+                  return sorted.slice(0, lim).map((m) => ({ ...m }));
+                };
+
+                return {
+                  // Optional third where — provider_number scoping.
+                  where: (_col3: string, _op3: string, matchValue3: unknown) => ({
+                    orderBy: (_orderCol: string, dir: string) => ({
+                      limit: (lim: number) => ({
+                        execute: async () => runQuery(dir, lim, matchValue3),
+                      }),
+                    }),
                   }),
-                }),
-              }),
+                  orderBy: (_orderCol: string, dir: string) => ({
+                    limit: (lim: number) => ({
+                      execute: async () => runQuery(dir, lim),
+                    }),
+                  }),
+                };
+              },
             }),
           }),
           select: (_cols: string[]) => ({
@@ -198,61 +247,89 @@ function createMockDb(
         };
       }
       if (table === 'conversations') {
+        // Filter conversations by an accumulated set of (col -> value) filters.
+        const filterConversations = (filters: Record<string, unknown>) =>
+          conversations.filter((c) =>
+            Object.entries(filters).every(([col, val]) => {
+              if (col === 'phone_number') {
+                return Array.isArray(val) ? val.includes(c.phone_number) : c.phone_number === val;
+              }
+              if (col === 'provider_number') return c.provider_number === val;
+              if (col === 'removed') return c.removed === val;
+              return true;
+            })
+          );
+
+        const sortByRecent = (rows: MockConversationRow[]) =>
+          [...rows].sort((a, b) => {
+            const aTime = a.last_message_timestamp?.getTime() ?? 0;
+            const bTime = b.last_message_timestamp?.getTime() ?? 0;
+            return bTime - aTime;
+          });
+
         return {
-          selectAll: () => ({
-            where: (_col: string, _op: string, matchValue: unknown) => ({
+          selectAll: () => {
+            // selectAll().where()[.where()] — used by upsertConversation (pair
+            // lookup) and getConversations (removed + optional provider filter,
+            // then orderBy/limit/offset).
+            const buildWhere = (filters: Record<string, unknown>) => ({
               executeTakeFirst: async () => {
-                return conversations.find((c) => c.phone_number === matchValue) ?? undefined;
+                const found = filterConversations(filters);
+                return found[0] ? { ...found[0] } : undefined;
               },
+              where: (col2: string, _op2: string, val2: unknown) =>
+                buildWhere({ ...filters, [col2]: val2 }),
               orderBy: (_orderCol: string, _dir: string) => ({
                 limit: (lim: number) => ({
                   offset: (off: number) => ({
-                    where: (_col2: string, _op2: string, _matchValue2: unknown) => ({
+                    where: (col2: string, _op2: string, val2: unknown) => ({
                       execute: async () => {
-                        const filtered = conversations.filter((c) => {
-                          if (Array.isArray(_matchValue2)) return _matchValue2.includes(c.phone_number);
-                          return true;
-                        });
-                        const sorted = [...filtered].sort((a, b) => {
-                          const aTime = a.last_message_timestamp?.getTime() ?? 0;
-                          const bTime = b.last_message_timestamp?.getTime() ?? 0;
-                          return bTime - aTime;
-                        });
-                        return sorted.slice(off, off + lim).map((c) => ({ ...c }));
+                        const filtered = filterConversations({ ...filters, [col2]: val2 });
+                        return sortByRecent(filtered).slice(off, off + lim).map((c) => ({ ...c }));
                       },
                     }),
                     execute: async () => {
-                      const sorted = [...conversations].sort((a, b) => {
-                        const aTime = a.last_message_timestamp?.getTime() ?? 0;
-                        const bTime = b.last_message_timestamp?.getTime() ?? 0;
-                        return bTime - aTime;
-                      });
-                      return sorted.slice(off, off + lim).map((c) => ({ ...c }));
+                      const filtered = filterConversations(filters);
+                      return sortByRecent(filtered).slice(off, off + lim).map((c) => ({ ...c }));
                     },
                   }),
                 }),
               }),
-            }),
-          }),
+            });
+            return {
+              where: (col: string, _op: string, val: unknown) => buildWhere({ [col]: val }),
+            };
+          },
           select: (selectorFn: unknown) => {
             if (typeof selectorFn === 'function') {
-              return {
-                where: (_col: string, _op: string, _matchValue: unknown) => ({
-                  where: (_col2: string, _op2: string, _matchValue2: unknown) => ({
-                    executeTakeFirstOrThrow: async () => ({
-                      count: String(conversations.length),
-                    }),
-                  }),
-                  executeTakeFirstOrThrow: async () => ({
-                    count: String(conversations.length),
-                  }),
+              const buildCountWhere = (filters: Record<string, unknown>) => ({
+                where: (col2: string, _op2: string, val2: unknown) =>
+                  buildCountWhere({ ...filters, [col2]: val2 }),
+                executeTakeFirstOrThrow: async () => ({
+                  count: String(filterConversations(filters).length),
                 }),
+              });
+              return {
+                where: (col: string, _op: string, val: unknown) => buildCountWhere({ [col]: val }),
                 executeTakeFirstOrThrow: async () => ({
                   count: String(conversations.length),
                 }),
+                // getUnreadMessagesCount selects columns without a where.
+                execute: async () =>
+                  conversations.map((c) => ({
+                    provider_number: c.provider_number,
+                    phone_number: c.phone_number,
+                  })),
               };
             }
-            return {};
+            // Column-list select (e.g. ['provider_number','phone_number']).
+            return {
+              execute: async () =>
+                conversations.map((c) => ({
+                  provider_number: c.provider_number,
+                  phone_number: c.phone_number,
+                })),
+            };
           },
         };
       }
@@ -697,14 +774,18 @@ describe('ConversationService', () => {
       dbHelper.setConversations([
         {
           phone_number: '+14155551111',
+          provider_number: '+14155550000',
           last_message_preview: 'Old msg',
           last_message_timestamp: new Date('2024-01-10T10:00:00Z'),
+          removed: false,
           created_at: new Date('2024-01-01T00:00:00Z'),
         },
         {
           phone_number: '+14155552222',
+          provider_number: '+14155550000',
           last_message_preview: 'New msg',
           last_message_timestamp: new Date('2024-01-15T10:00:00Z'),
+          removed: false,
           created_at: new Date('2024-01-02T00:00:00Z'),
         },
       ]);
@@ -727,12 +808,70 @@ describe('ConversationService', () => {
       expect(result.total).toBe(0);
     });
 
+    it('should keep two threads with the same recipient but different provider numbers distinct', async () => {
+      // Regression: previously conversations were keyed by recipient alone, so
+      // these two threads collapsed into one row and one went missing.
+      dbHelper.setConversations([
+        {
+          phone_number: '+14155551234',
+          provider_number: '+14155550000',
+          last_message_preview: 'via A',
+          last_message_timestamp: new Date('2024-01-10T10:00:00Z'),
+          removed: false,
+          created_at: new Date('2024-01-01T00:00:00Z'),
+        },
+        {
+          phone_number: '+14155551234',
+          provider_number: '+14155559999',
+          last_message_preview: 'via B',
+          last_message_timestamp: new Date('2024-01-15T10:00:00Z'),
+          removed: false,
+          created_at: new Date('2024-01-02T00:00:00Z'),
+        },
+      ]);
+
+      const result = await service.getConversations(1, 50);
+
+      expect(result.total).toBe(2);
+      expect(result.conversations).toHaveLength(2);
+      const providerNumbers = result.conversations.map((c) => c.provider_number).sort();
+      expect(providerNumbers).toEqual(['+14155550000', '+14155559999']);
+    });
+
+    it('should filter conversations by provider number', async () => {
+      dbHelper.setConversations([
+        {
+          phone_number: '+14155551234',
+          provider_number: '+14155550000',
+          last_message_preview: 'via A',
+          last_message_timestamp: new Date('2024-01-10T10:00:00Z'),
+          removed: false,
+          created_at: new Date('2024-01-01T00:00:00Z'),
+        },
+        {
+          phone_number: '+14155551234',
+          provider_number: '+14155559999',
+          last_message_preview: 'via B',
+          last_message_timestamp: new Date('2024-01-15T10:00:00Z'),
+          removed: false,
+          created_at: new Date('2024-01-02T00:00:00Z'),
+        },
+      ]);
+
+      const result = await service.getConversations(1, 50, '+14155559999');
+
+      expect(result.conversations).toHaveLength(1);
+      expect(result.conversations[0].provider_number).toBe('+14155559999');
+    });
+
     it('should clamp pageSize to maximum of 100', async () => {
       dbHelper.setConversations([
         {
           phone_number: '+14155551111',
+          provider_number: '+14155550000',
           last_message_preview: 'Hi',
           last_message_timestamp: new Date(),
+          removed: false,
           created_at: new Date(),
         },
       ]);
@@ -841,6 +980,40 @@ describe('ConversationService', () => {
       // Should be the 2 most recent, in chronological order
       expect(messages[0].body).toBe('Middle');
       expect(messages[1].body).toBe('Newest');
+    });
+
+    it('should scope messages to a single provider thread when providerNumber is given', async () => {
+      const now = Date.now();
+      dbHelper.setMessages([
+        {
+          id: 'msg-a',
+          provider_message_id: null,
+          conversation_number: '+14155551234',
+          provider_number: '+14155550000',
+          body: 'From provider A',
+          direction: 'RECEIVED',
+          status: 'DELIVERED',
+          timestamp: new Date(now - 3000),
+          retry_count: 0,
+        },
+        {
+          id: 'msg-b',
+          provider_message_id: null,
+          conversation_number: '+14155551234',
+          provider_number: '+14155559999',
+          body: 'From provider B',
+          direction: 'RECEIVED',
+          status: 'DELIVERED',
+          timestamp: new Date(now - 2000),
+          retry_count: 0,
+        },
+      ]);
+
+      const messages = await service.getMessages('+14155551234', 100, '+14155550000');
+
+      // Only the message belonging to provider A's thread should be returned.
+      expect(messages).toHaveLength(1);
+      expect(messages[0].body).toBe('From provider A');
     });
 
     it('should return empty array for a number with no messages', async () => {

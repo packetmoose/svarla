@@ -5,6 +5,7 @@ import type { ConversationService } from '../services/conversation-service.js';
 import type { WakeSignalPublisher } from '../notifications/wake-signal-publisher.js';
 import type { DeviceRegistryManager } from '../services/device-registry-manager.js';
 import type { VonageTelephonyProvider } from '../providers/vonage-telephony-provider.js';
+import type { Elks46TelephonyProvider } from '../providers/elks46-telephony-provider.js';
 import type { NumberManagementService } from '../services/number-management-service.js';
 import type { WebSocketBroadcaster } from '../websocket/broadcaster.js';
 import type { CallOrchestrator } from '../services/call-orchestrator.js';
@@ -159,7 +160,7 @@ export function registerWebhookRouter(
           await wakeSignalPublisher.sendToAllDevices(devices, {
             id: callId,
             priority: 'normal',
-          });
+          }, 'blocked_call');
         }
       } catch (err) {
         server.log.error(err, '[BlockedCall] Failed to send wake signals');
@@ -285,6 +286,15 @@ export function registerWebhookRouter(
           const normalizedTo = to.startsWith('+') ? to : `+${to}`;
           const result = await callOrchestrator.handleInbound(providerId, callId, normalizedFrom, normalizedTo);
 
+          // Register a control-plane hangup callback so 46elks notifies us when
+          // the call leg ends (including when the remote caller hangs up). This
+          // is the inbound counterpart to the `whenhangup` set in makeCall for
+          // outbound calls. Without it, inbound teardown relies solely on the
+          // audio WebSocket closing, which can leave the call active on the
+          // client if that socket lingers.
+          const elks46Instance = entry.instance as Elks46TelephonyProvider;
+          const whenhangup = elks46Instance.getHangupWebhookUrl();
+
           // Get the WebSocket number from provider config
           const providerConfig = entry.config as Record<string, string>;
           const wsNumber = providerConfig.websocket_number;
@@ -304,6 +314,7 @@ export function registerWebhookRouter(
             return reply.status(200).send({
               connect: wsNumber,
               callerid: from,
+              whenhangup,
             });
           }
 
@@ -315,6 +326,7 @@ export function registerWebhookRouter(
           return reply.status(200).send({
             connect: result.sipUri,
             callerid: from,
+            whenhangup,
           });
         } catch (err) {
           server.log.error(err, `Failed to handle 46elks inbound call via CallOrchestrator`);
@@ -622,7 +634,7 @@ export function registerWebhookRouter(
               wakeSignalPublisher.sendToAllDevices(devices, {
                 id: body.uuid!,
                 priority: 'high',
-              }).catch((err) => {
+              }, 'incoming_call_legacy').catch((err) => {
                 server.log.error(err, 'Failed to send wake signals for incoming call');
               });
             }

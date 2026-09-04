@@ -5,25 +5,136 @@ import { validateLabel } from '../validators/label-validator.js';
 
 /**
  * Color palette for provider numbers.
- * These colors are designed to work with the app's purple/teal Material 3 theme.
+ *
+ * The badge fills a solid swatch with these colors and picks a black/white text
+ * color for contrast, so the palette can use saturated, clearly-distinct hues.
+ * Hues are spread evenly around the color wheel and ORDERED so that sequential
+ * assignments (numbers get colors in palette order) land far apart on the wheel,
+ * maximizing the visual difference between numbers added around the same time.
+ *
+ * Fallback color used by clients when a number has no color (inactive numbers
+ * may carry a null color). Keep in sync with the client fallbacks.
  */
-const NUMBER_COLOR_PALETTE = [
-  '#6750A4', // purple (primary)
-  '#006B5F', // teal
-  '#B5485E', // rose
-  '#526E2D', // olive
-  '#7C5635', // brown
-  '#00658E', // blue
-  '#8B4F8A', // mauve
-  '#5D5F30', // moss
+export const NUMBER_COLOR_FALLBACK = '#6750A4';
+
+export const NUMBER_COLOR_PALETTE = [
+  '#D32F2F', // red          (hue   0)
+  '#1976D2', // blue         (hue 210)
+  '#388E3C', // green        (hue 120)
+  '#F9A825', // amber        (hue  45)
+  '#7B1FA2', // purple       (hue 285)
+  '#0097A7', // cyan         (hue 187)
+  '#E64A19', // deep orange  (hue  15)
+  '#5C6BC0', // indigo       (hue 230)
+  '#689F38', // lime green   (hue  90)
+  '#C2185B', // pink         (hue 337)
+  '#00897B', // teal         (hue 172)
+  '#F57F17', // dark amber   (hue  38)
+  '#512DA8', // deep purple  (hue 262)
+  '#0288D1', // light blue   (hue 202)
+  '#AFB42B', // olive/lime   (hue  64)
+  '#AD1457', // magenta      (hue 330)
 ];
+
+/**
+/**
+ * Result of choosing a color for a number being (re)activated.
+ * `color` is the color to assign. If `reclaimFrom` is set, that color was
+ * being held by an inactive number whose color must be cleared (set to null)
+ * so the newly-activated number can hold it uniquely.
+ */
+export interface ColorChoice {
+  color: string;
+  reclaimFrom: string | null;
+}
+
+/**
+ * Choose a color for a number that is being (re)activated.
+ *
+ * Colors persist for a number's lifetime; we only reclaim a color from an
+ * inactive number when the palette is otherwise exhausted by active numbers.
+ *
+ * Priority:
+ *  1. If the number already has a color that no OTHER active number uses, keep it.
+ *  2. Otherwise use the first palette color held by neither an active nor an
+ *     inactive number (a truly free color) — guarantees uniqueness.
+ *  3. Otherwise, if some palette color is held only by inactive numbers, take
+ *     it (reclaiming it from one inactive holder). Prefer the palette color
+ *     with the fewest inactive holders so we disturb as few numbers as possible.
+ *  4. Otherwise (every palette color is held by an active number), share the
+ *     least-used color among active numbers, tie-broken by palette order.
+ *
+ * `existingColor` is the color the number currently holds (may be null).
+ * `activeColors` / `inactiveColors` are the colors held by all other active
+ * and inactive numbers respectively.
+ */
+export function chooseColor(
+  existingColor: string | null,
+  activeColors: readonly string[],
+  inactiveColors: readonly string[]
+): ColorChoice {
+  const activeCounts = countPaletteColors(activeColors);
+  const inactiveCounts = countPaletteColors(inactiveColors);
+
+  // 1. Keep the existing color if no other active number uses it.
+  if (
+    existingColor &&
+    NUMBER_COLOR_PALETTE.includes(existingColor) &&
+    (activeCounts.get(existingColor) ?? 0) === 0
+  ) {
+    return { color: existingColor, reclaimFrom: null };
+  }
+
+  // 2. First palette color free of both active and inactive holders.
+  for (const color of NUMBER_COLOR_PALETTE) {
+    if ((activeCounts.get(color) ?? 0) === 0 && (inactiveCounts.get(color) ?? 0) === 0) {
+      return { color, reclaimFrom: null };
+    }
+  }
+
+  // 3. Palette color held only by inactive numbers — reclaim from inactive.
+  //    Prefer the one with the fewest inactive holders.
+  let reclaim: string | null = null;
+  let reclaimCount = Infinity;
+  for (const color of NUMBER_COLOR_PALETTE) {
+    const inactive = inactiveCounts.get(color) ?? 0;
+    if ((activeCounts.get(color) ?? 0) === 0 && inactive > 0 && inactive < reclaimCount) {
+      reclaim = color;
+      reclaimCount = inactive;
+    }
+  }
+  if (reclaim) {
+    return { color: reclaim, reclaimFrom: reclaim };
+  }
+
+  // 4. Every palette color is held by an active number: share the least-used.
+  let best = NUMBER_COLOR_PALETTE[0];
+  let bestCount = activeCounts.get(best) ?? 0;
+  for (const color of NUMBER_COLOR_PALETTE) {
+    const count = activeCounts.get(color) ?? 0;
+    if (count < bestCount) {
+      best = color;
+      bestCount = count;
+    }
+  }
+  return { color: best, reclaimFrom: null };
+}
+
+function countPaletteColors(colors: readonly string[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const color of NUMBER_COLOR_PALETTE) counts.set(color, 0);
+  for (const c of colors) {
+    if (counts.has(c)) counts.set(c, (counts.get(c) ?? 0) + 1);
+  }
+  return counts;
+}
 
 export interface NumberRecord {
   number: string;
   provider_id: string | null;
   provider_display_name?: string;
   label: string | null;
-  color: string;
+  color: string | null;
   added_at: Date;
   is_active: boolean;
   last_used_at: Date | null;
@@ -119,6 +230,16 @@ export class NumberManagementService {
 
     const dbNumberMap = new Map(dbNumbers.map((n) => [n.number, n]));
 
+    // Track colors held across ALL providers, split by active state, so we can
+    // assign globally-unique colors while persisting each number's color for its
+    // lifetime. We mutate these lists as we (re)activate numbers during this sync
+    // so numbers processed in the same pass also stay distinct. Colors are
+    // reclaimed from inactive numbers only when the palette is exhausted by
+    // active numbers (see chooseColor).
+    const usage = await this.getColorUsage();
+    const activeColors = usage.active;
+    const inactiveColors = usage.inactive;
+
     const added: string[] = [];
     const removed: string[] = [];
 
@@ -126,20 +247,22 @@ export class NumberManagementService {
     for (const providerNum of providerNumbers) {
       const existing = dbNumberMap.get(providerNum.number);
       if (!existing) {
-        // Pick a color based on current total count
-        const totalCount = dbNumbers.length + added.length;
-        const color = NUMBER_COLOR_PALETTE[totalCount % NUMBER_COLOR_PALETTE.length];
+        const choice = chooseColor(null, activeColors, inactiveColors);
+        await this.reclaimColor(choice, inactiveColors);
+        activeColors.push(choice.color);
 
-        this.logger.debug(`New number discovered: ${providerNum.number} — upserting with color ${color}`);
+        this.logger.debug(`New number discovered: ${providerNum.number} — upserting with color ${choice.color}`);
 
-        // Insert or update — the number may exist under a different (deleted) provider
+        // Insert or update — the number may exist under a different (deleted)
+        // provider. On conflict the number keeps its stored color unless we
+        // deliberately reassign it (chooseColor already accounted for that).
         await this.db
           .insertInto('numbers')
           .values({
             number: providerNum.number,
             provider_id: providerId,
             label: null,
-            color,
+            color: choice.color,
             is_active: true,
             last_used_at: null,
           })
@@ -147,26 +270,42 @@ export class NumberManagementService {
             oc.column('number').doUpdateSet({
               provider_id: providerId,
               is_active: true,
+              color: choice.color,
             })
           )
           .execute();
         added.push(providerNum.number);
       } else if (!existing.is_active) {
         this.logger.debug(`Re-activating previously removed number: ${providerNum.number}`);
-        // Was previously removed, now re-added
+        // Was previously removed, now re-added. Keep its persisted color if no
+        // active number uses it; otherwise pick a new one (reclaiming from an
+        // inactive number only if the palette is exhausted by active numbers).
+        // Remove this number's own color from the inactive tracking first.
+        if (existing.color) {
+          const idx = inactiveColors.indexOf(existing.color);
+          if (idx !== -1) inactiveColors.splice(idx, 1);
+        }
+        const choice = chooseColor(existing.color, activeColors, inactiveColors);
+        await this.reclaimColor(choice, inactiveColors);
+        activeColors.push(choice.color);
         await this.db
           .updateTable('numbers')
-          .set({ is_active: true })
+          .set({ is_active: true, color: choice.color })
           .where('number', '=', providerNum.number)
           .execute();
         added.push(providerNum.number);
       }
     }
 
-    // Find removed numbers (in DB and active, but not in provider)
-    // Orphan them the same way as provider deletion: deactivate, detach, clear label.
-    // This hides them from the settings UI (INNER JOIN on providers excludes NULL provider_id)
-    // while preserving them for historical reference in messages and call_history.
+    // Find removed numbers (in DB and active, but not in provider).
+    // Orphan them: deactivate and detach. The color AND label are PRESERVED so
+    // the number keeps them if re-added (labels are user data and must survive
+    // an orphan -> reactivate cycle, which happens routinely when a
+    // modem-gateway restarts/reconnects and transiently reports a partial number
+    // set). The color is only reclaimed later if the palette runs out of colors
+    // for active numbers. Orphaning hides these numbers from the settings UI
+    // (INNER JOIN on providers excludes NULL provider_id) while preserving them
+    // for historical reference in messages and call_history.
     for (const dbNum of dbNumbers) {
       if (dbNum.is_active && !providerNumberSet.has(dbNum.number)) {
         this.logger.debug(`Number no longer in provider, orphaning: ${dbNum.number}`);
@@ -175,11 +314,17 @@ export class NumberManagementService {
           .set({
             is_active: false,
             provider_id: null,
-            label: null,
           })
           .where('number', '=', dbNum.number)
           .execute();
         removed.push(dbNum.number);
+        // The color is now held by an inactive number: move it in tracking so it
+        // can be reclaimed if needed later in this same sync pass.
+        if (dbNum.color) {
+          const idx = activeColors.indexOf(dbNum.color);
+          if (idx !== -1) activeColors.splice(idx, 1);
+          inactiveColors.push(dbNum.color);
+        }
       }
     }
 
@@ -199,6 +344,60 @@ export class NumberManagementService {
 
     const activeCount = providerNumbers.length;
     return { added, removed, total: activeCount };
+  }
+
+  /**
+   * Get the colors currently held by numbers, split by active state.
+   * Colors persist for a number's lifetime, so inactive numbers keep a color;
+   * their colors are reclaimed only when the palette is exhausted by active
+   * numbers. `excludeNumber` omits the number being (re)assigned.
+   */
+  private async getColorUsage(
+    excludeNumber?: string
+  ): Promise<{ active: string[]; inactive: string[] }> {
+    let query = this.db
+      .selectFrom('numbers')
+      .select(['color', 'is_active'])
+      .where('color', 'is not', null);
+    if (excludeNumber !== undefined) {
+      query = query.where('number', '!=', excludeNumber);
+    }
+    const rows = await query.execute();
+    const active: string[] = [];
+    const inactive: string[] = [];
+    for (const r of rows) {
+      if (r.color == null) continue;
+      if (r.is_active) active.push(r.color);
+      else inactive.push(r.color);
+    }
+    return { active, inactive };
+  }
+
+  /**
+   * If a color choice reclaims a color from an inactive number, null that
+   * color on ONE inactive holder in the DB and drop it from the in-memory
+   * inactive list. No-op when nothing is reclaimed.
+   */
+  private async reclaimColor(choice: ColorChoice, inactiveColors: string[]): Promise<void> {
+    if (!choice.reclaimFrom) return;
+    const reclaimFrom = choice.reclaimFrom;
+    this.logger.debug(`Palette exhausted; reclaiming color ${reclaimFrom} from an inactive number`);
+    await this.db
+      .updateTable('numbers')
+      .set({ color: null })
+      .where(
+        'number',
+        '=',
+        this.db
+          .selectFrom('numbers')
+          .select('number')
+          .where('is_active', '=', false)
+          .where('color', '=', reclaimFrom)
+          .limit(1)
+      )
+      .execute();
+    const idx = inactiveColors.indexOf(reclaimFrom);
+    if (idx !== -1) inactiveColors.splice(idx, 1);
   }
 
   /**

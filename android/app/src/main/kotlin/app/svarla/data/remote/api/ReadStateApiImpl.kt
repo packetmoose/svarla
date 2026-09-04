@@ -17,8 +17,9 @@ class ReadStateApiImpl @Inject constructor(
         return apiClient.post("/api/read-state/calls")
     }
 
-    override suspend fun markThreadAsRead(phoneNumber: String): ReadStateCountsDto {
+    override suspend fun markThreadAsRead(providerNumber: String, phoneNumber: String): ReadStateCountsDto {
         val encodedNumber = phoneNumber.replace("+", "%2B")
-        return apiClient.post("/api/read-state/messages/$encodedNumber")
+        val encodedFrom = providerNumber.replace("+", "%2B")
+        return apiClient.post("/api/read-state/messages/$encodedNumber?from=$encodedFrom")
     }
 }

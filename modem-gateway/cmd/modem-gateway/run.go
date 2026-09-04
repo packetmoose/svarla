@@ -77,7 +77,11 @@ func run(ctx context.Context, configPath string) error {
 		log.Printf("WARNING: failed to create missed call buffer: %v", err)
 	}
 
-	smsBuffer, err := buffer.New[sms.IncomingSMS](filepath.Join(configDir, "sms-buffer.jsonl"), buffer.DefaultCapacity)
+	smsBuffer, err := buffer.NewKeyed[sms.IncomingSMS](
+		filepath.Join(configDir, "sms-buffer.jsonl"),
+		buffer.DefaultCapacity,
+		func(m sms.IncomingSMS) string { return m.MessageID },
+	)
 	if err != nil {
 		log.Printf("WARNING: failed to create SMS buffer: %v", err)
 	}
@@ -86,11 +90,18 @@ func run(ctx context.Context, configPath string) error {
 		return bridge.New(tlsConfig)
 	}
 
+	// SMS delivery pump: durable, buffer-first, ack-to-remove delivery of
+	// inbound SMS. Persists received messages, sends them to the server, and
+	// removes them from the buffer only on server ack.
+	smsDelivery := NewSMSDelivery(smsBuffer, sigClient)
+	smsDelivery.Start(ctx)
+
 	// Modem lifecycle — retries forever, monitors health, manages subsystems.
 	modemLife := NewModemLifecycle(ModemLifecycleConfig{
 		Cfg:           cfg,
 		SigClient:     sigClient,
 		SmsBuffer:     smsBuffer,
+		SmsDelivery:   smsDelivery,
 		BridgeFactory: bridgeFactory,
 	})
 	modemLife.Start(ctx)
@@ -98,11 +109,11 @@ func run(ctx context.Context, configPath string) error {
 	// Register signaling handlers before Start() so no messages are missed.
 	// Subsystem pointers are accessed via ModemLifecycle getters (thread-safe, nil when modem absent).
 	sigClient.OnMessage(func(msg signaling.Message) {
-		dispatchSignalingMessage(msg, modemLife.SMSManager(), modemLife.USSDManager(), modemLife.CallManager(), sigClient)
+		dispatchSignalingMessage(msg, modemLife.SMSManager(), modemLife.USSDManager(), modemLife.CallManager(), sigClient, smsDelivery)
 	})
 
 	sigClient.OnReconnect(func() {
-		handleReconnect(sigClient, modemLife.NumberReporter(), missedCallBuf, smsBuffer)
+		handleReconnect(sigClient, modemLife.NumberReporter(), missedCallBuf, smsDelivery)
 	})
 
 	sigClient.OnDisconnect(func() {
@@ -128,6 +139,11 @@ func run(ctx context.Context, configPath string) error {
 
 	log.Println("modem-gateway is running")
 	<-ctx.Done()
+
+	// Stop the SMS delivery pump first so it is not concurrently sending or
+	// mutating the buffer while we flush it. Unacked messages remain buffered
+	// on disk and are re-sent on the next run.
+	smsDelivery.Stop()
 
 	// Flush SMS and missed call buffers to disk immediately. This is fast
 	// (local file I/O only) and must happen before the potentially slow modem

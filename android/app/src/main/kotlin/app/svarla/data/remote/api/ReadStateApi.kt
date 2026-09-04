@@ -23,8 +23,10 @@ interface ReadStateApi {
     suspend fun markMissedCallsAsViewed(): ReadStateCountsDto
 
     /**
-     * POST /api/read-state/messages/{number}
-     * Mark all messages in a thread as read. Returns updated counts.
+     * POST /api/read-state/messages/{number}?from={providerNumber}
+     * Mark all messages in a thread as read. A thread is identified by the
+     * (providerNumber, phoneNumber) pair, so the provider number is required.
+     * Returns updated counts.
      */
-    suspend fun markThreadAsRead(phoneNumber: String): ReadStateCountsDto
+    suspend fun markThreadAsRead(providerNumber: String, phoneNumber: String): ReadStateCountsDto
 }

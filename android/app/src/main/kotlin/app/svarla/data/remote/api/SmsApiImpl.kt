@@ -34,8 +34,9 @@ class SmsApiImpl @Inject constructor(
         )
     }
 
-    override suspend fun removeConversation(phoneNumber: String) {
-        apiClient.delete("/api/conversations/$phoneNumber")
+    override suspend fun removeConversation(providerNumber: String, phoneNumber: String) {
+        val encodedFrom = providerNumber.replace("+", "%2B")
+        apiClient.delete("/api/conversations/$phoneNumber?from=$encodedFrom")
     }
 
     override suspend fun removeMessage(messageId: String) {

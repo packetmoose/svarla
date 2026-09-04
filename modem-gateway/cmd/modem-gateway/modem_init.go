@@ -29,6 +29,7 @@ type ModemLifecycle struct {
 	cfg           *config.Config
 	sigClient     *signaling.ReconnectingClient
 	smsBuffer     *buffer.PersistentBuffer[sms.IncomingSMS]
+	smsDelivery   *SMSDelivery
 	bridgeFactory func() *bridge.AudioBridge
 	ctx           context.Context
 
@@ -48,6 +49,7 @@ type ModemLifecycleConfig struct {
 	Cfg           *config.Config
 	SigClient     *signaling.ReconnectingClient
 	SmsBuffer     *buffer.PersistentBuffer[sms.IncomingSMS]
+	SmsDelivery   *SMSDelivery
 	BridgeFactory func() *bridge.AudioBridge
 }
 
@@ -57,6 +59,7 @@ func NewModemLifecycle(cfg ModemLifecycleConfig) *ModemLifecycle {
 		cfg:           cfg.Cfg,
 		sigClient:     cfg.SigClient,
 		smsBuffer:     cfg.SmsBuffer,
+		smsDelivery:   cfg.SmsDelivery,
 		bridgeFactory: cfg.BridgeFactory,
 	}
 }
@@ -210,15 +213,23 @@ func (ml *ModemLifecycle) onModemConnected(initResult *modem.InitResult) {
 		}
 	}
 
+	// Number reporter — created early so its Number() getter is available to
+	// the SMS manager for populating the "to" field on received messages. An
+	// initial Discover() caches the number before any SMS processing begins.
+	numberReporter := signaling.NewNumberReporter(m, ml.sigClient, ml.cfg)
+	if _, err := numberReporter.Discover(); err != nil {
+		log.Printf("Initial number discovery failed: %v", err)
+	}
+
 	// SMS manager.
-	smsMgr := sms.New(m)
+	smsMgr := sms.New(m, numberReporter.Number)
 	smsMgr.RegisterURCHandlers()
 
 	// Delivery/status reports are not used on this hardware (see internal/sms),
 	// so there is nothing to configure or poll for them here.
 
 	// Wire SMS forwarding.
-	wireSMSForwarding(smsMgr, ml.sigClient, ml.smsBuffer)
+	wireSMSForwarding(smsMgr, ml.smsDelivery)
 
 	// Drain any messages stored on the SIM/modem from previous sessions.
 	// This must be called after wireSMSForwarding so handlers are registered.
@@ -242,9 +253,6 @@ func (ml *ModemLifecycle) onModemConnected(initResult *modem.InitResult) {
 
 	// USSD manager.
 	ussdMgr := ussd.New(m)
-
-	// Number reporter.
-	numberReporter := signaling.NewNumberReporter(m, ml.sigClient, ml.cfg)
 
 	// Status reporter.
 	statusReporter := signaling.NewStatusReporter(m, ml.sigClient, signaling.ModemInfo{
@@ -306,49 +314,32 @@ func (ml *ModemLifecycle) teardownSubsystems() {
 	}
 }
 
-// wireSMSForwarding registers callbacks on the SMS manager to forward
-// received messages to Svarla (or buffer when offline).
-func wireSMSForwarding(
-	smsMgr *sms.Manager,
-	sigClient *signaling.ReconnectingClient,
-	smsBuffer *buffer.PersistentBuffer[sms.IncomingSMS],
-) {
-	smsMgr.OnReceived(func(incoming sms.IncomingSMS) {
-		log.Printf("OnReceived: incoming SMS from=%s bodyLen=%d connected=%t",
-			incoming.From, len(incoming.Body), sigClient.IsConnected())
-		if sigClient.IsConnected() {
-			payload := struct {
-				Type      string `json:"type"`
-				MessageID string `json:"messageId"`
-				From      string `json:"from"`
-				Body      string `json:"body"`
-				Timestamp int64  `json:"timestamp"`
-			}{
-				Type:      signaling.TypeIncomingSMS,
-				MessageID: incoming.MessageID,
-				From:      incoming.From,
-				Body:      incoming.Body,
-				Timestamp: incoming.Timestamp.UnixMilli(),
-			}
-			msg, err := signaling.NewMessage(signaling.TypeIncomingSMS, payload)
-			if err != nil {
-				log.Printf("Failed to create incoming_sms message: %v", err)
-				return
-			}
-			if err := sigClient.Send(msg); err != nil {
-				log.Printf("Failed to send incoming_sms, buffering: %v", err)
-				if smsBuffer != nil {
-					_ = smsBuffer.Push(incoming)
-				}
-			} else {
-				log.Printf("Sent incoming_sms to server: from=%s messageId=%s", incoming.From, incoming.MessageID)
-			}
-		} else if smsBuffer != nil {
-			if err := smsBuffer.Push(incoming); err != nil {
-				log.Printf("Failed to buffer SMS: %v", err)
-			} else {
-				log.Printf("Buffered incoming_sms (offline): from=%s", incoming.From)
-			}
+// wireSMSForwarding registers the received-SMS handler. The handler durably
+// persists every incoming message to the buffer (buffer-first). Returning an
+// error signals the SMS manager to keep the message in modem storage for a
+// later retry rather than deleting it. Actual delivery to the server and
+// removal-on-ack are handled by the SMSDelivery pump.
+func wireSMSForwarding(smsMgr *sms.Manager, delivery *SMSDelivery) {
+	smsMgr.OnReceived(func(incoming sms.IncomingSMS) error {
+		log.Printf("OnReceived: incoming SMS from=%s bodyLen=%d messageId=%s",
+			incoming.From, len(incoming.Body), incoming.MessageID)
+		if delivery == nil {
+			// Without a delivery pump we cannot guarantee durability; signal
+			// failure so the message stays in modem storage.
+			return errNoDelivery
 		}
+		if err := delivery.Persist(incoming); err != nil {
+			log.Printf("Failed to persist incoming SMS %s: %v", incoming.MessageID, err)
+			return err
+		}
+		return nil
 	})
 }
+
+// errNoDelivery is returned when no delivery pump is configured, so the SMS
+// manager keeps the message in modem storage instead of deleting it.
+var errNoDelivery = errDelivery("sms delivery not configured")
+
+type errDelivery string
+
+func (e errDelivery) Error() string { return string(e) }

@@ -46,6 +46,14 @@ class DialPadViewModel @Inject constructor(
 
     companion object {
         private const val MAX_SUGGESTIONS = 5
+
+        /**
+         * Sanitizes a pasted string by stripping everything except dial-valid characters.
+         * Returns only digits, +, *, and # characters.
+         */
+        internal fun sanitizeDialInput(text: String): String {
+            return text.filter { it.isDigit() || it == '+' || it == '*' || it == '#' }
+        }
     }
 
     /** The raw digits/characters entered by the user (unformatted). */
@@ -157,6 +165,23 @@ class DialPadViewModel @Inject constructor(
      * Get the current raw input value for initiating a call or SMS.
      */
     fun getCurrentNumber(): String = _rawInput.value
+
+    /**
+     * Paste a number from the clipboard into the dial pad.
+     * Sanitizes the input by stripping everything except dial-valid characters
+     * (digits, +, *, #). If the result is non-empty, replaces the current input.
+     *
+     * @param text The raw clipboard text to paste
+     * @return true if valid dial characters were found and pasted, false otherwise
+     */
+    fun pasteNumber(text: String): Boolean {
+        val sanitized = sanitizeDialInput(text)
+        if (sanitized.isEmpty()) return false
+        _rawInput.value = sanitized
+        _formattedNumber.value = formatNumber(sanitized)
+        _showingLastDialed.value = false
+        return true
+    }
 
     // ========================================================================
     // Number formatting
@@ -293,11 +318,14 @@ class DialPadViewModel @Inject constructor(
             providerNumberDao.getActive().collect { numbers ->
                 Log.d("DialPadVM", "loadProviderNumbers: Room emitted ${numbers.size} numbers")
                 _availableNumbers.value = numbers
-                if (_selectedProviderNumber.value == null ||
-                    numbers.none { it.number == _selectedProviderNumber.value?.number }
-                ) {
+                val selected = _selectedProviderNumber.value
+                if (selected == null || numbers.none { it.number == selected.number }) {
                     _selectedProviderNumber.value = selectDefaultNumber(numbers)
                     Log.d("DialPadVM", "loadProviderNumbers: selected default = ${_selectedProviderNumber.value?.number}")
+                } else {
+                    // Keep the same selection but refresh it from the emitted data so
+                    // updated fields (e.g. a newly-set label or color) are reflected.
+                    _selectedProviderNumber.value = numbers.first { it.number == selected.number }
                 }
             }
         }

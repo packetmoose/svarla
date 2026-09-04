@@ -81,6 +81,19 @@ function createProviderFactory(serverWebhookBaseUrl: string) {
 }
 
 /**
+ * Send an inbound-SMS acknowledgement to the provider if it supports one.
+ *
+ * Only the modem-gateway provider maintains a durable, ack-to-remove buffer for
+ * inbound SMS. Webhook-based providers (Vonage, 46elks) have no such buffer and
+ * require no ack, so this is a no-op for them.
+ */
+function ackIncomingSmsIfSupported(provider: TelephonyProvider, messageId: string): void {
+  if (provider instanceof ModemGatewayTelephonyProvider) {
+    provider.ackIncomingSms(messageId);
+  }
+}
+
+/**
  * Build and configure the Fastify server instance.
  * Sets up Pino logging, plugin registration, and error handling.
  */
@@ -179,8 +192,10 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
   // Services
   const deviceRegistryManager = new DeviceRegistryManager(db);
 
-  // Wake signal publisher for UnifiedPush notifications
-  const wakeSignalPublisher = new WakeSignalPublisher();
+  // Wake signal publisher for UnifiedPush notifications.
+  // Pass the server logger so per-device delivery results (including HTTP status
+  // for stale/expired push endpoints) are visible in logs.
+  const wakeSignalPublisher = new WakeSignalPublisher(server.log);
 
   // In-memory active call tracking for late-joining clients.
   // Tracks calls that are currently in RINGING or CONNECTED state.
@@ -231,24 +246,40 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
   // Pass the first active provider from the registry if available.
   // If no provider is active, create a no-op stub to avoid null errors.
   const conversationProvider: TelephonyProvider = primaryProvider ?? createNoOpProvider();
-  const conversationService = new ConversationService(db, conversationProvider, (event) => {
-    // Send lightweight notification — client will sync the actual data
-    if (event.type === 'new_message') {
-      const data = event.data as { conversationNumber: string; message: { id: string; direction: string } };
-      wsBroadcaster.broadcast({
-        type: 'new_message',
-        data: {
-          conversationNumber: data.conversationNumber,
-          messageId: data.message.id,
-          direction: data.message.direction,
-        },
-      });
-    } else {
-      wsBroadcaster.broadcast({ type: event.type, data: event.data as unknown as Record<string, unknown> });
-    }
-  });
-  const readStateService = new ReadStateService(db, () => {});
-
+  const conversationService = new ConversationService(
+    db,
+    conversationProvider,
+    (event) => {
+      // Send lightweight notification — client will sync the actual data
+      if (event.type === 'new_message') {
+        const data = event.data as {
+          conversationNumber: string;
+          providerNumber: string;
+          message: { id: string; direction: string };
+        };
+        wsBroadcaster.broadcast({
+          type: 'new_message',
+          data: {
+            conversationNumber: data.conversationNumber,
+            providerNumber: data.providerNumber,
+            messageId: data.message.id,
+            direction: data.message.direction,
+          },
+        });
+      } else {
+        wsBroadcaster.broadcast({ type: event.type, data: event.data as unknown as Record<string, unknown> });
+      }
+    },
+    // Route each outbound SMS to the provider that actually owns the `from`
+    // number (e.g. the modem-gateway), instead of always using the first
+    // active provider. Throws ProviderUnavailableError if that provider is
+    // disabled/unavailable, so the message is correctly marked FAILED rather
+    // than silently dispatched to the wrong provider.
+    async (from: string) => {
+      const entry = await numberManagementService.requireProviderForNumber(from);
+      return entry.instance;
+    },
+  );
   // --- NotificationService ---
   // Manages the full notification lifecycle: creation, state mutations, delivery, and cross-device sync.
   const notificationService = new NotificationService({
@@ -258,6 +289,13 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
     deviceRegistryManager,
     logger: server.log,
   });
+
+  // --- ReadStateService ---
+  // Tracks thread/missed-call read state. The notification hook keeps the
+  // notifications table in sync so marking a thread read (or missed calls
+  // viewed) also clears the corresponding pending notifications, preventing
+  // already-read items from being re-delivered on reconnect / cold start.
+  const readStateService = new ReadStateService(db, () => {}, notificationService);
 
   // --- CallOrchestrator ---
   // Coordinates the full call lifecycle between clients, MediaBridge, and providers.
@@ -275,6 +313,15 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
   });
 
   // Wire MediaBridge session events to CallOrchestrator
+  // On MediaBridge event-socket reconnect, reconcile active calls: any
+  // provider_disconnected events emitted while we were disconnected are lost,
+  // so ask the MediaBridge which sessions are still alive and end orphans.
+  mediaBridgeEventListener.onReconnect(() => {
+    callOrchestrator.reconcileActiveSessions().catch((err) => {
+      server.log.error(err, 'Failed to reconcile active sessions after MediaBridge reconnect');
+    });
+  });
+
   mediaBridgeEventListener.onSessionEvent((event) => {
     callOrchestrator.handleMediaEvent(event);
   });
@@ -324,6 +371,15 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
         conversationService
           .receiveMessage(event.messageId, event.from, event.to, event.body, new Date(event.timestamp))
           .then(async (msg) => {
+            // Acknowledge durable receipt back to the provider. This fires for
+            // both a newly-persisted message (msg truthy) and a duplicate
+            // (msg === null) — in both cases the message is durably accounted
+            // for, so it is safe for the gateway to drop it from its buffer.
+            // The ack is sent only AFTER receiveMessage resolves, which is what
+            // guarantees the gateway never releases a message the server has
+            // not yet persisted.
+            ackIncomingSmsIfSupported(providerInstance, event.messageId);
+
             if (msg) {
               server.log.info(`Received inbound SMS from ${event.from} → ${event.to}`);
 
@@ -349,6 +405,8 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
             }
           })
           .catch((err) => {
+            // Persistence failed — do NOT ack. The gateway keeps the message
+            // buffered and re-delivers it later.
             server.log.error(err, 'Failed to process incoming SMS event');
           });
       } else if (event.type === 'call_state_changed') {
@@ -438,7 +496,7 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
                     wakeSignalPublisher.sendToAllDevices(devices, {
                       id: updatedEntry.id,
                       priority: 'normal',
-                    }).catch((err) => {
+                    }, 'missed_call').catch((err) => {
                       server.log.error(err, 'Failed to send missed_call wake signals');
                     });
                   }
