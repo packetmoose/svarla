@@ -313,6 +313,15 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
   });
 
   // Wire MediaBridge session events to CallOrchestrator
+  // On MediaBridge event-socket reconnect, reconcile active calls: any
+  // provider_disconnected events emitted while we were disconnected are lost,
+  // so ask the MediaBridge which sessions are still alive and end orphans.
+  mediaBridgeEventListener.onReconnect(() => {
+    callOrchestrator.reconcileActiveSessions().catch((err) => {
+      server.log.error(err, 'Failed to reconcile active sessions after MediaBridge reconnect');
+    });
+  });
+
   mediaBridgeEventListener.onSessionEvent((event) => {
     callOrchestrator.handleMediaEvent(event);
   });

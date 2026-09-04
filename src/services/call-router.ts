@@ -32,7 +32,7 @@ export interface PendingIncomingCall {
 export type CallRouterEvent =
   | { type: 'incoming_call'; callId: string; from: string; providerNumber: string }
   | { type: 'call_answered'; callId: string; deviceId: string; providerNumber: string }
-  | { type: 'call_cancelled'; callId: string; reason: 'answered_elsewhere' | 'declined' | 'timeout' | 'caller_disconnected' }
+  | { type: 'call_cancelled'; callId: string; reason: 'answered_elsewhere' | 'declined' | 'timeout' | 'caller_disconnect' }
   | { type: 'stop_ringing'; callId: string }
   | { type: 'active_call_started'; providerNumber: string; info: ActiveCallInfo }
   | { type: 'active_call_ended'; providerNumber: string };
@@ -271,7 +271,9 @@ export class CallRouter {
     this.broadcast({
       type: 'call_cancelled',
       callId,
-      reason: 'caller_disconnected',
+      // Canonical spelling per the provider-generic-voice spec and the value the
+      // Android client maps explicitly (VoiceCallManager.handleCallCancelled).
+      reason: 'caller_disconnect',
     });
 
     // Record as missed call

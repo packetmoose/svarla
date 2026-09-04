@@ -81,6 +81,12 @@ interface ActiveCall {
   ended: boolean;
   /** MediaBridge audio WebSocket URL for providers using WebSocket audio (modem-gateway) */
   audioWsUrl: string | null;
+  /**
+   * Backstop timer that force-ends the call if no explicit hangup/teardown signal
+   * ever arrives. Armed with a short unanswered timeout at creation and re-armed
+   * with a long max-duration cap once the call is answered. Cleared in endCall.
+   */
+  watchdogTimer: ReturnType<typeof setTimeout> | null;
 }
 
 /**
@@ -138,6 +144,21 @@ export class ProviderNotAvailableError extends CallOrchestratorError {
 }
 
 // ─── CallOrchestrator ────────────────────────────────────────────────────────
+
+/**
+ * Backstop timeout for a call that is created but never answered and never
+ * explicitly torn down (e.g. every provider/media hangup signal was missed).
+ * Comfortably longer than the client-side inbound ring timeout (45s).
+ */
+const UNANSWERED_WATCHDOG_MS = 90_000;
+
+/**
+ * Hard cap on the duration of an answered call. This is a safety net against a
+ * call that is never explicitly ended (missed provider webhook AND missed media
+ * disconnect), which would otherwise leak an ActiveCall and keep the client
+ * "in call" forever. Set high enough not to interfere with legitimate long calls.
+ */
+const MAX_CALL_DURATION_MS = 4 * 60 * 60 * 1000; // 4 hours
 
 export class CallOrchestrator {
   private readonly mediaBridge: MediaBridgeClient;
@@ -285,11 +306,13 @@ export class CallOrchestrator {
       answeredAt: null,
       ended: false,
       audioWsUrl: sessionInfo.audioWsUrl,
+      watchdogTimer: null,
     };
 
     this.activeCalls.set(callId, activeCall);
     this.sessionToCall.set(sessionId, callId);
     this.providerCallToInternal.set(makeCallResult.callId, callId);
+    this.armWatchdog(activeCall, UNANSWERED_WATCHDOG_MS);
 
     // 6. Record in call history
     this.callHistory
@@ -393,10 +416,12 @@ export class CallOrchestrator {
       answeredAt: null,
       ended: false,
       audioWsUrl: sessionInfo.audioWsUrl,
+      watchdogTimer: null,
     };
 
     this.activeCalls.set(callId, activeCall);
     this.sessionToCall.set(sessionId, callId);
+    this.armWatchdog(activeCall, UNANSWERED_WATCHDOG_MS);
 
     // 3. Record incoming call in history
     this.callHistory
@@ -484,6 +509,8 @@ export class CallOrchestrator {
     activeCall.answered = true;
     activeCall.answeredByDevice = deviceId;
     activeCall.answeredAt = new Date();
+    // Re-arm the watchdog to the long max-duration cap now that the call is live.
+    this.armWatchdog(activeCall, MAX_CALL_DURATION_MS);
 
     // Tell the provider to answer the inbound call.
     // Providers that manage their own call state (e.g. modem-gateway) will
@@ -668,6 +695,80 @@ export class CallOrchestrator {
     }
   }
 
+  // ─── Watchdog ──────────────────────────────────────────────────────────────
+
+  /**
+   * (Re)arm the backstop watchdog timer for a call.
+   *
+   * Cancels any existing timer, then schedules a force-end after [timeoutMs]. This
+   * is a last-resort guarantee that a call cannot leak forever if every explicit
+   * teardown signal is missed (missed provider webhook AND missed MediaBridge
+   * disconnect). The timer is short while ringing/dialing and long once answered.
+   *
+   * Note: `unref()` so the timer never keeps the Node process alive on shutdown.
+   */
+  private armWatchdog(activeCall: ActiveCall, timeoutMs: number): void {
+    if (activeCall.watchdogTimer) {
+      clearTimeout(activeCall.watchdogTimer);
+    }
+    const timer = setTimeout(() => {
+      // Only fires if the call is still active and hasn't been ended by any other path.
+      if (activeCall.ended || !this.activeCalls.has(activeCall.callId)) {
+        return;
+      }
+      this.logger.warn(
+        { callId: activeCall.callId, timeoutMs, answered: activeCall.answered } as Record<string, unknown>,
+        'Call watchdog fired — no teardown signal received, force-ending call',
+      );
+      void this.endCall(activeCall.callId, 'watchdog_timeout');
+    }, timeoutMs);
+    // Do not let the watchdog keep the event loop alive.
+    if (typeof timer.unref === 'function') {
+      timer.unref();
+    }
+    activeCall.watchdogTimer = timer;
+  }
+
+  /**
+   * Reconcile tracked active calls against the MediaBridge's actual session state.
+   *
+   * Intended to run after the MediaBridge event WebSocket reconnects: any
+   * `provider_disconnected` events emitted while the event socket was down are
+   * lost and never redelivered, which would otherwise leave a call active forever.
+   * For each answered call, we query the MediaBridge session; if the session no
+   * longer exists (request throws) or its provider leg is no longer connected,
+   * the caller has hung up and we end the call.
+   *
+   * Only answered calls are reconciled — an un-answered inbound/outbound call may
+   * still be mid-setup (provider leg legitimately pending), and the unanswered
+   * watchdog covers that case.
+   */
+  async reconcileActiveSessions(): Promise<void> {
+    const calls = Array.from(this.activeCalls.values());
+    for (const call of calls) {
+      if (call.ended || !call.answered) {
+        continue;
+      }
+      try {
+        const status = await this.mediaBridge.getSessionStatus(call.sessionId);
+        if (!status.providerConnected) {
+          this.logger.info(
+            { callId: call.callId, sessionId: call.sessionId } as Record<string, unknown>,
+            'Reconcile: MediaBridge provider leg gone — ending call',
+          );
+          await this.endCall(call.callId, 'reconcile_provider_gone');
+        }
+      } catch (err) {
+        // A missing session (non-2xx) means the call is gone on the media side.
+        this.logger.info(
+          { err, callId: call.callId, sessionId: call.sessionId } as Record<string, unknown>,
+          'Reconcile: MediaBridge session missing — ending call',
+        );
+        await this.endCall(call.callId, 'reconcile_session_missing');
+      }
+    }
+  }
+
   // ─── End Call ────────────────────────────────────────────────────────────
 
   /**
@@ -697,6 +798,12 @@ export class CallOrchestrator {
       return;
     }
     activeCall.ended = true;
+
+    // Clear the backstop watchdog — the call is ending through the normal path.
+    if (activeCall.watchdogTimer) {
+      clearTimeout(activeCall.watchdogTimer);
+      activeCall.watchdogTimer = null;
+    }
 
     // Log the call stack to identify what triggered endCall
     this.logger.info(
@@ -869,6 +976,8 @@ export class CallOrchestrator {
         if (!activeCall.answered && activeCall.direction === 'outbound') {
           activeCall.answered = true;
           activeCall.answeredAt = new Date();
+          // Re-arm the watchdog to the long max-duration cap now that audio is live.
+          this.armWatchdog(activeCall, MAX_CALL_DURATION_MS);
         }
         this.wsBroadcaster.broadcast({
           type: 'call_event',
@@ -1025,6 +1134,13 @@ export class CallOrchestrator {
    * Clean up resources. Call on server shutdown.
    */
   dispose(): void {
+    // Cancel any outstanding watchdog timers so they don't fire after shutdown.
+    for (const call of this.activeCalls.values()) {
+      if (call.watchdogTimer) {
+        clearTimeout(call.watchdogTimer);
+        call.watchdogTimer = null;
+      }
+    }
     this.activeCalls.clear();
     this.sessionToCall.clear();
     this.providerCallToInternal.clear();

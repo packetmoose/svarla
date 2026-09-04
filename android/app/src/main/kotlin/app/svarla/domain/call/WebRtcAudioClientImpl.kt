@@ -51,6 +51,9 @@ class WebRtcAudioClientImpl @Inject constructor(
     private val _connectionState = MutableStateFlow<WebRtcState>(WebRtcState.Disconnected)
     override val connectionState: StateFlow<WebRtcState> = _connectionState.asStateFlow()
 
+    private val _mediaReceiving = MutableStateFlow(true)
+    override val mediaReceiving: StateFlow<Boolean> = _mediaReceiving.asStateFlow()
+
     private var peerConnectionFactory: PeerConnectionFactory? = null
     private var peerConnection: PeerConnection? = null
     private var localAudioTrack: AudioTrack? = null
@@ -167,6 +170,9 @@ class WebRtcAudioClientImpl @Inject constructor(
         peerConnection = null
 
         _connectionState.value = WebRtcState.Disconnected
+        // Reset for the next call so the media-inactivity watchdog doesn't see a
+        // stale "not receiving" carried over from the previous session.
+        _mediaReceiving.value = true
     }
 
     // ========================================================================
@@ -422,6 +428,7 @@ class WebRtcAudioClientImpl @Inject constructor(
 
         override fun onIceConnectionReceivingChange(receiving: Boolean) {
             Log.d(TAG, "ICE receiving: $receiving")
+            _mediaReceiving.value = receiving
         }
 
         override fun onIceGatheringChange(state: PeerConnection.IceGatheringState?) {
