@@ -394,14 +394,23 @@ export class VonageTelephonyProvider implements TelephonyProvider {
     to: string;
     direction?: string;
     sipUri?: string;
+    /**
+     * Callback URL for Vonage to POST call-leg lifecycle events (ringing,
+     * answered, completed). Passing this for the inbound SIP-connect leg is
+     * what lets the server learn the caller hung up: Vonage delivers a
+     * `completed` event here, which the /event webhook turns into endCall.
+     * Without it, an inbound call whose SIP BYE never reaches MediaBridge
+     * would never be torn down.
+     */
+    eventUrl?: string;
   }): NccoAction[] {
     // If sipUri is provided, always connect to MediaBridge via SIP
     if (params.sipUri) {
-      return buildSipConnectNcco(params.sipUri, params.from);
+      return buildSipConnectNcco(params.sipUri, params.from, params.eventUrl);
     }
 
     if (params.direction === 'outbound') {
-      return buildOutboundCallNcco(params.to, params.from);
+      return buildOutboundCallNcco(params.to, params.from, params.eventUrl);
     }
     // Inbound call: use SIP connect to MediaBridge (sipUri must be provided by CallOrchestrator)
     // If no sipUri is available, return a hold tone as a safe fallback

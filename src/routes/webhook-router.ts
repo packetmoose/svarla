@@ -407,7 +407,15 @@ export function registerWebhookRouter(
         try {
           const normalizedFrom = from.startsWith('+') ? from : (isDialableNumber(from) ? `+${from}` : from);
           const result = await callOrchestrator.handleInbound(providerId, providerCallId, normalizedFrom, normalizedTo);
-          ncco = provider.generateAnswerNcco({ from, to, sipUri: result.sipUri });
+          // Attach an event URL so Vonage POSTs the inbound SIP-connect leg's
+          // lifecycle events (including `completed` on caller hangup) to our
+          // /event webhook. This is the control-plane teardown signal: Vonage
+          // does not reliably send a SIP BYE to MediaBridge for inbound calls,
+          // so without this the call can never be torn down.
+          const eventUrl = webhookBaseUrl
+            ? `${webhookBaseUrl}/webhooks/${providerId}/event`
+            : undefined;
+          ncco = provider.generateAnswerNcco({ from, to, sipUri: result.sipUri, eventUrl });
         } catch (err) {
           server.log.error(err, `Failed to handle inbound call via CallOrchestrator for provider ${providerId}`);
           // Fallback: silent hold (caller will hear nothing, but call won't crash Vonage)
@@ -483,7 +491,13 @@ export function registerWebhookRouter(
         try {
           const normalizedFrom = from.startsWith('+') ? from : (isDialableNumber(from) ? `+${from}` : from);
           const result = await callOrchestrator.handleInbound(providerId, providerCallId, normalizedFrom, normalizedTo);
-          ncco = provider.generateAnswerNcco({ from, to, sipUri: result.sipUri });
+          // Attach an event URL so Vonage POSTs the inbound SIP-connect leg's
+          // lifecycle events (including `completed` on caller hangup) to our
+          // /event webhook — the control-plane teardown signal (see GET branch).
+          const eventUrl = webhookBaseUrl
+            ? `${webhookBaseUrl}/webhooks/${providerId}/event`
+            : undefined;
+          ncco = provider.generateAnswerNcco({ from, to, sipUri: result.sipUri, eventUrl });
         } catch (err) {
           server.log.error(err, `Failed to handle inbound call via CallOrchestrator for provider ${providerId}, uuid=${providerCallId}`);
           // Fallback: silent hold
@@ -578,6 +592,29 @@ export function registerWebhookRouter(
       // causes the Android app to incorrectly terminate calls (the Vonage UUID doesn't
       // match the internal callId the app is tracking).
       const shouldSkipProcessEvent = !!callOrchestrator;
+
+      // Even though we suppress raw provider events from being broadcast to
+      // clients, a terminal event (the caller hanging up) is the one signal we
+      // MUST act on: Vonage does not reliably deliver a SIP BYE to MediaBridge
+      // for inbound calls, so this /event webhook is the primary teardown path.
+      // Resolve the Vonage UUID to our internal callId and end the call through
+      // the orchestrator — this broadcasts the correct internal callId to
+      // clients (no raw-UUID leak) and runs the normal cleanup.
+      if (callOrchestrator && body.uuid) {
+        const terminalStatuses = ['completed', 'failed', 'busy', 'unanswered', 'rejected', 'cancelled', 'timeout'];
+        if (body.status && terminalStatuses.includes(body.status)) {
+          const internalCallId = callOrchestrator.getCallIdByProviderCallId(body.uuid);
+          if (internalCallId) {
+            server.log.info(
+              { providerId: (request.params as { providerId: string }).providerId, uuid: body.uuid, status: body.status, internalCallId },
+              'Vonage terminal call event — ending call via orchestrator',
+            );
+            callOrchestrator.endCall(internalCallId, 'provider_call_state_changed').catch((err) => {
+              server.log.error(err, `Failed to end call ${internalCallId} from Vonage ${body.status} event`);
+            });
+          }
+        }
+      }
 
       if (!shouldSkipProcessEvent) {
         provider.processCallEvent({

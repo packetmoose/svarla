@@ -43,6 +43,14 @@ type SIPConfig struct {
 	// AllowedIPs is the list of provider IPs or CIDRs allowed to send SIP.
 	// If empty, all IPs are allowed (open mode).
 	AllowedIPs []string `yaml:"allowedIps"`
+
+	// RTPTimeoutSeconds is the provider-leg RTP-inactivity timeout. If no RTP
+	// is received from the provider for this many seconds during an active
+	// media session, MediaBridge treats the provider leg as disconnected and
+	// tears the call down. This is the media-plane backup for a dropped
+	// provider leg when no SIP BYE is received (e.g. Vonage inbound caller
+	// hangup). Default 30. Set to a negative value to disable.
+	RTPTimeoutSeconds int `yaml:"rtpTimeoutSeconds"`
 }
 
 // TLSConfig holds TLS-specific configuration for SIPS.
@@ -82,8 +90,9 @@ func Defaults() Config {
 			PublicIP: "127.0.0.1",
 		},
 		SIP: SIPConfig{
-			Port:      5060,
-			MediaPort: 5062,
+			Port:              5060,
+			MediaPort:         5062,
+			RTPTimeoutSeconds: 30,
 			TLS: TLSConfig{
 				Port:     5061,
 				CertPath: "/etc/mediabridge/tls/cert.pem",
@@ -125,6 +134,11 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.SIP.TLS.KeyPath == "" {
 		cfg.SIP.TLS.KeyPath = defaults.SIP.TLS.KeyPath
+	}
+	// A zero RTP timeout means "unset" in the YAML — fall back to the default.
+	// A negative value is an explicit "disable" and is preserved.
+	if cfg.SIP.RTPTimeoutSeconds == 0 {
+		cfg.SIP.RTPTimeoutSeconds = defaults.SIP.RTPTimeoutSeconds
 	}
 
 	// Environment variable overrides.
