@@ -23,10 +23,23 @@ func main() {
 	showVersion := flag.Bool("version", false, "Print version information and exit")
 	generateConfig := flag.Bool("generate-config", false, "Generate a default configuration file and exit")
 	configPath := flag.String("config", "./modem-gateway.yaml", "Path to configuration file")
+	var atCmds atCommandList
+	flag.Var(&atCmds, "at", "Send an AT command to the modem, print the response, and exit. "+
+		"Repeatable to run several in sequence, e.g. -at 'AT+CPCMREG?' -at 'AT+CPCMREG=0'. "+
+		"Stop the modem-gateway service first so the port is free.")
+	atPort := flag.String("at-port", "", "AT serial port for -at (default: modem.serialPort from config)")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Printf("modem-gateway %s (commit: %s, built: %s)\n", version, commit, buildDate)
+		os.Exit(0)
+	}
+
+	if len(atCmds) > 0 {
+		if err := runATCommands(*atPort, *configPath, atCmds); err != nil {
+			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+			os.Exit(1)
+		}
 		os.Exit(0)
 	}
 
