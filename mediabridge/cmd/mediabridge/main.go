@@ -144,6 +144,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	// stopMediaSession is forward-declared here so the media-session start path
+	// (tryStartMediaSession) can reference it from the RTP-inactivity watchdog
+	// callback. It is assigned below.
+	var stopMediaSession func(sessionID string)
+
 	// tryStartMediaSession attempts to start the media session when both legs are ready.
 	// Only handles SIP-based provider legs. WebSocket provider legs use tryStartWsMediaSession.
 	tryStartMediaSession := func(sessionID string) {
@@ -196,16 +201,35 @@ func main() {
 			return
 		}
 
+		// Provider-leg RTP-inactivity timeout (media-plane backup teardown).
+		// When >0, the media session tears the call down if provider RTP goes
+		// silent — the safety net for a dropped provider leg with no SIP BYE
+		// (e.g. Vonage inbound caller hangup). A negative config disables it.
+		var rtpTimeout time.Duration
+		if cfg.SIP.RTPTimeoutSeconds > 0 {
+			rtpTimeout = time.Duration(cfg.SIP.RTPTimeoutSeconds) * time.Second
+		}
+
 		// Create and start the media session.
 		ms, err := mediasession.New(mediasession.Config{
-			SessionID:      sessionID,
-			SIPCodec:       providerRTP.Codec,
-			SIPClockRate:   providerRTP.CodecClockRate,
-			SIPPayloadType: providerRTP.PayloadType,
-			RemoteIP:       providerRTP.RemoteIP,
-			RemotePort:     providerRTP.RemotePort,
-			RTPListener:    rtpListener,
-			Logger:         logger,
+			SessionID:          sessionID,
+			SIPCodec:           providerRTP.Codec,
+			SIPClockRate:       providerRTP.CodecClockRate,
+			SIPPayloadType:     providerRTP.PayloadType,
+			RemoteIP:           providerRTP.RemoteIP,
+			RemotePort:         providerRTP.RemotePort,
+			RTPListener:        rtpListener,
+			Logger:             logger,
+			ProviderRTPTimeout: rtpTimeout,
+			OnProviderTimeout: func() {
+				// Mirror the SIP-BYE teardown path: stop the local media session
+				// and emit provider_disconnected so the server ends the call.
+				logger.Warn("provider RTP inactivity — tearing down call",
+					slog.String("sessionId", sessionID),
+				)
+				stopMediaSession(sessionID)
+				eventServer.EmitSessionEvent(sessionID, "provider_disconnected", "rtp_timeout")
+			},
 		})
 		if err != nil {
 			logger.Error("failed to create media session",
@@ -280,7 +304,7 @@ func main() {
 	}
 
 	// stopMediaSession tears down the media session for a given session.
-	stopMediaSession := func(sessionID string) {
+	stopMediaSession = func(sessionID string) {
 		// Stop ringback tone if still playing.
 		ringbackSenders.stopRingback(sessionID)
 

@@ -8,7 +8,7 @@ data class ProviderNumber(
     @PrimaryKey
     val number: String,
     val label: String? = null,
-    val color: String = "#6750A4",
+    val color: String? = null,
     val isActive: Boolean = true,
     val lastUsedAt: Long? = null,
     val blockInboundCalls: Boolean = false,

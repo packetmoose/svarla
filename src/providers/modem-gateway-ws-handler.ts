@@ -35,6 +35,7 @@ export type OutboundMessageType =
   | 'answer_call'
   | 'end_call'
   | 'send_sms'
+  | 'sms_ack'
   | 'send_dtmf'
   | 'ussd_request'
   | 'ussd_input'

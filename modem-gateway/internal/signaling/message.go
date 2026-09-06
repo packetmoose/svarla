@@ -26,6 +26,10 @@ const (
 	TypeSMSResult   = "sms_result"
 	TypeBufferedSMS  = "buffered_sms"
 	TypeDeliveryReport = "delivery_report"
+	// TypeSMSAck is sent by the server to acknowledge durable receipt of an
+	// incoming_sms/buffered_sms, keyed by messageId. The gateway removes the
+	// message from its persistent buffer only upon receiving this ack.
+	TypeSMSAck = "sms_ack"
 
 	// DTMF
 	TypeSendDTMF     = "send_dtmf"

@@ -11,6 +11,9 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import app.svarla.data.remote.AuthManager
@@ -24,6 +27,7 @@ import app.svarla.domain.notifications.NotificationHandler
 import app.svarla.domain.notifications.PushEndpointManager
 import app.svarla.domain.version.VersionCheckService
 import app.svarla.ui.navigation.AppNavigation
+import app.svarla.ui.navigation.Screen
 import app.svarla.ui.theme.SvarlaTheme
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
@@ -65,6 +69,10 @@ class MainActivity : ComponentActivity() {
         ActivityResultContracts.RequestPermission()
     ) { /* granted or not — we proceed either way */ }
 
+    // Number to prefill on the dial pad, set from an external DIAL/VIEW (tel:) or
+    // PROCESS_TEXT intent. Backed by Compose state so onNewIntent can update it.
+    private var dialPrefill by mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
@@ -75,6 +83,7 @@ class MainActivity : ComponentActivity() {
 
         // Handle notification tap intent (e.g., open conversation for SMS notification)
         handleNotificationIntent(intent)
+        dialPrefill = extractDialNumber(intent)
 
         setContent {
             SvarlaTheme {
@@ -91,7 +100,9 @@ class MainActivity : ComponentActivity() {
                         pushEndpointManager = pushEndpointManager,
                         versionCheckService = versionCheckService,
                         autoStartHelper = autoStartHelper,
-                        initialRoute = getInitialRouteFromIntent(intent)
+                        initialRoute = getInitialRouteFromIntent(intent),
+                        dialNumber = dialPrefill,
+                        onDialNumberConsumed = { dialPrefill = null }
                     )
                 }
             }
@@ -101,6 +112,39 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         handleNotificationIntent(intent)
+        val number = extractDialNumber(intent)
+        if (number != null) {
+            dialPrefill = number
+        }
+    }
+
+    /**
+     * Extract a phone number to dial from an external intent:
+     *  - ACTION_DIAL / ACTION_VIEW with a `tel:` URI (the "Call" chooser).
+     *  - ACTION_PROCESS_TEXT with selected text (the text-selection popup).
+     * Returns null if the intent carries no usable number.
+     */
+    private fun extractDialNumber(intent: Intent?): String? {
+        intent ?: return null
+        val raw: String? = when (intent.action) {
+            Intent.ACTION_DIAL, Intent.ACTION_VIEW -> {
+                val data = intent.data
+                if (data?.scheme == "tel") {
+                    // tel: numbers may be URL-encoded (e.g. %2B for '+').
+                    android.net.Uri.decode(data.schemeSpecificPart)
+                } else {
+                    null
+                }
+            }
+            Intent.ACTION_PROCESS_TEXT -> {
+                intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT)?.toString()
+            }
+            else -> null
+        }
+        val sanitized = raw
+            ?.filter { it.isDigit() || it == '+' || it == '*' || it == '#' }
+            .orEmpty()
+        return sanitized.ifEmpty { null }
     }
 
     private fun handleNotificationIntent(intent: Intent?) {
@@ -166,7 +210,9 @@ class MainActivity : ComponentActivity() {
                 val phoneNumber = intent.getStringExtra(NotificationHandler.EXTRA_PHONE_NUMBER)
                 val providerNumber = intent.getStringExtra(NotificationHandler.EXTRA_PROVIDER_NUMBER)
                 if (phoneNumber != null && providerNumber != null) {
-                    "conversation_detail/${java.net.URLEncoder.encode(providerNumber, "UTF-8")}/${java.net.URLEncoder.encode(phoneNumber, "UTF-8")}"
+                    // Use createRoute so an empty provider number is mapped to the
+                    // NO_PROVIDER sentinel (empty path segments can't be routed).
+                    Screen.ConversationDetail.createRoute(providerNumber, phoneNumber)
                 } else null
             }
             // Incoming call: no route needed, HomeScreen shows IncomingCallScreen when RINGING

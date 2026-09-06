@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,6 +25,16 @@ const (
 	captureBufferSize = 5
 	// playbackBufferSize is how many frames the playback channel can buffer.
 	playbackBufferSize = 5
+
+	// teardownMaxAttempts is how many times Stop() tries AT+CPCMREG=0 before
+	// giving up and recording a teardown failure.
+	teardownMaxAttempts = 3
+	// teardownRetryDelay is the pause between AT+CPCMREG=0 attempts and before
+	// the verifying AT+CPCMREG? read, giving the modem time to settle.
+	teardownRetryDelay = 500 * time.Millisecond
+	// defaultSoftResetThreshold is the number of consecutive failed/unverified
+	// teardowns after which recovery escalates to a soft reset (if enabled).
+	defaultSoftResetThreshold = 3
 )
 
 // Errors returned by the audio pipeline.
@@ -55,6 +66,37 @@ type Options struct {
 	PCMPortPath string
 }
 
+// RecoveryOptions configures how the pipeline recovers the modem's PCM audio
+// subsystem when teardown (AT+CPCMREG=0) repeatedly fails.
+//
+// Background: on the SIM7600, if PCM streaming is not cleanly disabled after a
+// call, the modem's audio state can accumulate over many calls until the
+// network uplink silently stops working (the far end hears nothing while local
+// capture still works). Historically only a physical power-cycle cleared it.
+// These options let the gateway detect the failure and optionally self-heal.
+type RecoveryOptions struct {
+	// SoftResetEnabled turns on the last-resort soft reset (AT+CFUN=1,1) when
+	// consecutive teardown failures reach SoftResetThreshold. Default false:
+	// the failure is detected and logged, but no automatic reset is performed.
+	//
+	// A soft reset briefly deregisters the modem from the network (~30-60s), so
+	// it is opt-in and only ever issued while the modem is idle (no active call).
+	SoftResetEnabled bool
+
+	// SoftResetThreshold is the number of consecutive failed/unverified PCM
+	// teardowns that triggers a soft reset. Zero uses defaultSoftResetThreshold.
+	SoftResetThreshold int
+}
+
+// softResetThreshold returns the effective threshold, applying the default
+// when unset.
+func (r RecoveryOptions) softResetThreshold() int {
+	if r.SoftResetThreshold <= 0 {
+		return defaultSoftResetThreshold
+	}
+	return r.SoftResetThreshold
+}
+
 // Compile-time interface check.
 var _ AudioPipeline = (*Pipeline)(nil)
 
@@ -73,6 +115,13 @@ type Pipeline struct {
 	running bool
 	stopCh  chan struct{}
 	wg      sync.WaitGroup
+
+	// recovery configures escalating recovery when PCM teardown keeps failing.
+	recovery RecoveryOptions
+	// teardownFailures counts consecutive Stop() calls that could not confirm
+	// PCM streaming was disabled. Reset to 0 after a verified-clean teardown or
+	// a successful soft reset. Used to decide when to escalate recovery.
+	teardownFailures atomic.Int64
 
 	// Debug counters for diagnosing audio flow.
 	captureBytes  atomic.Int64
@@ -108,6 +157,19 @@ func NewReopenable(opener func() (modem.SerialPort, error), m *modem.Modem, samp
 		capture:    make(chan []byte, captureBufferSize),
 		playback:   make(chan []byte, playbackBufferSize),
 	}
+}
+
+// SetRecoveryOptions configures escalating recovery of the modem's PCM audio
+// subsystem when teardown repeatedly fails. Call once after construction,
+// before Start(). If never called, recovery detection/logging is still active
+// but the soft-reset escalation is disabled (SoftResetEnabled defaults false).
+func (p *Pipeline) SetRecoveryOptions(opts RecoveryOptions) {
+	if opts.SoftResetThreshold <= 0 {
+		opts.SoftResetThreshold = defaultSoftResetThreshold
+	}
+	p.mu.Lock()
+	p.recovery = opts
+	p.mu.Unlock()
 }
 
 // NegotiateSampleRate attempts to set 16kHz sample rate on the modem via
@@ -160,6 +222,17 @@ func (p *Pipeline) Start() error {
 		}
 		p.pcmPort = port
 	}
+
+	// Clean slate: explicitly disable any lingering PCM streaming from a
+	// previous call before (re)enabling it. If an earlier call's teardown did
+	// not fully disable PCM streaming, starting a new call on top of that stale
+	// state is a path to the wedged-audio failure. Best-effort — an idle modem
+	// may return ERROR here, which is harmless. A brief settle lets the modem
+	// audio subsystem quiesce before we re-enable.
+	if _, err := p.modemCtrl.SendCommand("AT+CPCMREG=0", 5*time.Second); err != nil {
+		log.Printf("[PCM start] clean-slate AT+CPCMREG=0 returned: %v (ignored)", err)
+	}
+	time.Sleep(teardownRetryDelay)
 
 	// Set PCM format right before enabling streaming, in case a previous
 	// AT+CPCMREG=0 or modem reset changed it.
@@ -230,11 +303,118 @@ func (p *Pipeline) Stop() error {
 	drainChannel(p.capture)
 	drainChannel(p.playback)
 
-	// Disable PCM streaming on the modem. Best-effort; ignore errors
-	// since the modem may already be disconnected.
-	_, _ = p.modemCtrl.SendCommand("AT+CPCMREG=0", 5*time.Second)
+	// Robustly disable PCM streaming on the modem and verify it took effect.
+	// A failed/unverified teardown here is the leading indicator of the modem's
+	// audio subsystem drifting toward the wedged state that breaks the network
+	// uplink (far end can't hear us) after many calls.
+	p.teardownPCM()
 
 	return nil
+}
+
+// teardownPCM disables PCM streaming (AT+CPCMREG=0), retrying on failure, then
+// verifies via AT+CPCMREG? that streaming is actually off. It maintains a
+// consecutive-failure counter and, when that counter crosses the configured
+// threshold, escalates recovery (soft reset if enabled). All outcomes are
+// logged so failures accumulating over days are visible in the logs.
+func (p *Pipeline) teardownPCM() {
+	var lastErr error
+	disabled := false
+	for attempt := 1; attempt <= teardownMaxAttempts; attempt++ {
+		_, err := p.modemCtrl.SendCommand("AT+CPCMREG=0", 5*time.Second)
+		if err == nil {
+			disabled = true
+			break
+		}
+		lastErr = err
+		log.Printf("[PCM teardown] AT+CPCMREG=0 attempt %d/%d failed: %v",
+			attempt, teardownMaxAttempts, err)
+		if attempt < teardownMaxAttempts {
+			time.Sleep(teardownRetryDelay)
+		}
+	}
+
+	// Verify the modem actually reports PCM streaming disabled. Even if the
+	// command returned OK, confirm the state — this catches the modem accepting
+	// the command but not applying it.
+	time.Sleep(teardownRetryDelay)
+	verified, verr := p.pcmStreamingDisabled()
+
+	switch {
+	case verified:
+		// Clean teardown confirmed. Reset the failure streak.
+		if prev := p.teardownFailures.Swap(0); prev > 0 {
+			log.Printf("[PCM teardown] PCM streaming confirmed disabled — recovery streak reset (was %d)", prev)
+		}
+		return
+	case verr != nil:
+		log.Printf("[PCM teardown] WARNING: could not verify PCM state (AT+CPCMREG? failed: %v); "+
+			"last disable error: %v", verr, lastErr)
+	default:
+		log.Printf("[PCM teardown] WARNING: PCM streaming still enabled after %d disable attempt(s); "+
+			"last disable error: %v", teardownMaxAttempts, lastErr)
+	}
+	_ = disabled
+
+	// Teardown could not be confirmed clean. Record the failure and consider
+	// escalating recovery.
+	failures := p.teardownFailures.Add(1)
+	log.Printf("[PCM teardown] WARNING: consecutive unverified PCM teardowns: %d "+
+		"(soft reset threshold: %d, enabled: %t)",
+		failures, p.recovery.softResetThreshold(), p.recovery.SoftResetEnabled)
+
+	p.maybeRecover(failures)
+}
+
+// pcmStreamingDisabled queries AT+CPCMREG? and reports whether PCM streaming is
+// off (state 0). Returns (false, err) if the query itself failed.
+func (p *Pipeline) pcmStreamingDisabled() (bool, error) {
+	resp, err := p.modemCtrl.SendCommand("AT+CPCMREG?", 5*time.Second)
+	if err != nil {
+		return false, err
+	}
+	// Response contains a line like "+CPCMREG: 0" (0 = disabled, 1 = enabled).
+	// Treat an explicit ": 0" as disabled; anything else (including a "1") as
+	// still enabled.
+	return strings.Contains(resp, "+CPCMREG: 0") || strings.Contains(resp, "+CPCMREG:0"), nil
+}
+
+// maybeRecover escalates recovery of the modem's audio subsystem when
+// consecutive teardown failures reach the configured threshold.
+//
+// The soft reset (AT+CFUN=1,1) is a last resort: it clears accumulated modem
+// state that a plain AT+CPCMREG=0 can no longer fix, without a physical
+// power-cycle. It is only issued when SoftResetEnabled is true. It is safe to
+// call here because Stop() runs at end-of-call, so the modem is idle (the call
+// has already been hung up by the caller before/around Stop()).
+func (p *Pipeline) maybeRecover(failures int64) {
+	threshold := int64(p.recovery.softResetThreshold())
+	if failures < threshold {
+		return
+	}
+
+	if !p.recovery.SoftResetEnabled {
+		log.Printf("[PCM recovery] threshold reached (%d consecutive teardown failures) but "+
+			"soft reset is disabled; modem audio may require a power-cycle. "+
+			"Enable modem.audioRecovery.softResetEnabled to allow automatic recovery.", failures)
+		return
+	}
+
+	log.Printf("[PCM recovery] %d consecutive teardown failures reached threshold %d — "+
+		"issuing soft reset (AT+CFUN=1,1) to clear modem audio state", failures, threshold)
+
+	// AT+CFUN=1,1 resets the modem; it will not return a normal OK before the
+	// reset takes the port down, so a short timeout and ignored error are
+	// expected here. The reconnect manager re-initializes the modem afterward.
+	_, err := p.modemCtrl.SendCommand("AT+CFUN=1,1", 5*time.Second)
+	if err != nil {
+		log.Printf("[PCM recovery] soft reset command returned: %v (this is expected as the modem resets)", err)
+	}
+	// Reset the streak: the modem is being reinitialized, so past failures no
+	// longer reflect current state. If the wedge persists, failures will climb
+	// again and re-trigger.
+	p.teardownFailures.Store(0)
+	log.Printf("[PCM recovery] soft reset issued; modem will re-register and re-initialize")
 }
 
 // captureLoop continuously reads PCM frames from the serial port and sends

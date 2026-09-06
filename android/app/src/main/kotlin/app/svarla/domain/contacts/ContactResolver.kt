@@ -215,6 +215,47 @@ class ContactResolver @Inject constructor(
         return results
     }
 
+    /**
+     * Resolves contact photo URIs for a batch of phone numbers.
+     * Uses PhoneLookup to find the contact photo thumbnail URI for each number.
+     *
+     * @param phoneNumbers The set of phone numbers to resolve
+     * @return Map of phoneNumber → photoUri (only contains matches with photos)
+     */
+    fun resolveContactPhotoUris(phoneNumbers: Set<String>): Map<String, String> {
+        if (!_hasPermission.value || phoneNumbers.isEmpty()) return emptyMap()
+
+        val results = mutableMapOf<String, String>()
+
+        for (number in phoneNumbers) {
+            if (number.isBlank()) continue
+            try {
+                val uri = Uri.withAppendedPath(
+                    ContactsContract.PhoneLookup.CONTENT_FILTER_URI,
+                    Uri.encode(number)
+                )
+                val projection = arrayOf(
+                    ContactsContract.PhoneLookup.PHOTO_URI
+                )
+                contentResolver.query(uri, projection, null, null, null)?.use { cursor ->
+                    if (cursor.moveToFirst()) {
+                        val photoIndex = cursor.getColumnIndex(
+                            ContactsContract.PhoneLookup.PHOTO_URI
+                        )
+                        val photoUri = cursor.getString(photoIndex)
+                        if (!photoUri.isNullOrEmpty()) {
+                            results[number] = photoUri
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error querying contact photo for: $number", e)
+            }
+        }
+
+        return results
+    }
+
     // ========================================================================
     // Permission handling
     // ========================================================================

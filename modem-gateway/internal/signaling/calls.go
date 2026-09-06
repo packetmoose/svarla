@@ -28,6 +28,13 @@ const (
 	CallDirectionInbound  = "inbound"
 )
 
+// clipWaitDelay is how long handleRING waits for the +CLIP URC (which carries
+// the caller's number) to arrive before reporting the incoming call to Svarla.
+// On the SIM7600, RING is emitted before +CLIP, so reporting immediately on
+// RING would send an empty caller number ("anonymous"). A short wait lets +CLIP
+// populate the number so we report the call exactly once, with caller ID.
+const clipWaitDelay = 400 * time.Millisecond
+
 // audioSettleDelay is how long to wait after a call is established before
 // enabling PCM streaming (AT+CPCMREG=1). The SIM7600 audio subsystem needs
 // a moment to come online; starting too early yields command errors and
@@ -123,10 +130,16 @@ type CallManager struct {
 	call       *activeCall
 	callIDSeq  atomic.Uint64
 
-	// incomingFrom tracks the caller number from +CLIP URC for use with
-	// the subsequent RING that triggers incoming_call reporting.
+	// incomingFrom tracks the caller number parsed from the +CLIP URC so the
+	// incoming_call report includes caller ID.
 	incomingFrom string
 	ringing      bool
+
+	// reportTimer defers the incoming_call report briefly after RING so the
+	// +CLIP URC (caller number) can arrive first. reportSent guards against
+	// emitting the report more than once for the same call.
+	reportTimer *time.Timer
+	reportSent  bool
 }
 
 // MessageSender is the interface for sending signaling messages to Svarla.
@@ -282,6 +295,7 @@ func (cm *CallManager) handleAnswerCall(msg Message) {
 		cm.call = nil
 		cm.ringing = false
 		cm.incomingFrom = ""
+		cm.stopReportTimerLocked()
 		cm.mu.Unlock()
 
 		reason := "answer_failed"
@@ -342,6 +356,7 @@ func (cm *CallManager) handleEndCall(msg Message) {
 	cm.call = nil
 	cm.ringing = false
 	cm.incomingFrom = ""
+	cm.stopReportTimerLocked()
 	cm.mu.Unlock()
 
 	log.Printf("[calls] ending call %s via end_call", call.callID)
@@ -468,14 +483,20 @@ func (cm *CallManager) handleRING() {
 		from:      from,
 	}
 	cm.ringing = true
-	cm.mu.Unlock()
+	cm.reportSent = false
 
-	// Send incoming_call to Svarla.
-	cm.sendIncomingCall(callID, from)
+	// Defer reporting to Svarla so the +CLIP URC (caller number), which the
+	// SIM7600 sends just after RING, can populate the number first. This lets
+	// us report the call exactly once, with caller ID, instead of first
+	// reporting an empty ("anonymous") number and then correcting it.
+	cm.reportTimer = time.AfterFunc(clipWaitDelay, func() {
+		cm.emitIncomingCall(callID)
+	})
+	cm.mu.Unlock()
 }
 
 // handleCLIP processes the +CLIP URC containing caller ID information.
-// +CLIP is typically sent after RING with the caller's number.
+// +CLIP is typically sent right after RING with the caller's number.
 func (cm *CallManager) handleCLIP(urc modem.URC) {
 	// Parse number from +CLIP data: "+15551234567",145,...
 	number := parseCLIPNumber(urc.Data)
@@ -483,16 +504,54 @@ func (cm *CallManager) handleCLIP(urc modem.URC) {
 	cm.mu.Lock()
 	cm.incomingFrom = number
 
-	// If we already created the call (from RING) but didn't have the number yet,
-	// update it and re-send incoming_call with the number.
+	// Associate the number with the current inbound call, if any.
 	if cm.call != nil && cm.call.direction == CallDirectionInbound && cm.call.from == "" && cm.ringing {
 		cm.call.from = number
+
+		// Common case: the deferred report hasn't fired yet, so the timer will
+		// pick up the number we just stored. Nothing to send here.
+		if !cm.reportSent {
+			cm.mu.Unlock()
+			return
+		}
+
+		// Rare case: +CLIP arrived after the report already went out (empty
+		// number). Re-send once so the server can fill in the caller ID.
 		callID := cm.call.callID
 		cm.mu.Unlock()
 		cm.sendIncomingCall(callID, number)
 		return
 	}
 	cm.mu.Unlock()
+}
+
+// emitIncomingCall reports the pending inbound call to Svarla exactly once.
+// Invoked by the reportTimer set in handleRING (or directly if +CLIP has
+// already populated the number). Guarded by reportSent so a late +CLIP or a
+// duplicate RING cannot cause a second report.
+func (cm *CallManager) emitIncomingCall(callID string) {
+	cm.mu.Lock()
+	// The call may have ended (NO CARRIER / hangup) during the wait window.
+	if cm.call == nil || cm.call.callID != callID || cm.reportSent {
+		cm.mu.Unlock()
+		return
+	}
+	cm.reportSent = true
+	from := cm.call.from
+	cm.mu.Unlock()
+
+	cm.sendIncomingCall(callID, from)
+}
+
+// stopReportTimerLocked cancels any pending deferred incoming_call report and
+// resets the report guard. The caller must hold cm.mu. Safe to call when no
+// timer is pending.
+func (cm *CallManager) stopReportTimerLocked() {
+	if cm.reportTimer != nil {
+		cm.reportTimer.Stop()
+		cm.reportTimer = nil
+	}
+	cm.reportSent = false
 }
 
 // handleNoCarrier processes the NO CARRIER URC indicating remote hangup.
@@ -508,6 +567,7 @@ func (cm *CallManager) handleNoCarrier() {
 	cm.call = nil
 	cm.ringing = false
 	cm.incomingFrom = ""
+	cm.stopReportTimerLocked()
 	cm.mu.Unlock()
 
 	// Transition modem back to Ready. The state machine's own URC handler
@@ -536,6 +596,7 @@ func (cm *CallManager) handleBusy() {
 	cm.call = nil
 	cm.ringing = false
 	cm.incomingFrom = ""
+	cm.stopReportTimerLocked()
 	cm.mu.Unlock()
 
 	_ = cm.stateMachine.TransitionToReady()
@@ -556,6 +617,7 @@ func (cm *CallManager) HandleModemLost() {
 	cm.call = nil
 	cm.ringing = false
 	cm.incomingFrom = ""
+	cm.stopReportTimerLocked()
 	cm.mu.Unlock()
 
 	// Close audio bridge and pipeline.
@@ -582,6 +644,7 @@ func (cm *CallManager) HandleDisconnect() {
 		cm.call = nil
 		cm.ringing = false
 		cm.incomingFrom = ""
+		cm.stopReportTimerLocked()
 		cm.mu.Unlock()
 
 		cm.closeAudio(call)
@@ -609,6 +672,7 @@ func (cm *CallManager) Shutdown() {
 	cm.call = nil
 	cm.ringing = false
 	cm.incomingFrom = ""
+	cm.stopReportTimerLocked()
 	cm.mu.Unlock()
 
 	// Close audio bridge and pipeline first (disables PCM streaming), then

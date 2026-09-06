@@ -413,7 +413,7 @@ describe('CallRouter', () => {
 
       expect(broadcastEvents).toEqual([
         { type: 'stop_ringing', callId: 'call-1' },
-        { type: 'call_cancelled', callId: 'call-1', reason: 'caller_disconnected' },
+        { type: 'call_cancelled', callId: 'call-1', reason: 'caller_disconnect' },
       ]);
     });
 
@@ -462,7 +462,7 @@ describe('CallRouter', () => {
       expect(broadcastEvents).toContainEqual({
         type: 'call_cancelled',
         callId: 'call-1',
-        reason: 'caller_disconnected',
+        reason: 'caller_disconnect',
       });
       expect(missedCalls).toHaveLength(1);
     });

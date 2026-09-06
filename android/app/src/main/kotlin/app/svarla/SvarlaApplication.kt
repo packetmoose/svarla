@@ -52,6 +52,15 @@ class SvarlaApplication : Application() {
         appScope.launch {
             authManager.isAuthenticated.collectLatest { isAuthenticated ->
                 if (isAuthenticated) {
+                    // Telemetry: record which delivery mode the device is actually in.
+                    // This is the fastest way to diagnose "notifications only arrive when
+                    // the app is opened" — a device silently in NONE (or UNIFIED_PUSH with a
+                    // dead distributor) has no background delivery.
+                    android.util.Log.i(
+                        "SvarlaApplication",
+                        "Notification delivery mode at startup: ${deliveryPreferences.getStoredMode()} " +
+                            "(setupCompleted=${deliveryPreferences.isSetupCompleted})"
+                    )
                     syncManager.connect()
                     pushEndpointManager.initialize()
                     deviceLoginEventObserver.startObserving()
@@ -70,6 +79,18 @@ class SvarlaApplication : Application() {
                 if (authManager.hasValidSession()) {
                     pushEndpointManager.activateMode(mode)
                 }
+            }
+        }
+
+        // Telemetry: log push registration state transitions. A FAILED state in
+        // UNIFIED_PUSH mode (no/dead distributor) means the device has no working
+        // background delivery — a likely cause of notifications only arriving on foreground.
+        appScope.launch {
+            pushEndpointManager.pushState.collectLatest { state ->
+                android.util.Log.i(
+                    "SvarlaApplication",
+                    "Push registration state changed: $state (mode=${deliveryPreferences.getStoredMode()})"
+                )
             }
         }
 

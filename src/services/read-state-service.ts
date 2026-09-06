@@ -1,5 +1,7 @@
 import type { Kysely } from 'kysely';
 import type { Database } from '../database.js';
+import type { NotificationType } from './notification-service.js';
+import { threadKey } from './conversation-service.js';
 
 /**
  * Counts of unread/unseen items for badge display.
@@ -7,6 +9,23 @@ import type { Database } from '../database.js';
 export interface ReadStateCounts {
   unreadMessages: number;
   unseenMissedCalls: number;
+}
+
+/**
+ * Narrow view of NotificationService used by ReadStateService to keep the
+ * notifications table in sync with read-state changes.
+ *
+ * The notifications table (status pending/read) and the read_state table
+ * (read_at timestamps) are otherwise independent. Marking a thread read or
+ * missed calls viewed must ALSO mark the corresponding pending notifications
+ * as read, otherwise they reappear in GET /api/notifications (the pending list)
+ * and get re-delivered to the client on the next reconnect / cold start.
+ */
+export interface NotificationReadHook {
+  /** Mark all pending incoming_sms notifications for a conversation as read. */
+  markConversationRead(conversationNumber: string): Promise<number>;
+  /** Mark all pending notifications of the given types as read. */
+  markAllRead(types?: NotificationType[]): Promise<number>;
 }
 
 /**
@@ -22,7 +41,7 @@ export type ReadStateBroadcastCallback = (event: ReadStateUpdatedEvent, excludeD
 /**
  * ReadStateService manages Global_Read_State tracking:
  * - Tracks which missed calls have been viewed (item_type='missed_calls', item_key='global')
- * - Tracks which message threads have been read (item_type='messages', item_key=phoneNumber)
+ * - Tracks which message threads have been read (item_type='messages', item_key='<providerNumber>|<phoneNumber>')
  * - Provides badge counts: unseen missed calls + unread messages
  * - Broadcasts read_state_updated events to all devices for cross-device sync
  *
@@ -33,10 +52,16 @@ export type ReadStateBroadcastCallback = (event: ReadStateUpdatedEvent, excludeD
 export class ReadStateService {
   private readonly db: Kysely<Database>;
   private readonly broadcast: ReadStateBroadcastCallback;
+  private readonly notificationHook?: NotificationReadHook;
 
-  constructor(db: Kysely<Database>, broadcast: ReadStateBroadcastCallback) {
+  constructor(
+    db: Kysely<Database>,
+    broadcast: ReadStateBroadcastCallback,
+    notificationHook?: NotificationReadHook
+  ) {
     this.db = db;
     this.broadcast = broadcast;
+    this.notificationHook = notificationHook;
   }
 
   /**
@@ -73,6 +98,19 @@ export class ReadStateService {
         .execute();
     }
 
+    // Keep the notifications table in sync: mark pending missed/blocked call
+    // notifications as read so they don't reappear in the pending list on the
+    // next reconnect / cold start. markAllRead also broadcasts notification_updated
+    // events so other devices dismiss their surfaced notifications.
+    if (this.notificationHook) {
+      try {
+        await this.notificationHook.markAllRead(['missed_call', 'blocked_call']);
+      } catch {
+        // Non-fatal: read_state was still updated. Notification sync can be
+        // retried on the next mark. Do not fail the request.
+      }
+    }
+
     const counts = await this.getCounts();
 
     // Broadcast to all other devices
@@ -86,18 +124,24 @@ export class ReadStateService {
 
   /**
    * Mark all messages in a specific thread as read.
-   * Sets the read_at timestamp for that thread's phone number to NOW().
+   * A thread is identified by the (providerNumber, phoneNumber) pair; the
+   * read_state entry is keyed by the composite `<providerNumber>|<phoneNumber>`.
    * Returns the updated counts and broadcasts to all other devices.
    */
-  async markThreadAsRead(phoneNumber: string, excludeDeviceId?: string): Promise<ReadStateCounts> {
+  async markThreadAsRead(
+    providerNumber: string,
+    phoneNumber: string,
+    excludeDeviceId?: string
+  ): Promise<ReadStateCounts> {
     const now = new Date();
+    const itemKey = threadKey(providerNumber, phoneNumber);
 
     // Upsert the read_state entry for this thread
     const existing = await this.db
       .selectFrom('read_state')
       .selectAll()
       .where('item_type', '=', 'messages')
-      .where('item_key', '=', phoneNumber)
+      .where('item_key', '=', itemKey)
       .executeTakeFirst();
 
     if (existing) {
@@ -105,17 +149,30 @@ export class ReadStateService {
         .updateTable('read_state')
         .set({ read_at: now })
         .where('item_type', '=', 'messages')
-        .where('item_key', '=', phoneNumber)
+        .where('item_key', '=', itemKey)
         .execute();
     } else {
       await this.db
         .insertInto('read_state')
         .values({
           item_type: 'messages',
-          item_key: phoneNumber,
+          item_key: itemKey,
           read_at: now,
         })
         .execute();
+    }
+
+    // Keep the notifications table in sync: mark pending incoming_sms
+    // notifications for this conversation as read so they don't reappear in the
+    // pending list on the next reconnect / cold start. markConversationRead also
+    // broadcasts notification_updated events so other devices dismiss theirs.
+    if (this.notificationHook) {
+      try {
+        await this.notificationHook.markConversationRead(phoneNumber);
+      } catch {
+        // Non-fatal: read_state was still updated. Notification sync can be
+        // retried on the next mark. Do not fail the request.
+      }
     }
 
     const counts = await this.getCounts();
@@ -187,22 +244,32 @@ export class ReadStateService {
       readStates.map((rs) => [rs.item_key, rs.read_at])
     );
 
-    // Get all conversations with received messages
+    // Get all conversation threads, each identified by the (provider_number,
+    // phone_number) pair.
     const conversations = await this.db
       .selectFrom('conversations')
-      .select('phone_number')
+      .select(['provider_number', 'phone_number'])
       .execute();
 
     let totalUnread = 0;
 
     for (const conv of conversations) {
-      const readAt = readStateMap.get(conv.phone_number);
+      const readAt = readStateMap.get(threadKey(conv.provider_number, conv.phone_number));
 
       let query = this.db
         .selectFrom('messages')
         .select((eb) => eb.fn.countAll<string>().as('count'))
         .where('conversation_number', '=', conv.phone_number)
         .where('direction', '=', 'RECEIVED');
+
+      // Scope the count to this thread's provider number so two threads with
+      // the same recipient are counted independently. Empty provider means
+      // unknown/legacy — match messages without a provider number.
+      if (conv.provider_number === '') {
+        query = query.where('provider_number', 'is', null);
+      } else {
+        query = query.where('provider_number', '=', conv.provider_number);
+      }
 
       if (readAt) {
         query = query.where('timestamp', '>', readAt);

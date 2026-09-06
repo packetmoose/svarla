@@ -81,6 +81,12 @@ interface ActiveCall {
   ended: boolean;
   /** MediaBridge audio WebSocket URL for providers using WebSocket audio (modem-gateway) */
   audioWsUrl: string | null;
+  /**
+   * Backstop timer that force-ends the call if no explicit hangup/teardown signal
+   * ever arrives. Armed with a short unanswered timeout at creation and re-armed
+   * with a long max-duration cap once the call is answered. Cleared in endCall.
+   */
+  watchdogTimer: ReturnType<typeof setTimeout> | null;
 }
 
 /**
@@ -139,6 +145,21 @@ export class ProviderNotAvailableError extends CallOrchestratorError {
 
 // ─── CallOrchestrator ────────────────────────────────────────────────────────
 
+/**
+ * Backstop timeout for a call that is created but never answered and never
+ * explicitly torn down (e.g. every provider/media hangup signal was missed).
+ * Comfortably longer than the client-side inbound ring timeout (45s).
+ */
+const UNANSWERED_WATCHDOG_MS = 90_000;
+
+/**
+ * Hard cap on the duration of an answered call. This is a safety net against a
+ * call that is never explicitly ended (missed provider webhook AND missed media
+ * disconnect), which would otherwise leak an ActiveCall and keep the client
+ * "in call" forever. Set high enough not to interfere with legitimate long calls.
+ */
+const MAX_CALL_DURATION_MS = 4 * 60 * 60 * 1000; // 4 hours
+
 export class CallOrchestrator {
   private readonly mediaBridge: MediaBridgeClient;
   private readonly providerRegistry: ProviderRegistry;
@@ -157,6 +178,19 @@ export class CallOrchestrator {
 
   /** Maps provider callId → internal callId for webhook correlation */
   private readonly providerCallToInternal = new Map<string, string>();
+
+  /**
+   * Maps notification id → internal callId.
+   *
+   * The wake signal delivered to devices carries only the notification id (by
+   * design, to avoid leaking call metadata over the push channel). The client
+   * rings using that id as a temporary callId and is supposed to enrich it into
+   * the internal callId before the user acts. When the user answers first, the
+   * client posts the notification id to the answer/offer/ice endpoints. This
+   * map lets the orchestrator resolve that id to the internal callId
+   * synchronously, without a DB round-trip.
+   */
+  private readonly notificationToCall = new Map<string, string>();
 
   constructor(deps: CallOrchestratorDeps) {
     this.mediaBridge = deps.mediaBridgeClient;
@@ -272,11 +306,13 @@ export class CallOrchestrator {
       answeredAt: null,
       ended: false,
       audioWsUrl: sessionInfo.audioWsUrl,
+      watchdogTimer: null,
     };
 
     this.activeCalls.set(callId, activeCall);
     this.sessionToCall.set(sessionId, callId);
     this.providerCallToInternal.set(makeCallResult.callId, callId);
+    this.armWatchdog(activeCall, UNANSWERED_WATCHDOG_MS);
 
     // 6. Record in call history
     this.callHistory
@@ -380,10 +416,12 @@ export class CallOrchestrator {
       answeredAt: null,
       ended: false,
       audioWsUrl: sessionInfo.audioWsUrl,
+      watchdogTimer: null,
     };
 
     this.activeCalls.set(callId, activeCall);
     this.sessionToCall.set(sessionId, callId);
+    this.armWatchdog(activeCall, UNANSWERED_WATCHDOG_MS);
 
     // 3. Record incoming call in history
     this.callHistory
@@ -416,6 +454,14 @@ export class CallOrchestrator {
           timestamp: new Date().toISOString(),
         },
       })
+      .then((notification) => {
+        // Register notification id → internal callId so the client can act on
+        // the call using the id delivered in the wake signal, even before it
+        // has enriched the id into the internal callId.
+        if (notification && this.activeCalls.has(callId)) {
+          this.notificationToCall.set(notification.id, callId);
+        }
+      })
       .catch((err) => {
         this.logger.error(
           { err, callId } as Record<string, unknown>,
@@ -445,7 +491,11 @@ export class CallOrchestrator {
    *
    * Requirements: 5.2, 8.5
    */
-  async answerCall(callId: string, deviceId: string): Promise<AnswerResult> {
+  async answerCall(requestedId: string, deviceId: string): Promise<AnswerResult> {
+    // The client may pass the internal callId, the notification id, or the
+    // provider call id. Resolve to the internal callId so answering does not
+    // depend on the client having enriched the temporary id in time.
+    const callId = this.resolveToCallId(requestedId);
     const activeCall = this.activeCalls.get(callId);
     if (!activeCall) {
       return { success: false, errorReason: 'Call not found or already ended' };
@@ -459,6 +509,8 @@ export class CallOrchestrator {
     activeCall.answered = true;
     activeCall.answeredByDevice = deviceId;
     activeCall.answeredAt = new Date();
+    // Re-arm the watchdog to the long max-duration cap now that the call is live.
+    this.armWatchdog(activeCall, MAX_CALL_DURATION_MS);
 
     // Tell the provider to answer the inbound call.
     // Providers that manage their own call state (e.g. modem-gateway) will
@@ -543,13 +595,17 @@ export class CallOrchestrator {
    * Requirements: 5.1, 5.2
    */
   async handleWebRtcOffer(
-    callId: string,
+    requestedId: string,
     _deviceId: string,
     sdpOffer: string,
   ): Promise<OfferResult> {
+    // Accept the internal callId, the notification id, or the provider call id
+    // for the same reason as answerCall: the client may still be holding the
+    // temporary (notification) id when it submits the WebRTC offer.
+    const callId = this.resolveToCallId(requestedId);
     const activeCall = this.activeCalls.get(callId);
     if (!activeCall) {
-      throw new CallNotFoundError(callId);
+      throw new CallNotFoundError(requestedId);
     }
 
     try {
@@ -576,10 +632,13 @@ export class CallOrchestrator {
    * Requirements: 3.2, 6.2
    */
   handleIceCandidate(
-    callId: string,
+    requestedId: string,
     _deviceId: string,
     candidate: { candidate: string; sdpMid: string; sdpMLineIndex: number },
   ): void {
+    // Resolve the client-supplied id (may be the notification id) to the
+    // internal callId, matching the answer/offer paths.
+    const callId = this.resolveToCallId(requestedId);
     const activeCall = this.activeCalls.get(callId);
     if (!activeCall) {
       this.logger.debug(
@@ -636,6 +695,80 @@ export class CallOrchestrator {
     }
   }
 
+  // ─── Watchdog ──────────────────────────────────────────────────────────────
+
+  /**
+   * (Re)arm the backstop watchdog timer for a call.
+   *
+   * Cancels any existing timer, then schedules a force-end after [timeoutMs]. This
+   * is a last-resort guarantee that a call cannot leak forever if every explicit
+   * teardown signal is missed (missed provider webhook AND missed MediaBridge
+   * disconnect). The timer is short while ringing/dialing and long once answered.
+   *
+   * Note: `unref()` so the timer never keeps the Node process alive on shutdown.
+   */
+  private armWatchdog(activeCall: ActiveCall, timeoutMs: number): void {
+    if (activeCall.watchdogTimer) {
+      clearTimeout(activeCall.watchdogTimer);
+    }
+    const timer = setTimeout(() => {
+      // Only fires if the call is still active and hasn't been ended by any other path.
+      if (activeCall.ended || !this.activeCalls.has(activeCall.callId)) {
+        return;
+      }
+      this.logger.warn(
+        { callId: activeCall.callId, timeoutMs, answered: activeCall.answered } as Record<string, unknown>,
+        'Call watchdog fired — no teardown signal received, force-ending call',
+      );
+      void this.endCall(activeCall.callId, 'watchdog_timeout');
+    }, timeoutMs);
+    // Do not let the watchdog keep the event loop alive.
+    if (typeof timer.unref === 'function') {
+      timer.unref();
+    }
+    activeCall.watchdogTimer = timer;
+  }
+
+  /**
+   * Reconcile tracked active calls against the MediaBridge's actual session state.
+   *
+   * Intended to run after the MediaBridge event WebSocket reconnects: any
+   * `provider_disconnected` events emitted while the event socket was down are
+   * lost and never redelivered, which would otherwise leave a call active forever.
+   * For each answered call, we query the MediaBridge session; if the session no
+   * longer exists (request throws) or its provider leg is no longer connected,
+   * the caller has hung up and we end the call.
+   *
+   * Only answered calls are reconciled — an un-answered inbound/outbound call may
+   * still be mid-setup (provider leg legitimately pending), and the unanswered
+   * watchdog covers that case.
+   */
+  async reconcileActiveSessions(): Promise<void> {
+    const calls = Array.from(this.activeCalls.values());
+    for (const call of calls) {
+      if (call.ended || !call.answered) {
+        continue;
+      }
+      try {
+        const status = await this.mediaBridge.getSessionStatus(call.sessionId);
+        if (!status.providerConnected) {
+          this.logger.info(
+            { callId: call.callId, sessionId: call.sessionId } as Record<string, unknown>,
+            'Reconcile: MediaBridge provider leg gone — ending call',
+          );
+          await this.endCall(call.callId, 'reconcile_provider_gone');
+        }
+      } catch (err) {
+        // A missing session (non-2xx) means the call is gone on the media side.
+        this.logger.info(
+          { err, callId: call.callId, sessionId: call.sessionId } as Record<string, unknown>,
+          'Reconcile: MediaBridge session missing — ending call',
+        );
+        await this.endCall(call.callId, 'reconcile_session_missing');
+      }
+    }
+  }
+
   // ─── End Call ────────────────────────────────────────────────────────────
 
   /**
@@ -650,7 +783,11 @@ export class CallOrchestrator {
    *
    * Requirements: 5.3, 5.5, 5.6
    */
-  async endCall(callId: string, trigger?: string): Promise<void> {
+  async endCall(requestedId: string, trigger?: string): Promise<void> {
+    // Callers may pass the internal callId (internal triggers), the notification
+    // id, or the provider call id (client decline). Resolve to the internal
+    // callId; an internal callId that is still active resolves to itself.
+    const callId = this.resolveToCallId(requestedId);
     const activeCall = this.activeCalls.get(callId);
     if (!activeCall) {
       return; // Already ended or not found — no-op
@@ -661,6 +798,12 @@ export class CallOrchestrator {
       return;
     }
     activeCall.ended = true;
+
+    // Clear the backstop watchdog — the call is ending through the normal path.
+    if (activeCall.watchdogTimer) {
+      clearTimeout(activeCall.watchdogTimer);
+      activeCall.watchdogTimer = null;
+    }
 
     // Log the call stack to identify what triggered endCall
     this.logger.info(
@@ -771,6 +914,11 @@ export class CallOrchestrator {
     this.activeCalls.delete(callId);
     this.sessionToCall.delete(activeCall.sessionId);
     this.providerCallToInternal.delete(activeCall.providerCallId);
+    for (const [notificationId, mappedCallId] of this.notificationToCall) {
+      if (mappedCallId === callId) {
+        this.notificationToCall.delete(notificationId);
+      }
+    }
 
     this.logger.info(
       { callId, direction: activeCall.direction, durationSeconds } as Record<string, unknown>,
@@ -828,6 +976,8 @@ export class CallOrchestrator {
         if (!activeCall.answered && activeCall.direction === 'outbound') {
           activeCall.answered = true;
           activeCall.answeredAt = new Date();
+          // Re-arm the watchdog to the long max-duration cap now that audio is live.
+          this.armWatchdog(activeCall, MAX_CALL_DURATION_MS);
         }
         this.wsBroadcaster.broadcast({
           type: 'call_event',
@@ -884,10 +1034,57 @@ export class CallOrchestrator {
   }
 
   /**
+   * Resolve a client-supplied id to the internal callId of an active call.
+   *
+   * Clients may legitimately hold one of several ids for the same call:
+   * - the internal callId (what `activeCalls` is keyed by),
+   * - the notification id delivered via the wake signal / push (the client
+   *   often rings using this as a temporary callId before it has been enriched
+   *   with the real callId from the WebSocket/REST notification payload), or
+   * - the provider call id.
+   *
+   * The Android client races to "enrich" the temporary (notification) id into
+   * the internal callId before the user answers. When the user answers first —
+   * e.g. the device WebSocket connected after the notification was created and
+   * the REST enrichment had not completed — the client posts the notification
+   * id and the answer would otherwise fail with 409, leaving the modem
+   * un-answered while the caller keeps ringing. Resolving the id here makes the
+   * answer/decline flow independent of that timing race.
+   *
+   * @returns the internal callId of a matching active call, or the original id
+   *   if no mapping is found (so callers still get a clean "not found" path).
+   */
+  resolveToCallId(id: string): string {
+    // 1. Already an internal callId of an active call — the common case.
+    if (this.activeCalls.has(id)) {
+      return id;
+    }
+
+    // 2. A notification id registered at inbound time.
+    const fromNotification = this.notificationToCall.get(id);
+    if (fromNotification && this.activeCalls.has(fromNotification)) {
+      this.logger.info(
+        { notificationId: id, callId: fromNotification } as Record<string, unknown>,
+        'Resolved notification id to internal callId',
+      );
+      return fromNotification;
+    }
+
+    // 3. A provider call id (e.g. modem-gateway "call-...-1").
+    const fromProvider = this.providerCallToInternal.get(id);
+    if (fromProvider) {
+      return fromProvider;
+    }
+
+    // 4. No mapping found — return as-is so the caller reports "not found".
+    return id;
+  }
+
+  /**
    * Get active call info by callId. Returns null if not found.
    */
-  getActiveCall(callId: string): { callId: string; from: string; to: string; direction: string; answered: boolean } | null {
-    const call = this.activeCalls.get(callId);
+  getActiveCall(id: string): { callId: string; from: string; to: string; direction: string; answered: boolean } | null {
+    const call = this.activeCalls.get(this.resolveToCallId(id));
     if (!call) return null;
     return {
       callId: call.callId,
@@ -937,8 +1134,16 @@ export class CallOrchestrator {
    * Clean up resources. Call on server shutdown.
    */
   dispose(): void {
+    // Cancel any outstanding watchdog timers so they don't fire after shutdown.
+    for (const call of this.activeCalls.values()) {
+      if (call.watchdogTimer) {
+        clearTimeout(call.watchdogTimer);
+        call.watchdogTimer = null;
+      }
+    }
     this.activeCalls.clear();
     this.sessionToCall.clear();
     this.providerCallToInternal.clear();
+    this.notificationToCall.clear();
   }
 }

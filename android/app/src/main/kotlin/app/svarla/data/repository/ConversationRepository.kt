@@ -172,9 +172,35 @@ class ConversationRepository @Inject constructor(
     suspend fun syncMessages(providerNumber: String, phoneNumber: String) {
         try {
             val response = smsApi.getMessages(phoneNumber, DEFAULT_MESSAGE_LIMIT, providerNumber.ifEmpty { null })
+            val syncedIds = mutableSetOf<String>()
+            val syncedMessages = ArrayList<Message>(response.messages.size)
             response.messages.forEach { dto ->
-                val message = dto.toEntity()
+                var message = dto.toEntity()
+                // The response was filtered server-side by this provider number, so any
+                // returned message belongs to this thread. If the server omitted the
+                // providerNumber, backfill it so the provider-scoped detail query
+                // (getByConversationAndProvider) still shows the message. Without this,
+                // an incoming SMS to a second same-recipient thread stays invisible.
+                if (providerNumber.isNotEmpty() && message.providerNumber.isNullOrEmpty()) {
+                    message = message.copy(providerNumber = providerNumber)
+                }
                 messageDao.insert(message)
+                syncedIds.add(message.id)
+                syncedMessages.add(message)
+            }
+
+            // Reconcile: remove locally-cached messages for this exact thread that the
+            // server no longer attributes to it. This clears messages that a previous
+            // (unfiltered) sync mis-attributed to the wrong same-recipient conversation.
+            // Bound the cleanup to the timestamp window actually covered by the response
+            // so we never delete older history that fell outside the server's page limit.
+            if (providerNumber.isNotEmpty() && syncedMessages.isNotEmpty()) {
+                val minTs = syncedMessages.minOf { it.timestamp }
+                val maxTs = syncedMessages.maxOf { it.timestamp }
+                val localIds = messageDao.getIdsForThreadInRange(phoneNumber, providerNumber, minTs, maxTs)
+                localIds.filterNot { syncedIds.contains(it) }.forEach { staleId ->
+                    messageDao.deleteById(staleId)
+                }
             }
         } catch (e: Exception) {
             Log.e(TAG, "Failed to sync messages for $providerNumber -> $phoneNumber", e)
@@ -225,20 +251,9 @@ class ConversationRepository @Inject constructor(
     }
 
     /**
-     * Mark a conversation thread as read locally and on the server.
-     */
-    suspend fun markThreadAsRead(phoneNumber: String) {
-        val now = System.currentTimeMillis()
-        conversationDao.markAsReadByPhone(phoneNumber, now)
-        try {
-            readStateApi.markThreadAsRead(phoneNumber)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to sync read state to server for $phoneNumber", e)
-        }
-    }
-
-    /**
-     * Mark a specific conversation thread (provider + phone) as read locally and on the server.
+     * Mark a specific conversation thread (provider + phone) as read locally and
+     * on the server. A thread is identified by the (providerNumber, phoneNumber)
+     * pair; an empty providerNumber is the unknown/legacy sentinel.
      */
     suspend fun markThreadAsRead(providerNumber: String, phoneNumber: String) {
         val now = System.currentTimeMillis()
@@ -248,7 +263,7 @@ class ConversationRepository @Inject constructor(
             conversationDao.markAsReadByPhone(phoneNumber, now)
         }
         try {
-            readStateApi.markThreadAsRead(phoneNumber)
+            readStateApi.markThreadAsRead(providerNumber, phoneNumber)
         } catch (e: Exception) {
             Log.w(TAG, "Failed to sync read state to server for $providerNumber -> $phoneNumber", e)
         }
@@ -256,16 +271,18 @@ class ConversationRepository @Inject constructor(
 
     /**
      * Remove a conversation (hide it from the list).
-     * Deletes locally and marks as removed on the server.
+     * Deletes locally and marks as removed on the server. Scoped to the
+     * (providerNumber, phoneNumber) pair so the sibling thread with the same
+     * recipient is not affected.
      */
     suspend fun removeConversation(providerNumber: String, phoneNumber: String) {
         // Remove from local DB
         conversationDao.deleteByProviderAndPhone(providerNumber, phoneNumber)
         // Mark as removed on the server
         try {
-            smsApi.removeConversation(phoneNumber)
+            smsApi.removeConversation(providerNumber, phoneNumber)
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to remove conversation on server for $phoneNumber", e)
+            Log.w(TAG, "Failed to remove conversation on server for $providerNumber -> $phoneNumber", e)
         }
     }
 
@@ -339,8 +356,13 @@ class ConversationRepository @Inject constructor(
         try {
             val data = event.data?.jsonObject ?: return
             val conversationNumber = data["conversationNumber"]?.jsonPrimitive?.content ?: return
-            val providerNumber = data["providerNumber"]?.jsonPrimitive?.content ?: ""
+            val eventProviderNumber = data["providerNumber"]?.jsonPrimitive?.content ?: ""
             val direction = data["direction"]?.jsonPrimitive?.content
+
+            // The server always includes the providerNumber on new_message, which
+            // identifies the exact (providerNumber, conversationNumber) thread.
+            // Empty string is the unknown/legacy sentinel.
+            val providerNumber = eventProviderNumber
 
             // Optimistically update lastReceivedAt for incoming messages so the
             // unread indicator in the conversation list shows immediately without
@@ -357,7 +379,9 @@ class ConversationRepository @Inject constructor(
                 }
             }
 
-            syncMessages(conversationNumber)
+            // Sync scoped to the specific thread so the returned messages carry the
+            // correct providerNumber and appear in the provider-filtered detail view.
+            syncMessages(providerNumber, conversationNumber)
             syncConversations()
         } catch (e: Exception) {
             Log.e(TAG, "Failed to handle new_message event", e)

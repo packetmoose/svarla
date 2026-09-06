@@ -165,28 +165,56 @@ export class NotificationService {
       },
     });
 
-    // Send wake signals to offline devices
+    // Send wake signals to ALL registered devices.
+    //
+    // We intentionally do NOT gate this on whether the device currently has an
+    // OPEN WebSocket server-side. A backgrounded/dozing device can leave a socket
+    // that the server still sees as OPEN (TCP hasn't timed out yet) even though the
+    // app cannot process WebSocket traffic in the background. Gating on
+    // isDeviceConnected() therefore silently skipped the push wake signal and the
+    // notification only surfaced when the app was next foregrounded. Sending to all
+    // devices with a registered endpoint matches the missed_call/blocked_call paths.
+    // The client de-duplicates because the WS event and the wake-signal fetch both
+    // converge on NotificationHandler.handleNotificationCreated keyed by notification id.
     try {
       const allDevices = await this.deviceRegistryManager.getActiveDevicesWithPushInfo();
-      const offlineDevices = allDevices.filter(
-        (device) => !this.wsBroadcaster.isDeviceConnected(device.deviceId)
-      );
+      const devicesWithEndpoint = allDevices.filter((device) => device.pushEndpointUrl != null);
+      const skippedNoEndpoint = allDevices.length - devicesWithEndpoint.length;
 
-      if (offlineDevices.length > 0) {
+      if (devicesWithEndpoint.length > 0) {
         const priority: 'high' | 'normal' = input.type === 'incoming_call' ? 'high' : 'normal';
-        await this.wakeSignalPublisher.sendToAllDevices(offlineDevices, {
-          id: entity.id,
-          priority,
-        });
+        // sendToAllDevices logs the aggregate summary and per-device failures
+        // (with HTTP status) via the publisher's logger. Here we only add the
+        // notification-level context that the publisher doesn't have.
+        const results = await this.wakeSignalPublisher.sendToAllDevices(
+          devicesWithEndpoint,
+          { id: entity.id, priority },
+          `notification:${entity.type}`
+        );
+
+        const succeeded = results.filter((r) => r.success).length;
         this.logger.info(
-          { notificationId: entity.id, offlineDeviceCount: offlineDevices.length, priority },
-          'Sent wake signals to offline devices'
+          {
+            notificationId: entity.id,
+            type: entity.type,
+            priority,
+            targetDeviceCount: devicesWithEndpoint.length,
+            skippedNoEndpoint,
+            succeeded,
+            failedCount: results.length - succeeded,
+          },
+          'Sent wake signals to registered devices'
+        );
+      } else {
+        this.logger.warn(
+          { notificationId: entity.id, type: entity.type, activeDeviceCount: allDevices.length },
+          'No devices with a registered push endpoint — no wake signal sent'
         );
       }
     } catch (err) {
       this.logger.warn(
         { error: err instanceof Error ? err.message : 'Unknown error', notificationId: entity.id },
-        'Failed to send wake signals to offline devices'
+        'Failed to send wake signals to registered devices'
       );
     }
 

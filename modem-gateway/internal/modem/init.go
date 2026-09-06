@@ -76,6 +76,15 @@ func RunInitSequence(ctx context.Context, m *Modem) (*InitResult, error) {
 
 	// Configure SMS notification routing (AT+CNMI).
 	//
+	// The <mt>=1 mode stores each new SMS and emits a +CMTI indication rather
+	// than routing the message body directly to the TE (<mt>=2). This is
+	// deliberate and load-bearing for durability: because delivery is stored
+	// first, the network/SMSC acknowledgement is tied to successful storage. If
+	// SIM/modem storage is full the message is not stored, no +CMTI is emitted,
+	// and the SMSC holds the message and retries later — so a full buffer
+	// degrades to "delivered later" rather than a lost message. Do not switch
+	// to <mt>=2 (direct-to-TE) without providing an equivalent durability path.
+	//
 	// We route new incoming SMS via +CMTI and explicitly disable delivery-report
 	// routing (<ds>=0). Delivery/status reports are not used: the SIM7600G-H
 	// rejects live +CDS push (<ds>=1) and its stored reports (+CDSI) are not

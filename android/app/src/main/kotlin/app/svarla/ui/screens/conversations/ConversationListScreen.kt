@@ -19,6 +19,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -32,10 +33,12 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
-import app.svarla.ui.components.NumberBadge
+import app.svarla.ui.components.ContactAvatar
+import app.svarla.ui.components.NumberLabelWithDot
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -157,75 +160,90 @@ private fun ConversationListItemRow(
             .fillMaxWidth()
             .clickable(onClick = onClick)
             .padding(horizontal = 16.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.Top
+        verticalAlignment = Alignment.CenterVertically
     ) {
+        // Profile picture / initials avatar
+        ContactAvatar(
+            displayName = item.displayName,
+            photoUri = item.photoUri
+        )
+
+        Spacer(modifier = Modifier.width(12.dp))
+
+        // Text content: 3 rows
         Column(
             modifier = Modifier.weight(1f)
         ) {
+            // Row 1: Contact name + provider number badge
             Row(
                 modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Text(
                     text = item.displayName,
                     style = MaterialTheme.typography.titleMedium,
-                    fontWeight = if (isUnread) androidx.compose.ui.text.font.FontWeight.Bold
-                        else androidx.compose.ui.text.font.FontWeight.Normal,
+                    fontWeight = if (isUnread) FontWeight.Bold else FontWeight.Normal,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f)
                 )
-                Spacer(modifier = Modifier.width(8.dp))
+                if (item.providerNumberLabel.isNotEmpty()) {
+                    Spacer(modifier = Modifier.width(8.dp))
+                    NumberLabelWithDot(
+                        label = item.providerNumberLabel,
+                        color = item.providerNumberColor
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(2.dp))
+
+            // Row 2: Last message preview
+            Text(
+                text = item.preview,
+                style = MaterialTheme.typography.bodyMedium,
+                fontWeight = if (isUnread) FontWeight.Medium else FontWeight.Normal,
+                color = if (isUnread) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            Spacer(modifier = Modifier.height(2.dp))
+
+            // Row 3: Timestamp + unread count badge
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
                 item.timestamp?.let { timestamp ->
                     Text(
                         text = formatTimestamp(timestamp),
-                        style = MaterialTheme.typography.labelSmall,
+                        style = MaterialTheme.typography.bodySmall,
                         color = if (isUnread) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-            }
-
-            Spacer(modifier = Modifier.height(4.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    text = item.preview,
-                    style = MaterialTheme.typography.bodyMedium,
-                    fontWeight = if (isUnread) androidx.compose.ui.text.font.FontWeight.Medium
-                        else androidx.compose.ui.text.font.FontWeight.Normal,
-                    color = if (isUnread) MaterialTheme.colorScheme.onSurface
-                        else MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f)
-                )
                 if (isUnread) {
-                    Spacer(modifier = Modifier.width(8.dp))
+                    val badgeText = if (item.unreadCount > 99) "99+" else item.unreadCount.toString()
                     Box(
                         modifier = Modifier
-                            .size(10.dp)
                             .background(
                                 color = MaterialTheme.colorScheme.primary,
-                                shape = androidx.compose.foundation.shape.CircleShape
+                                shape = RoundedCornerShape(10.dp)
                             )
-                    )
+                            .padding(horizontal = 6.dp, vertical = 1.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = badgeText,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onPrimary,
+                            fontWeight = FontWeight.Bold
+                        )
+                    }
                 }
-            }
-
-            if (item.providerNumberLabel.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(2.dp))
-                NumberBadge(
-                    label = item.providerNumberLabel,
-                    color = item.providerNumberColor
-                )
-            } else {
-                // Reserve space for the badge so layout doesn't jump when it appears
-                Spacer(modifier = Modifier.height(2.dp + 18.dp))
             }
         }
     }

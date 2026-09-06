@@ -159,6 +159,31 @@ describe('MediaBridgeEventListener', () => {
       await waitFor(() => listener.isConnected(), 3000);
       expect(listener.isConnected()).toBe(true);
     });
+
+    it('should invoke the reconnect handler on a genuine reconnect but not the first connect', async () => {
+      mockBridge = createMockMediaBridge(port);
+      listener = createListener();
+
+      let reconnectCount = 0;
+      listener.onReconnect(() => {
+        reconnectCount += 1;
+      });
+
+      await listener.start();
+      await waitFor(() => listener.isConnected());
+
+      // First connect must NOT trigger the reconnect handler.
+      expect(reconnectCount).toBe(0);
+
+      // Simulate a drop; the server stays up so the listener reconnects.
+      mockBridge.getClient()?.close();
+      await waitFor(() => !listener.isConnected());
+      await waitFor(() => listener.isConnected(), 3000);
+
+      // The reconnect must have fired exactly once.
+      await waitFor(() => reconnectCount === 1, 2000);
+      expect(reconnectCount).toBe(1);
+    });
   });
 
   describe('session event dispatching', () => {

@@ -3,7 +3,6 @@ package main
 import (
 	"log"
 
-	"github.com/packetmoose/svarla/modem-gateway/internal/buffer"
 	"github.com/packetmoose/svarla/modem-gateway/internal/signaling"
 	"github.com/packetmoose/svarla/modem-gateway/internal/sms"
 	"github.com/packetmoose/svarla/modem-gateway/internal/ussd"
@@ -16,11 +15,16 @@ func dispatchSignalingMessage(
 	ussdMgr *ussd.Manager,
 	callMgr *signaling.CallManager,
 	client signaling.MessageSender,
+	smsDelivery *SMSDelivery,
 ) {
 	switch msg.Type {
 	case signaling.TypeSendSMS:
 		if smsMgr != nil {
 			handleSendSMS(msg, smsMgr, client)
+		}
+	case signaling.TypeSMSAck:
+		if smsDelivery != nil {
+			handleSMSAck(msg, smsDelivery)
 		}
 	case signaling.TypeUSSDRequest:
 		if ussdMgr != nil {
@@ -33,13 +37,26 @@ func dispatchSignalingMessage(
 	}
 }
 
+// handleSMSAck processes an sms_ack from the server, removing the acknowledged
+// message from the durable buffer.
+func handleSMSAck(msg signaling.Message, smsDelivery *SMSDelivery) {
+	var payload struct {
+		MessageID string `json:"messageId"`
+	}
+	if err := msg.ParsePayload(&payload); err != nil {
+		log.Printf("Failed to parse sms_ack payload: %v", err)
+		return
+	}
+	smsDelivery.HandleAck(payload.MessageID)
+}
+
 // handleReconnect is called when signaling reconnects. It re-reports the number
-// and delivers any buffered messages.
+// and triggers delivery of any buffered data.
 func handleReconnect(
 	sigClient *signaling.ReconnectingClient,
 	numberReporter *signaling.NumberReporter,
 	missedCallBuf *signaling.MissedCallBuffer,
-	smsBuffer *buffer.PersistentBuffer[sms.IncomingSMS],
+	smsDelivery *SMSDelivery,
 ) {
 	log.Println("Signaling connected — delivering buffered data")
 
@@ -53,41 +70,11 @@ func handleReconnect(
 		}
 	}
 
-	if smsBuffer != nil {
-		buffered, err := smsBuffer.DrainAll()
-		if err != nil {
-			log.Printf("Failed to drain SMS buffer: %v", err)
-		}
-		var failedItems []sms.IncomingSMS
-		for _, incoming := range buffered {
-			payload := struct {
-				Type      string `json:"type"`
-				MessageID string `json:"messageId"`
-				From      string `json:"from"`
-				Body      string `json:"body"`
-				Timestamp int64  `json:"timestamp"`
-			}{
-				Type:      signaling.TypeBufferedSMS,
-				MessageID: incoming.MessageID,
-				From:      incoming.From,
-				Body:      incoming.Body,
-				Timestamp: incoming.Timestamp.UnixMilli(),
-			}
-			msg, err := signaling.NewMessage(signaling.TypeBufferedSMS, payload)
-			if err != nil {
-				log.Printf("Failed to create buffered_sms message: %v", err)
-				failedItems = append(failedItems, incoming)
-				continue
-			}
-			if err := sigClient.Send(msg); err != nil {
-				log.Printf("Failed to send buffered_sms: %v", err)
-				failedItems = append(failedItems, incoming)
-			}
-		}
-		// Re-push any items that failed to send so they survive for next reconnect.
-		for _, item := range failedItems {
-			_ = smsBuffer.Push(item)
-		}
+	// Nudge the SMS delivery pump to (re)send any buffered messages. The pump
+	// leaves each message in the buffer until the server acks it, so this is
+	// safe to trigger on every reconnect.
+	if smsDelivery != nil {
+		smsDelivery.Kick()
 	}
 }
 

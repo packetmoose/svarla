@@ -6,7 +6,7 @@ import kotlinx.serialization.Serializable
 data class ProviderNumberDto(
     val number: String,
     val label: String? = null,
-    val color: String = "#6750A4",
+    val color: String? = null,
     val isActive: Boolean = true,
     val lastUsedAt: String? = null,
     val blockInboundCalls: Boolean = false

@@ -1,7 +1,12 @@
 package app.svarla.ui.screens.call
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.provider.ContactsContract
+import android.widget.Toast
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -168,6 +173,17 @@ fun CallHistoryScreen(
                 Row {
                     TextButton(onClick = {
                         selectedEntry = null
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        val clip = ClipData.newPlainText("Phone number", number)
+                        clipboard.setPrimaryClip(clip)
+                        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) {
+                            Toast.makeText(context, "Number copied", Toast.LENGTH_SHORT).show()
+                        }
+                    }) {
+                        Text("Copy")
+                    }
+                    TextButton(onClick = {
+                        selectedEntry = null
                         onSendMessage(uiEntry.entry.providerNumber ?: "", number)
                     }) {
                         Text("Message")
@@ -182,7 +198,7 @@ fun CallHistoryScreen(
                             }
                             context.startActivity(intent)
                         }) {
-                            Text("Add contact")
+                            Text("Add")
                         }
                     }
                 }

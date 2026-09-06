@@ -3,6 +3,8 @@
 package sms
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"regexp"
@@ -60,8 +62,13 @@ type Manager struct {
 
 	reassembler *Reassembler
 
+	// ownNumber returns the modem's own phone number (E.164) so that incoming
+	// messages can be tagged with the correct "to" field. The function may
+	// return an empty string if the number has not been discovered yet.
+	ownNumber func() string
+
 	mu               sync.RWMutex
-	receivedHandlers []func(IncomingSMS)
+	receivedHandlers []func(IncomingSMS) error
 	deliveryHandlers []func(DeliveryReport)
 
 	// concatRef supplies the 8-bit reference number stamped into the
@@ -73,10 +80,15 @@ type Manager struct {
 
 // New creates a new SMS Manager. The modem is driven in PDU mode (AT+CMGF=0);
 // all encoding/decoding is handled in this package rather than by the modem's
-// text-mode character-set interpretation.
-func New(m *modem.Modem) *Manager {
+// text-mode character-set interpretation. ownNumber is called to fill the "to"
+// field on received messages; pass nil if the number is not available.
+func New(m *modem.Modem, ownNumber func() string) *Manager {
+	if ownNumber == nil {
+		ownNumber = func() string { return "" }
+	}
 	return &Manager{
 		modem:       m,
+		ownNumber:   ownNumber,
 		reassembler: NewReassembler(0), // Use default 5-minute stale timeout
 	}
 }
@@ -200,13 +212,36 @@ func (mgr *Manager) readMessage(index int) (IncomingSMS, *ConcatInfo, error) {
 	}
 
 	msg := IncomingSMS{
-		MessageID: strconv.Itoa(index),
+		MessageID: deterministicMessageID(parsed),
 		From:      parsed.Sender,
+		To:        mgr.ownNumber(),
 		Body:      parsed.Body,
 		Timestamp: parsed.Timestamp,
 		Multipart: parsed.Concat != nil,
 	}
 	return msg, parsed.Concat, nil
+}
+
+// deterministicMessageID derives a stable, globally-unique message ID from the
+// PDU's invariant content so that re-reading the same message (e.g. after a
+// crash before the modem delete, or a redelivery from the SMSC) yields the same
+// ID. The server deduplicates inbound SMS by this ID, so stability across
+// retries is what prevents duplicates.
+//
+// For a concatenated message, all parts must collapse to a single ID: we key on
+// the sender plus the concatenation reference and total-parts count (shared by
+// every part), independent of the per-part body which is only fully known once
+// reassembled. For a single-part message we key on sender, service-centre
+// timestamp, and body.
+func deterministicMessageID(p parsedMessage) string {
+	h := sha256.New()
+	if p.Concat != nil {
+		fmt.Fprintf(h, "concat|%s|%d|%d", p.Sender, p.Concat.RefNum, p.Concat.TotalParts)
+	} else {
+		fmt.Fprintf(h, "single|%s|%d|%s", p.Sender, p.Timestamp.UnixNano(), p.Body)
+	}
+	sum := h.Sum(nil)
+	return "in-" + hex.EncodeToString(sum[:16])
 }
 
 // DrainStoredMessages reads all messages stored on the SIM/modem, delivers them
@@ -271,14 +306,11 @@ func (mgr *Manager) processStoredIndex(idx int, delivered *int) {
 	msg, concat, err := mgr.readMessage(idx)
 	if err != nil {
 		slog.Warn("Failed to read stored message during drain", "index", idx, "error", err)
-		// Still delete it so we don't loop on a corrupt message.
-		_, _ = mgr.modem.SendCommand(fmt.Sprintf("AT+CMGD=%d", idx), 0)
+		// Delete only a message we could not read at all, so we don't loop
+		// forever on a corrupt entry. A readable message is never deleted
+		// before it is durably persisted (below).
+		mgr.deleteStored(idx)
 		return
-	}
-
-	// Delete from storage after a successful read.
-	if _, err := mgr.modem.SendCommand(fmt.Sprintf("AT+CMGD=%d", idx), 0); err != nil {
-		slog.Warn("Failed to delete drained message", "index", idx, "error", err)
 	}
 
 	if concat != nil {
@@ -286,12 +318,24 @@ func (mgr *Manager) processStoredIndex(idx int, delivered *int) {
 			msg.From, concat.RefNum, concat.SeqNum, concat.TotalParts, msg.Body,
 		)
 		if !complete {
+			// Incomplete concat part: leave it in storage until the message
+			// completes and is persisted (see handleCMTI). Do not delete now.
 			return
 		}
 		msg.Body = assembled
 	}
 
-	mgr.deliverIncoming(msg)
+	// Persist BEFORE deleting from storage.
+	if err := mgr.deliverIncoming(msg); err != nil {
+		slog.Error("Failed to persist drained SMS; leaving in modem storage for retry",
+			"index", idx, "messageId", msg.MessageID, "error", err)
+		return
+	}
+
+	mgr.deleteStored(idx)
+	if concat != nil {
+		mgr.deleteConcatParts(msg.From, concat.RefNum, concat.TotalParts)
+	}
 	*delivered++
 }
 
@@ -316,8 +360,11 @@ func parseCMGLIndices(resp string) []int {
 }
 
 // OnReceived registers a handler that is called when an SMS is received.
-// Multiple handlers can be registered.
-func (mgr *Manager) OnReceived(handler func(IncomingSMS)) {
+// Multiple handlers can be registered. A handler returns an error if it failed
+// to durably take ownership of the message (e.g. failed to persist it); the
+// receive path uses that signal to keep the message in modem storage for a
+// later retry instead of deleting it.
+func (mgr *Manager) OnReceived(handler func(IncomingSMS) error) {
 	mgr.mu.Lock()
 	defer mgr.mu.Unlock()
 	mgr.receivedHandlers = append(mgr.receivedHandlers, handler)
@@ -366,12 +413,9 @@ func (mgr *Manager) handleCMTI(urc modem.URC) {
 	msg, concat, err := mgr.readMessage(info.Index)
 	if err != nil {
 		slog.Error("Failed to read SMS", "error", err, "index", info.Index)
+		// Leave the message in storage; a later +CMTI or the boot drain will
+		// retry. Deleting an unread/corrupt message here would lose it.
 		return
-	}
-
-	// Delete from storage after a successful read.
-	if _, err := mgr.modem.SendCommand(fmt.Sprintf("AT+CMGD=%d", info.Index), 0); err != nil {
-		slog.Warn("Failed to delete read SMS from storage", "error", err, "index", info.Index)
 	}
 
 	if concat != nil {
@@ -381,35 +425,81 @@ func (mgr *Manager) handleCMTI(urc modem.URC) {
 			msg.From, concat.RefNum, concat.SeqNum, concat.TotalParts, msg.Body,
 		)
 		if !complete {
+			// This part is now held in the reassembler (in memory). We must not
+			// delete it from modem storage until the whole message is durably
+			// persisted, otherwise a crash would lose the buffered parts. Leave
+			// it on the SIM; the boot drain re-reads and re-feeds parts on
+			// restart. The SIM's storage capacity is the backstop, and the SMSC
+			// holds undelivered messages if storage fills.
 			return
 		}
 		msg.Body = assembled
 	}
 
-	mgr.deliverIncoming(msg)
-}
+	// Persist BEFORE deleting from modem storage. Only once the received
+	// handler has durably taken ownership (persisted to the buffer) do we
+	// delete from the SIM/modem. If persistence fails, the message stays in
+	// storage for a later retry.
+	if err := mgr.deliverIncoming(msg); err != nil {
+		slog.Error("Failed to persist incoming SMS; leaving in modem storage for retry",
+			"error", err, "index", info.Index, "messageId", msg.MessageID)
+		return
+	}
 
-// deliverIncoming notifies all registered received handlers of a message. It
-// assigns a globally-unique MessageID so the server can deduplicate correctly
-// (the raw storage index is reused across messages and is not unique).
-func (mgr *Manager) deliverIncoming(msg IncomingSMS) {
-	msg.MessageID = newMessageID()
-
-	mgr.mu.RLock()
-	handlers := make([]func(IncomingSMS), len(mgr.receivedHandlers))
-	copy(handlers, mgr.receivedHandlers)
-	mgr.mu.RUnlock()
-
-	for _, h := range handlers {
-		h(msg)
+	mgr.deleteStored(info.Index)
+	// For a completed concatenated message, delete every part still held in
+	// storage as well, so parts read earlier (which we intentionally left) are
+	// cleaned up now that the message is durably persisted.
+	if concat != nil {
+		mgr.deleteConcatParts(msg.From, concat.RefNum, concat.TotalParts)
 	}
 }
 
-// messageIDCounter provides a monotonic component for unique message IDs.
-var messageIDCounter atomic.Uint64
+// deleteStored removes a single message from modem storage by index, logging on
+// failure. Deletion is best-effort: a failed delete only risks a duplicate
+// redelivery, which the server deduplicates by MessageID.
+func (mgr *Manager) deleteStored(index int) {
+	if _, err := mgr.modem.SendCommand(fmt.Sprintf("AT+CMGD=%d", index), 0); err != nil {
+		slog.Warn("Failed to delete SMS from storage", "error", err, "index", index)
+	}
+}
 
-// newMessageID generates a unique message ID for an incoming SMS.
-// Format: "in-<unixNano>-<counter>".
-func newMessageID() string {
-	return fmt.Sprintf("in-%d-%d", time.Now().UnixNano(), messageIDCounter.Add(1))
+// deleteConcatParts scans storage for the remaining parts of a now-persisted
+// concatenated message (matching sender and concat reference) and deletes them.
+// Parts of an incomplete concat message are intentionally left in storage until
+// the message completes and is persisted; this cleans them up afterwards.
+func (mgr *Manager) deleteConcatParts(sender string, refNum, totalParts int) {
+	resp, err := mgr.modem.SendCommand("AT+CMGL=4", 0)
+	if err != nil || strings.TrimSpace(resp) == "" {
+		return
+	}
+	for _, idx := range parseCMGLIndices(resp) {
+		part, concat, err := mgr.readMessage(idx)
+		if err != nil || concat == nil {
+			continue
+		}
+		if part.From == sender && concat.RefNum == refNum && concat.TotalParts == totalParts {
+			mgr.deleteStored(idx)
+		}
+	}
+}
+
+// deliverIncoming notifies all registered received handlers of a message. The
+// MessageID is set deterministically at read time (see deterministicMessageID)
+// so the server can deduplicate redelivered messages correctly. It returns the
+// first error reported by a handler, allowing the caller to withhold deletion
+// of the message from modem storage until it has been durably persisted.
+func (mgr *Manager) deliverIncoming(msg IncomingSMS) error {
+	mgr.mu.RLock()
+	handlers := make([]func(IncomingSMS) error, len(mgr.receivedHandlers))
+	copy(handlers, mgr.receivedHandlers)
+	mgr.mu.RUnlock()
+
+	var firstErr error
+	for _, h := range handlers {
+		if err := h(msg); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }

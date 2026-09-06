@@ -349,7 +349,9 @@ export class ProviderRegistry {
     }
 
     // Orphan all numbers belonging to this provider:
-    // deactivate, detach from provider, and clear label
+    // deactivate, detach from provider, and clear label. The color is preserved
+    // so the number keeps it if re-added; it is only reclaimed later if the
+    // palette runs out of colors for active numbers.
     await this.db
       .updateTable('numbers')
       .set({

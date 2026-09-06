@@ -26,12 +26,33 @@ type ConnectionConfig struct {
 
 // ModemConfig holds modem serial port and feature settings.
 type ModemConfig struct {
-	SerialPort          string `yaml:"serialPort"`          // Required, default: /dev/ttyUSB2
-	PhoneNumber         string `yaml:"phoneNumber"`         // E.164 override
-	VoiceEnabled        *bool  `yaml:"voiceEnabled"`        // Default: true (pointer to distinguish unset from false)
-	PcmAudioPort        string `yaml:"pcmAudioPort"`        // Optional override, auto-detected
-	NetworkRegistration bool   `yaml:"networkRegistration"` // Default: false
-	SimPin              string `yaml:"simPin"`              // Optional
+	SerialPort          string              `yaml:"serialPort"`          // Required, default: /dev/ttyUSB2
+	PhoneNumber         string              `yaml:"phoneNumber"`         // E.164 override
+	VoiceEnabled        *bool               `yaml:"voiceEnabled"`        // Default: true (pointer to distinguish unset from false)
+	PcmAudioPort        string              `yaml:"pcmAudioPort"`        // Optional override, auto-detected
+	NetworkRegistration bool                `yaml:"networkRegistration"` // Default: false
+	SimPin              string              `yaml:"simPin"`              // Optional
+	AudioRecovery       AudioRecoveryConfig `yaml:"audioRecovery"`       // PCM audio subsystem recovery
+}
+
+// AudioRecoveryConfig controls how the gateway recovers the modem's PCM audio
+// subsystem when call teardown (AT+CPCMREG=0) repeatedly fails.
+//
+// On the SIM7600, failed PCM teardown can accumulate over many calls until the
+// network uplink silently stops working (the far end hears nothing while the
+// app still hears them). Robust teardown and verification are always active;
+// these options control only the last-resort automatic soft reset.
+type AudioRecoveryConfig struct {
+	// SoftResetEnabled allows the gateway to issue a soft reset (AT+CFUN=1,1)
+	// after repeated teardown failures, to clear wedged modem audio state
+	// without a physical power-cycle. Default false (detect and log only).
+	// A soft reset briefly deregisters the modem from the network (~30-60s)
+	// and is only issued while idle (at end of call).
+	SoftResetEnabled bool `yaml:"softResetEnabled"`
+
+	// SoftResetThreshold is the number of consecutive failed/unverified PCM
+	// teardowns before a soft reset is issued. Default: 3.
+	SoftResetThreshold int `yaml:"softResetThreshold"`
 }
 
 // TLSConfig holds TLS settings for WebSocket connections.
@@ -89,6 +110,10 @@ func applyDefaults(cfg *Config) {
 	if cfg.Modem.VoiceEnabled == nil {
 		t := true
 		cfg.Modem.VoiceEnabled = &t
+	}
+
+	if cfg.Modem.AudioRecovery.SoftResetThreshold <= 0 {
+		cfg.Modem.AudioRecovery.SoftResetThreshold = 3
 	}
 
 	if cfg.Log.Level == "" {
@@ -156,6 +181,19 @@ modem:
 
   # Optional: SIM PIN for automatic unlock.
   # simPin: ""
+
+  # PCM audio subsystem recovery.
+  # Robust teardown and verification of the modem's PCM audio path run
+  # automatically. These options control only the last-resort soft reset used
+  # when teardown keeps failing (a state that can otherwise require a physical
+  # power-cycle to clear).
+  audioRecovery:
+    # Allow an automatic soft reset (AT+CFUN=1,1) after repeated teardown
+    # failures. Briefly deregisters the modem from the network (~30-60s), so
+    # it is only issued while idle. Default: false (detect and log only).
+    softResetEnabled: false
+    # Consecutive teardown failures before a soft reset is issued. Default: 3.
+    softResetThreshold: 3
 
 tls:
   # Optional: Path to custom CA certificate in PEM format.

@@ -18,6 +18,20 @@ interface WebRtcAudioClient {
     val connectionState: StateFlow<WebRtcState>
 
     /**
+     * Whether the peer connection is currently receiving media from the remote end.
+     *
+     * Backed by WebRTC's `onIceConnectionReceivingChange`. This goes `false` when
+     * inbound media stops even though ICE remains nominally connected — the exact
+     * situation when a remote PSTN caller hangs up but the app↔MediaBridge leg stays
+     * up. Consumers can use it to drive a media-inactivity watchdog as a last-resort
+     * teardown when the explicit "disconnected" signal is missed.
+     *
+     * Defaults to `true` so a freshly-connected call is not immediately flagged as
+     * inactive before the first receiving callback arrives.
+     */
+    val mediaReceiving: StateFlow<Boolean>
+
+    /**
      * Create an SDP offer for a new audio session.
      *
      * Initializes the PeerConnection (if not already created), adds a local

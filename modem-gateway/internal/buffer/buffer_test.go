@@ -406,3 +406,115 @@ func TestUnicode_Content(t *testing.T) {
 		t.Errorf("unicode content not preserved: got %q", items[0].Message)
 	}
 }
+
+// keyedEntry is used for testing keyed buffer operations.
+type keyedEntry struct {
+	Key  string `json:"key"`
+	Data string `json:"data"`
+}
+
+func keyedFn(e keyedEntry) string { return e.Key }
+
+func TestKeyed_RemoveByKey(t *testing.T) {
+	path := tempFilePath(t)
+	buf, err := NewKeyed[keyedEntry](path, 10, keyedFn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, k := range []string{"a", "b", "c"} {
+		if err := buf.Push(keyedEntry{Key: k, Data: "x"}); err != nil {
+			t.Fatalf("push %s failed: %v", k, err)
+		}
+	}
+
+	if err := buf.Remove("b"); err != nil {
+		t.Fatalf("remove failed: %v", err)
+	}
+
+	items := buf.Snapshot()
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items after remove, got %d", len(items))
+	}
+	if items[0].Key != "a" || items[1].Key != "c" {
+		t.Fatalf("unexpected remaining items: %+v", items)
+	}
+
+	// Removal must be durable across reload.
+	buf2, err := NewKeyed[keyedEntry](path, 10, keyedFn)
+	if err != nil {
+		t.Fatalf("reload failed: %v", err)
+	}
+	if buf2.Len() != 2 {
+		t.Fatalf("expected 2 items after reload, got %d", buf2.Len())
+	}
+}
+
+func TestKeyed_RemoveMissingIsNoop(t *testing.T) {
+	path := tempFilePath(t)
+	buf, err := NewKeyed[keyedEntry](path, 10, keyedFn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	buf.Push(keyedEntry{Key: "a", Data: "x"})
+
+	if err := buf.Remove("nonexistent"); err != nil {
+		t.Fatalf("remove of missing key should be nil, got %v", err)
+	}
+	if buf.Len() != 1 {
+		t.Fatalf("expected 1 item, got %d", buf.Len())
+	}
+}
+
+func TestKeyed_DuplicatePushSuppressed(t *testing.T) {
+	path := tempFilePath(t)
+	buf, err := NewKeyed[keyedEntry](path, 10, keyedFn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := buf.Push(keyedEntry{Key: "dup", Data: "first"}); err != nil {
+		t.Fatalf("push failed: %v", err)
+	}
+	if err := buf.Push(keyedEntry{Key: "dup", Data: "second"}); err != nil {
+		t.Fatalf("push failed: %v", err)
+	}
+
+	if buf.Len() != 1 {
+		t.Fatalf("expected duplicate push to be suppressed, got %d items", buf.Len())
+	}
+	items := buf.Snapshot()
+	if items[0].Data != "first" {
+		t.Fatalf("expected first value retained, got %q", items[0].Data)
+	}
+}
+
+func TestSnapshot_DoesNotClear(t *testing.T) {
+	path := tempFilePath(t)
+	buf, err := NewKeyed[keyedEntry](path, 10, keyedFn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	buf.Push(keyedEntry{Key: "a", Data: "x"})
+	buf.Push(keyedEntry{Key: "b", Data: "y"})
+
+	snap := buf.Snapshot()
+	if len(snap) != 2 {
+		t.Fatalf("expected 2 items in snapshot, got %d", len(snap))
+	}
+	// Buffer must be unchanged after snapshot.
+	if buf.Len() != 2 {
+		t.Fatalf("snapshot must not clear buffer, got %d", buf.Len())
+	}
+}
+
+func TestSnapshot_Empty(t *testing.T) {
+	path := tempFilePath(t)
+	buf, err := NewKeyed[keyedEntry](path, 10, keyedFn)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if snap := buf.Snapshot(); snap != nil {
+		t.Fatalf("expected nil snapshot for empty buffer, got %v", snap)
+	}
+}

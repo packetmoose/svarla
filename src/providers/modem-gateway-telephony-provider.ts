@@ -210,6 +210,29 @@ export class ModemGatewayTelephonyProvider implements TelephonyProvider {
   }
 
   /**
+   * Acknowledge durable receipt of an inbound SMS back to the gateway.
+   *
+   * The gateway keeps every received SMS in a persistent buffer and only
+   * removes it once it receives this ack, keyed by messageId. This must be
+   * called only after the message has been durably persisted server-side (or
+   * confirmed to be a duplicate), which guarantees no SMS is dropped from the
+   * gateway buffer before the server has accepted it.
+   *
+   * Best-effort: if the gateway is momentarily disconnected the ack is not
+   * sent, but the gateway will re-deliver the (now duplicate) message and the
+   * server will re-ack after dedup, so no message is lost.
+   */
+  ackIncomingSms(messageId: string): void {
+    if (!messageId || !this.wsHandler) {
+      return;
+    }
+    this.wsHandler.sendMessage({
+      type: 'sms_ack',
+      messageId,
+    });
+  }
+
+  /**
    * List phone numbers reported by the connected Go binary.
    * Returns the single reported number with its capabilities, or empty array.
    *
@@ -408,7 +431,7 @@ export class ModemGatewayTelephonyProvider implements TelephonyProvider {
       type: 'incoming_sms',
       messageId: msg.messageId as string,
       from: msg.from as string,
-      to: msg.to as string,
+      to: (msg.to as string) || this.reportedNumber || '',
       body: msg.body as string,
       timestamp: (msg.timestamp as number) ?? Date.now(),
     });

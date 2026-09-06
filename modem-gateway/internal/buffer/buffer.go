@@ -22,6 +22,11 @@ type PersistentBuffer[T any] struct {
 	items    []T
 	path     string
 	capacity int
+
+	// keyFn, when non-nil, returns a stable unique key for an item. It enables
+	// per-item removal via Remove and duplicate suppression on Push. When nil,
+	// the buffer behaves as a plain FIFO with no keyed operations.
+	keyFn func(T) string
 }
 
 // New creates a new PersistentBuffer backed by the file at path.
@@ -29,6 +34,15 @@ type PersistentBuffer[T any] struct {
 // are skipped with a warning logged to stderr. If the file does not exist,
 // an empty buffer is created (the file is written on first Push).
 func New[T any](path string, capacity int) (*PersistentBuffer[T], error) {
+	return NewKeyed[T](path, capacity, nil)
+}
+
+// NewKeyed creates a PersistentBuffer that identifies items by the key returned
+// from keyFn. A keyed buffer supports Remove (delete a specific item by key)
+// and suppresses duplicate Pushes of an already-present key, which together
+// enable an at-least-once, ack-to-remove delivery model. Passing a nil keyFn
+// is equivalent to New (plain FIFO, no keyed operations).
+func NewKeyed[T any](path string, capacity int, keyFn func(T) string) (*PersistentBuffer[T], error) {
 	if capacity <= 0 {
 		return nil, fmt.Errorf("buffer: capacity must be positive, got %d", capacity)
 	}
@@ -37,6 +51,7 @@ func New[T any](path string, capacity int) (*PersistentBuffer[T], error) {
 		path:     path,
 		capacity: capacity,
 		items:    make([]T, 0),
+		keyFn:    keyFn,
 	}
 
 	if err := buf.loadFromDisk(); err != nil {
@@ -54,9 +69,30 @@ func (b *PersistentBuffer[T]) Push(item T) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
+	// For keyed buffers, suppress a duplicate push of an already-present key so
+	// re-delivery attempts (e.g. re-reading the same SMS from the SIM after a
+	// crash) do not create duplicate entries.
+	if b.keyFn != nil {
+		key := b.keyFn(item)
+		for _, existing := range b.items {
+			if b.keyFn(existing) == key {
+				return nil
+			}
+		}
+	}
+
 	evicted := false
 	if len(b.items) >= b.capacity {
-		// Evict oldest (index 0)
+		// Evict oldest (index 0). This is a data-loss point: the oldest
+		// undelivered entry is discarded. Log it so a saturated buffer is
+		// visible rather than silently dropping messages.
+		if b.keyFn != nil {
+			log.Printf("buffer: capacity %d reached in %s; evicting oldest entry (key=%s) — possible data loss",
+				b.capacity, b.path, b.keyFn(b.items[0]))
+		} else {
+			log.Printf("buffer: capacity %d reached in %s; evicting oldest entry — possible data loss",
+				b.capacity, b.path)
+		}
 		b.items = b.items[1:]
 		evicted = true
 	}
@@ -67,6 +103,48 @@ func (b *PersistentBuffer[T]) Push(item T) error {
 		return b.rewriteFile()
 	}
 	return b.appendLine(item)
+}
+
+// Remove deletes the item with the given key from the buffer and rewrites the
+// backing file atomically. It is a no-op (returns nil) if no item matches or if
+// the buffer has no key function. Used to drop a message once the server has
+// acknowledged durable receipt.
+func (b *PersistentBuffer[T]) Remove(key string) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if b.keyFn == nil {
+		return nil
+	}
+
+	idx := -1
+	for i, item := range b.items {
+		if b.keyFn(item) == key {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		return nil
+	}
+
+	b.items = append(b.items[:idx], b.items[idx+1:]...)
+	return b.rewriteFile()
+}
+
+// Snapshot returns a copy of all buffered entries in chronological order
+// (oldest first) WITHOUT clearing the buffer. Callers deliver these and then
+// call Remove for each entry the server acknowledges. Returns nil when empty.
+func (b *PersistentBuffer[T]) Snapshot() []T {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	if len(b.items) == 0 {
+		return nil
+	}
+	result := make([]T, len(b.items))
+	copy(result, b.items)
+	return result
 }
 
 // DrainAll returns all buffered entries in chronological order (oldest first)

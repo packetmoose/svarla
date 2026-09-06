@@ -120,13 +120,13 @@ class BadgeManager @Inject constructor(
      * Called when the user opens a Conversation_Thread.
      * Updates local state and notifies server.
      */
-    fun markThreadAsRead(phoneNumber: String) {
+    fun markThreadAsRead(providerNumber: String, phoneNumber: String) {
         scope.launch {
             try {
-                val counts = readStateApi.markThreadAsRead(phoneNumber)
+                val counts = readStateApi.markThreadAsRead(providerNumber, phoneNumber)
                 updateCounts(counts)
             } catch (e: Exception) {
-                Log.e(TAG, "Failed to mark thread as read: $phoneNumber", e)
+                Log.e(TAG, "Failed to mark thread as read: $providerNumber -> $phoneNumber", e)
                 refreshCounts()
             }
         }

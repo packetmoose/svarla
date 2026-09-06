@@ -88,7 +88,10 @@ class PushWebSocketService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
-                goForeground(buildNotification("Connecting…"))
+                if (!goForeground(buildNotification("Connecting…"))) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 ensureWebSocketConnected()
                 observeConnectionState()
             }
@@ -103,7 +106,10 @@ class PushWebSocketService : Service() {
             }
             else -> {
                 // Service restarted by system — reconnect
-                goForeground(buildNotification("Reconnecting…"))
+                if (!goForeground(buildNotification("Reconnecting…"))) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 ensureWebSocketConnected()
                 observeConnectionState()
             }
@@ -138,22 +144,71 @@ class PushWebSocketService : Service() {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
         val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
-        alarmManager.setAndAllowWhileIdle(
-            android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
-            android.os.SystemClock.elapsedRealtime() + RESTART_DELAY_MS,
-            pendingIntent
-        )
+        val triggerAt = android.os.SystemClock.elapsedRealtime() + RESTART_DELAY_MS
+
+        // Prefer an exact alarm so the restart isn't deferred by Doze/OEM batching.
+        // canScheduleExactAlarms() is only meaningful on API 31+; below that,
+        // exact allow-while-idle alarms are always permitted.
+        val canScheduleExact = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            alarmManager.canScheduleExactAlarms()
+        } else {
+            true
+        }
+
+        try {
+            if (canScheduleExact) {
+                alarmManager.setExactAndAllowWhileIdle(
+                    android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    triggerAt,
+                    pendingIntent
+                )
+                Log.d(TAG, "Scheduled exact restart alarm in ${RESTART_DELAY_MS}ms")
+            } else {
+                // Exact alarms not permitted (user revoked SCHEDULE_EXACT_ALARM).
+                // Fall back to the inexact allow-while-idle alarm, which Doze may defer.
+                alarmManager.setAndAllowWhileIdle(
+                    android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                    triggerAt,
+                    pendingIntent
+                )
+                Log.d(TAG, "Exact alarms not permitted; scheduled inexact restart alarm")
+            }
+        } catch (e: SecurityException) {
+            // Defensive: some OEMs throw despite canScheduleExactAlarms() returning true.
+            Log.w(TAG, "Exact alarm rejected, falling back to inexact restart", e)
+            alarmManager.setAndAllowWhileIdle(
+                android.app.AlarmManager.ELAPSED_REALTIME_WAKEUP,
+                triggerAt,
+                pendingIntent
+            )
+        }
     }
 
-    private fun goForeground(notification: Notification) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+    /**
+     * Promotes the service to the foreground. Returns true on success.
+     *
+     * On Android 12+ (enforced on 14/15), calling startForeground() for a
+     * dataSync service that was started from a disallowed background context
+     * (e.g. a BOOT_COMPLETED receiver) throws
+     * ForegroundServiceStartNotAllowedException (a subclass of
+     * IllegalStateException). We catch it and return false so the caller can
+     * stop the service cleanly instead of crashing the process.
+     */
+    private fun goForeground(notification: Notification): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "startForeground rejected, stopping service: ${e.message}")
+            false
         }
     }
 

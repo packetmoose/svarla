@@ -11,6 +11,8 @@ mediabridge
 build-output
 docker
 docs
-scripts
+# scripts/ is needed for the compiled maintenance scripts (e.g. reassign-number-colors).
+# Exclude the shell scripts (build/release tooling) but keep the TypeScript ones.
+scripts/*.sh
 .github
 .idea

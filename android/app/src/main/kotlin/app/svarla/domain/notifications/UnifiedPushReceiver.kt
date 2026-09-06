@@ -93,7 +93,10 @@ class UnifiedPushReceiver : MessagingReceiver() {
 
     override fun onMessage(context: Context, message: ByteArray, instance: String) {
         val messageStr = String(message, Charsets.UTF_8)
-        Log.d(TAG, "Wake signal received: $messageStr")
+        // Logged at INFO so it's visible in release builds — this is the client-side
+        // counterpart to the server's "Wake signal delivery summary" log and lets a
+        // single notification be traced end-to-end.
+        Log.i(TAG, "Wake signal received via UnifiedPush: $messageStr")
 
         val entryPoint = getEntryPoint(context)
         val notificationHandler = entryPoint.notificationHandler()
@@ -108,6 +111,7 @@ class UnifiedPushReceiver : MessagingReceiver() {
             Log.e(TAG, "Failed to parse wake signal", e)
             return
         }
+        Log.i(TAG, "Wake signal parsed: id=${signal.id} priority=${signal.priority}")
 
         // CRITICAL: For high-priority signals (incoming calls), route through TelecomManager
         // IMMEDIATELY (synchronously within onMessage) to use the BroadcastReceiver exemption

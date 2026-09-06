@@ -10,7 +10,7 @@ interface NumberEntry {
   providerId: string;
   providerDisplayName: string | null;
   blockInboundCalls: boolean;
-  color: string;
+  color: string | null;
 }
 
 interface NumbersResponse {

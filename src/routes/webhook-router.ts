@@ -5,6 +5,7 @@ import type { ConversationService } from '../services/conversation-service.js';
 import type { WakeSignalPublisher } from '../notifications/wake-signal-publisher.js';
 import type { DeviceRegistryManager } from '../services/device-registry-manager.js';
 import type { VonageTelephonyProvider } from '../providers/vonage-telephony-provider.js';
+import type { Elks46TelephonyProvider } from '../providers/elks46-telephony-provider.js';
 import type { NumberManagementService } from '../services/number-management-service.js';
 import type { WebSocketBroadcaster } from '../websocket/broadcaster.js';
 import type { CallOrchestrator } from '../services/call-orchestrator.js';
@@ -159,7 +160,7 @@ export function registerWebhookRouter(
           await wakeSignalPublisher.sendToAllDevices(devices, {
             id: callId,
             priority: 'normal',
-          });
+          }, 'blocked_call');
         }
       } catch (err) {
         server.log.error(err, '[BlockedCall] Failed to send wake signals');
@@ -285,6 +286,15 @@ export function registerWebhookRouter(
           const normalizedTo = to.startsWith('+') ? to : `+${to}`;
           const result = await callOrchestrator.handleInbound(providerId, callId, normalizedFrom, normalizedTo);
 
+          // Register a control-plane hangup callback so 46elks notifies us when
+          // the call leg ends (including when the remote caller hangs up). This
+          // is the inbound counterpart to the `whenhangup` set in makeCall for
+          // outbound calls. Without it, inbound teardown relies solely on the
+          // audio WebSocket closing, which can leave the call active on the
+          // client if that socket lingers.
+          const elks46Instance = entry.instance as Elks46TelephonyProvider;
+          const whenhangup = elks46Instance.getHangupWebhookUrl();
+
           // Get the WebSocket number from provider config
           const providerConfig = entry.config as Record<string, string>;
           const wsNumber = providerConfig.websocket_number;
@@ -304,6 +314,7 @@ export function registerWebhookRouter(
             return reply.status(200).send({
               connect: wsNumber,
               callerid: from,
+              whenhangup,
             });
           }
 
@@ -315,6 +326,7 @@ export function registerWebhookRouter(
           return reply.status(200).send({
             connect: result.sipUri,
             callerid: from,
+            whenhangup,
           });
         } catch (err) {
           server.log.error(err, `Failed to handle 46elks inbound call via CallOrchestrator`);
@@ -395,7 +407,15 @@ export function registerWebhookRouter(
         try {
           const normalizedFrom = from.startsWith('+') ? from : (isDialableNumber(from) ? `+${from}` : from);
           const result = await callOrchestrator.handleInbound(providerId, providerCallId, normalizedFrom, normalizedTo);
-          ncco = provider.generateAnswerNcco({ from, to, sipUri: result.sipUri });
+          // Attach an event URL so Vonage POSTs the inbound SIP-connect leg's
+          // lifecycle events (including `completed` on caller hangup) to our
+          // /event webhook. This is the control-plane teardown signal: Vonage
+          // does not reliably send a SIP BYE to MediaBridge for inbound calls,
+          // so without this the call can never be torn down.
+          const eventUrl = webhookBaseUrl
+            ? `${webhookBaseUrl}/webhooks/${providerId}/event`
+            : undefined;
+          ncco = provider.generateAnswerNcco({ from, to, sipUri: result.sipUri, eventUrl });
         } catch (err) {
           server.log.error(err, `Failed to handle inbound call via CallOrchestrator for provider ${providerId}`);
           // Fallback: silent hold (caller will hear nothing, but call won't crash Vonage)
@@ -471,7 +491,13 @@ export function registerWebhookRouter(
         try {
           const normalizedFrom = from.startsWith('+') ? from : (isDialableNumber(from) ? `+${from}` : from);
           const result = await callOrchestrator.handleInbound(providerId, providerCallId, normalizedFrom, normalizedTo);
-          ncco = provider.generateAnswerNcco({ from, to, sipUri: result.sipUri });
+          // Attach an event URL so Vonage POSTs the inbound SIP-connect leg's
+          // lifecycle events (including `completed` on caller hangup) to our
+          // /event webhook — the control-plane teardown signal (see GET branch).
+          const eventUrl = webhookBaseUrl
+            ? `${webhookBaseUrl}/webhooks/${providerId}/event`
+            : undefined;
+          ncco = provider.generateAnswerNcco({ from, to, sipUri: result.sipUri, eventUrl });
         } catch (err) {
           server.log.error(err, `Failed to handle inbound call via CallOrchestrator for provider ${providerId}, uuid=${providerCallId}`);
           // Fallback: silent hold
@@ -567,6 +593,29 @@ export function registerWebhookRouter(
       // match the internal callId the app is tracking).
       const shouldSkipProcessEvent = !!callOrchestrator;
 
+      // Even though we suppress raw provider events from being broadcast to
+      // clients, a terminal event (the caller hanging up) is the one signal we
+      // MUST act on: Vonage does not reliably deliver a SIP BYE to MediaBridge
+      // for inbound calls, so this /event webhook is the primary teardown path.
+      // Resolve the Vonage UUID to our internal callId and end the call through
+      // the orchestrator — this broadcasts the correct internal callId to
+      // clients (no raw-UUID leak) and runs the normal cleanup.
+      if (callOrchestrator && body.uuid) {
+        const terminalStatuses = ['completed', 'failed', 'busy', 'unanswered', 'rejected', 'cancelled', 'timeout'];
+        if (body.status && terminalStatuses.includes(body.status)) {
+          const internalCallId = callOrchestrator.getCallIdByProviderCallId(body.uuid);
+          if (internalCallId) {
+            server.log.info(
+              { providerId: (request.params as { providerId: string }).providerId, uuid: body.uuid, status: body.status, internalCallId },
+              'Vonage terminal call event — ending call via orchestrator',
+            );
+            callOrchestrator.endCall(internalCallId, 'provider_call_state_changed').catch((err) => {
+              server.log.error(err, `Failed to end call ${internalCallId} from Vonage ${body.status} event`);
+            });
+          }
+        }
+      }
+
       if (!shouldSkipProcessEvent) {
         provider.processCallEvent({
           uuid: body.uuid,
@@ -622,7 +671,7 @@ export function registerWebhookRouter(
               wakeSignalPublisher.sendToAllDevices(devices, {
                 id: body.uuid!,
                 priority: 'high',
-              }).catch((err) => {
+              }, 'incoming_call_legacy').catch((err) => {
                 server.log.error(err, 'Failed to send wake signals for incoming call');
               });
             }

@@ -53,7 +53,18 @@ class BootReceiver : BroadcastReceiver() {
         val mode = deliveryPreferences.getStoredMode()
         if (mode == NotificationDeliveryMode.WEBSOCKET) {
             Log.i(TAG, "Starting PushWebSocketService after boot")
-            PushWebSocketService.start(context)
+            try {
+                PushWebSocketService.start(context)
+            } catch (e: Exception) {
+                // On Android 12+ (enforced on 14/15), starting a dataSync foreground
+                // service from a BOOT_COMPLETED receiver is disallowed and throws
+                // ForegroundServiceStartNotAllowedException (a subclass of
+                // IllegalStateException). Swallow it so the boot broadcast doesn't
+                // crash the freshly-started process. The service will be started
+                // normally when the user next opens the app (MainActivity ->
+                // Application auth coroutine connects SyncManager directly).
+                Log.w(TAG, "Cannot start PushWebSocketService from boot: ${e.message}")
+            }
         } else {
             Log.d(TAG, "Notification mode is $mode — UnifiedPush distributor handles delivery")
         }

@@ -92,6 +92,24 @@ describe('VonageTelephonyProvider', () => {
       ]);
     });
 
+    it('should include eventUrl on the SIP connect action when provided (inbound hangup teardown)', () => {
+      const ncco = provider.generateAnswerNcco({
+        from: '+14155551234',
+        to: '+14155550000',
+        sipUri: 'sip://session-abc@mediabridge:5060',
+        eventUrl: 'https://svarla.example/webhooks/vonage/event',
+      });
+
+      expect(ncco).toEqual([
+        {
+          action: 'connect',
+          endpoint: [{ type: 'sip', uri: 'sip://session-abc@mediabridge:5060' }],
+          from: '+14155551234',
+          eventUrl: ['https://svarla.example/webhooks/vonage/event'],
+        },
+      ]);
+    });
+
     it('should return SIP connect NCCO when sipUri is provided for outbound call', () => {
       const ncco = provider.generateAnswerNcco({
         from: '+14155550000',
