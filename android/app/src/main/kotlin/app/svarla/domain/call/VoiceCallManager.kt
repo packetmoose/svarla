@@ -479,6 +479,19 @@ class VoiceCallManager @Inject constructor(
     // ========================================================================
 
     /**
+     * Re-post the Telecom_Path incoming call notification with an enriched caller label.
+     *
+     * The Telecom_Path posts its notification synchronously from a wake signal that carries no
+     * caller info, so it initially shows "Unknown caller". Once the real caller id has been
+     * resolved (by [NotificationHandler]), this delegates to [CallServiceController] to re-post
+     * the notification with the correct name and the provider number it arrived on. No-op when
+     * the Telecom_Path is not active.
+     */
+    internal fun updateTelecomCallNotification(callId: String, displayName: String, providerLabel: String?) {
+        callServiceController.updateTelecomCallNotification(callId, displayName, providerLabel)
+    }
+
+    /**
      * Handle an incoming call event from the server.
      * Called when a WebSocket `call_event` with status="ringing" is received.
      *
@@ -1125,16 +1138,36 @@ class VoiceCallManager @Inject constructor(
         // Stop the foreground service — call is over
         callServiceController.stop()
 
-        // Handle missed inbound call notification
-        // NOTE: With server-managed notifications, the server handles the incoming_call →
-        // missed_call transition and broadcasts a notification_updated event. The
-        // NotificationHandler processes that event and shows/updates the missed call
-        // notification. We no longer show it directly here to avoid duplicates.
+        // Handle missed inbound call notification.
+        //
+        // We post the missed-call notification LOCALLY the moment the call ends, rather than
+        // waiting for the server's incoming_call → missed_call `notification_updated` event.
+        // That server round-trip is gated behind the ring/timeout window (up to 45s) and only
+        // arrives over WebSocket/push, so relying on it made the missed notification appear long
+        // after the call had ended. Posting it here makes the update instant.
+        //
+        // The ringing notification (local id 902/901/903) is cancelled by notifyCallEnded()/stop()
+        // above, and MissedCallNotifier posts a fresh missed-call notification — so the user sees
+        // a single notification transition from "ringing" to "missed" with no lingering duplicate.
+        //
+        // MissedCallNotifier de-duplicates by callId and by caller number (see wasAlreadyNotified /
+        // wasRecentlyNotifiedForCaller), so the later server `notification_updated` event is
+        // suppressed downstream in NotificationHandler and does not produce a second notification.
         val callInfo = currentState.activeCallInfo
         if (callInfo != null && callInfo.isInbound && callInfo.connectedTime == null &&
             !userActedOnInboundCall && isMissedCallReason(reason)
         ) {
-            Log.d(TAG, "Inbound call missed: callId=${callInfo.callId}, reason=$reason (server handles notification)")
+            Log.d(TAG, "Inbound call missed: callId=${callInfo.callId}, reason=$reason — posting missed call notification locally")
+            // Prefer the friendly provider label, but fall back to the raw provider number so the
+            // missed-call notification still shows which of the user's numbers was called.
+            val missedProviderLabel = callInfo.providerNumberLabel?.takeIf { it.isNotEmpty() }
+                ?: callInfo.providerNumber.takeIf { it.isNotEmpty() }
+            missedCallNotifier.showMissedCallNotification(
+                callId = callInfo.callId,
+                callerNumber = callInfo.remoteNumber,
+                providerNumberLabel = missedProviderLabel,
+                timestamp = callInfo.startTime
+            )
         }
 
         // Reset the user-acted flag for next call

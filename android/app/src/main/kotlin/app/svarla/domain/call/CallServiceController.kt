@@ -13,6 +13,7 @@ import androidx.core.app.NotificationCompat
 import app.svarla.IncomingCallActivity
 import app.svarla.MainActivity
 import app.svarla.R
+import app.svarla.SvarlaApplication
 import app.svarla.domain.notifications.NotificationChannels
 import app.svarla.domain.notifications.NotificationHandler
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -38,6 +39,23 @@ interface CallServiceController {
     fun handleIncomingCallViaTelecom(callId: String, remoteNumber: String)
     /** Route an outgoing call through TelecomManager (Telecom_Path), falling back to Legacy_Path on failure. */
     fun handleOutgoingCallViaTelecom(destinationNumber: String)
+
+    /**
+     * Re-post the Telecom_Path incoming call notification (id
+     * [SvarlaConnectionService.TELECOM_CALL_NOTIFICATION_ID]) with an enriched caller label.
+     *
+     * The Telecom_Path posts the notification synchronously from a wake signal that carries no
+     * caller info, so it initially shows "Unknown caller". Once the real caller id arrives (from
+     * the notification fetch or a WebSocket event), this re-posts the notification with the
+     * resolved [displayName] so the shade/heads-up matches the full-screen UI.
+     *
+     * No-op when the Telecom_Path is not active (the WebSocket/foreground path manages its own
+     * notification) so it never posts a stray notification.
+     *
+     * [providerLabel] is the provider number (or its friendly label) the call arrived on. It is
+     * surfaced via CallStyle's verification-text slot, since CallStyle ignores contentText.
+     */
+    fun updateTelecomCallNotification(callId: String, displayName: String, providerLabel: String?)
 
     // ====== State Synchronization (App → Framework) ======
 
@@ -154,6 +172,98 @@ class CallServiceControllerImpl @Inject constructor(
         pendingIncomingCallId = null
         // Dismiss the incoming call notification posted by SvarlaConnectionService
         cancelTelecomCallNotification()
+    }
+
+    override fun updateTelecomCallNotification(callId: String, displayName: String, providerLabel: String?) {
+        // Only re-post when the Telecom_Path is actually driving this call. On the
+        // WebSocket/foreground path there is no notification 902 (NotificationHandler posts its
+        // own), so re-posting here would create a stray, orphaned call notification.
+        if (!isTelecomPathActive) {
+            Log.d(TAG, "updateTelecomCallNotification skipped: Telecom_Path not active")
+            return
+        }
+
+        // In the foreground the full-screen incoming call UI is already visible; the Telecom_Path
+        // does not post a heads-up notification in that case (see SvarlaConnectionService), so
+        // there is nothing to enrich.
+        if (SvarlaApplication.isInForeground) {
+            Log.d(TAG, "updateTelecomCallNotification skipped: app in foreground")
+            return
+        }
+
+        val notification = buildTelecomCallNotification(callId, displayName, providerLabel)
+        val nm = context.getSystemService(android.app.NotificationManager::class.java)
+        nm?.notify(SvarlaConnectionService.TELECOM_CALL_NOTIFICATION_ID, notification)
+        Log.d(TAG, "Re-posted Telecom_Path call notification enriched with caller: $displayName (provider: $providerLabel)")
+    }
+
+    /**
+     * Builds the Telecom_Path incoming call notification (id
+     * [SvarlaConnectionService.TELECOM_CALL_NOTIFICATION_ID]). Mirrors the notification built in
+     * [SvarlaConnectionService.launchIncomingCallActivity] so re-posting for enrichment keeps the
+     * same actions, full-screen intent, and CallStyle — only the caller label changes.
+     */
+    private fun buildTelecomCallNotification(
+        callId: String,
+        displayName: String,
+        providerLabel: String?
+    ): android.app.Notification {
+        val fullScreenIntent = IncomingCallActivity.createIntent(context, callId, displayName)
+        val fullScreenPendingIntent = PendingIntent.getActivity(
+            context, SvarlaConnectionService.TELECOM_CALL_NOTIFICATION_ID, fullScreenIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val answerIntent = Intent(context, MainActivity::class.java).apply {
+            action = NotificationHandler.ACTION_ANSWER_CALL
+            putExtra(NotificationHandler.EXTRA_CALL_ID, callId)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val answerPendingIntent = PendingIntent.getActivity(
+            context, SvarlaConnectionService.TELECOM_CALL_NOTIFICATION_ID + 1, answerIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val declineIntent = Intent(context, CallActionReceiver::class.java).apply {
+            action = CallActionReceiver.ACTION_DECLINE
+            putExtra(NotificationHandler.EXTRA_CALL_ID, callId)
+        }
+        val declinePendingIntent = PendingIntent.getBroadcast(
+            context, SvarlaConnectionService.TELECOM_CALL_NOTIFICATION_ID + 2, declineIntent,
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        )
+
+        val caller = androidx.core.app.Person.Builder()
+            .setName(displayName)
+            .setImportant(true)
+            .build()
+
+        // CallStyle renders only the caller (Person) name and the action buttons — it ignores
+        // setContentText. The provider number the call came in on is surfaced via CallStyle's
+        // verification-text slot so the user can see which of their numbers is being called.
+        val contentText = if (!providerLabel.isNullOrEmpty()) "Incoming call on $providerLabel" else "Incoming call"
+        val callStyle = NotificationCompat.CallStyle.forIncomingCall(
+            caller,
+            declinePendingIntent,
+            answerPendingIntent
+        )
+        if (!providerLabel.isNullOrEmpty()) {
+            callStyle.setVerificationText("on $providerLabel")
+        }
+
+        return NotificationCompat.Builder(context, NotificationChannels.CHANNEL_ID_CALLS)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(displayName)
+            .setContentText(contentText)
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setCategory(NotificationCompat.CATEGORY_CALL)
+            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setOngoing(true)
+            .setAutoCancel(false)
+            .setFullScreenIntent(fullScreenPendingIntent, true)
+            .setContentIntent(fullScreenPendingIntent)
+            .setStyle(callStyle)
+            .build()
     }
 
     private fun cancelTelecomCallNotification() {

@@ -356,11 +356,25 @@ class NotificationHandler @Inject constructor(
                 // Forward to VoiceCallManager (same logic as handleIncomingCallNotification)
                 val currentCallState = voiceCallManager.callState.value
 
-                // If already ringing for this call, enrich call info.
-                // The Telecom path may have started ringing using the notification ID
-                // (from the wake signal) as a temporary callId. When the notification fetch
-                // or WebSocket delivers the full notification, sourceEntityId contains the
-                // real call ID. Match on either sourceEntityId OR notification id (payload.id).
+                val enrichedName = contactName
+                    ?: contactResolver.resolveContactName(callerNumber)
+                    ?: callerNumber
+                // Prefer the friendly provider label; fall back to the raw provider number so the
+                // notification always indicates which of the user's numbers the call came in on.
+                val enrichedProviderLabel = providerLabel?.takeIf { it.isNotEmpty() }
+                    ?: providerNumber.takeIf { it.isNotEmpty() }
+
+                // The incoming-call notification is owned by the LOCAL call path
+                // (SvarlaConnectionService id 902 / CallForegroundService id 901 / fallback id 903),
+                // which VoiceCallManager posts synchronously from the push wake signal. We must NOT
+                // post a second (1000-series) notification here, or the user sees two notifications
+                // for one call. Instead we forward to VoiceCallManager (which posts/keeps the single
+                // local notification) and then enrich that notification with the resolved caller.
+                //
+                // This covers both cases:
+                //   - already RINGING (local path started first): enrich in place.
+                //   - IDLE (this event is what starts the call): handleIncomingCall transitions to
+                //     RINGING and posts the local notification, then we enrich it.
                 if (currentCallState.status == CallStatus.RINGING &&
                     (currentCallState.activeCallInfo?.callId == payload.sourceEntityId ||
                      currentCallState.activeCallInfo?.callId == payload.id)
@@ -372,105 +386,34 @@ class NotificationHandler @Inject constructor(
                         providerNumber = providerNumber,
                         providerNumberLabel = providerLabel
                     )
+                    voiceCallManager.updateTelecomCallNotification(
+                        callId = currentCallState.activeCallInfo?.callId ?: payload.sourceEntityId,
+                        displayName = enrichedName,
+                        providerLabel = enrichedProviderLabel
+                    )
                     return
                 }
 
-                // If not IDLE, ignore
+                // If not IDLE (e.g. CONNECTED/DIALING/ENDED for a different call), ignore.
                 if (currentCallState.status != CallStatus.IDLE) {
                     Log.d(TAG, "Incoming call ${payload.sourceEntityId} ignored: state is ${currentCallState.status}")
                     return
                 }
 
-                // Forward to VoiceCallManager to transition state to RINGING
+                // IDLE: this event starts the call. Forward to VoiceCallManager, which transitions
+                // to RINGING and posts the single local ring notification, then enrich it.
                 voiceCallManager.handleIncomingCall(
                     callId = payload.sourceEntityId,
                     fromNumber = callerNumber,
                     providerNumber = providerNumber,
                     providerNumberLabel = providerLabel
                 )
-
-                val displayName = contactName
-                    ?: contactResolver.resolveContactName(callerNumber)
-                    ?: callerNumber
-
-                val androidNotificationId = CALL_NOTIFICATION_ID_BASE + (++callNotificationCounter % 100)
-
-                // Full-screen intent for incoming call
-                val fullScreenIntent = app.svarla.IncomingCallActivity.createIntent(context, payload.sourceEntityId, callerNumber)
-                val fullScreenPendingIntent = PendingIntent.getActivity(
-                    context,
-                    androidNotificationId,
-                    fullScreenIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                voiceCallManager.updateTelecomCallNotification(
+                    callId = payload.sourceEntityId,
+                    displayName = enrichedName,
+                    providerLabel = enrichedProviderLabel
                 )
-
-                // Answer action intent
-                val answerIntent = Intent(context, MainActivity::class.java).apply {
-                    action = ACTION_ANSWER_CALL
-                    putExtra(EXTRA_CALL_ID, payload.sourceEntityId)
-                    putExtra(EXTRA_NOTIFICATION_ID, androidNotificationId)
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                }
-                val answerPendingIntent = PendingIntent.getActivity(
-                    context,
-                    androidNotificationId + 1000,
-                    answerIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                )
-
-                // Decline action intent
-                val declineIntent = Intent(context, CallActionReceiver::class.java).apply {
-                    action = CallActionReceiver.ACTION_DECLINE
-                    putExtra(EXTRA_CALL_ID, payload.sourceEntityId)
-                }
-                val declinePendingIntent = PendingIntent.getBroadcast(
-                    context,
-                    androidNotificationId + 2000,
-                    declineIntent,
-                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
-                )
-
-                val contentText = if (!providerLabel.isNullOrEmpty()) {
-                    "Incoming call on $providerLabel"
-                } else {
-                    "Incoming call"
-                }
-
-                val caller = androidx.core.app.Person.Builder()
-                    .setName(displayName)
-                    .setImportant(true)
-                    .build()
-
-                val notification = NotificationCompat.Builder(context, NotificationChannels.CHANNEL_ID_CALLS)
-                    .setSmallIcon(R.drawable.ic_notification)
-                    .setContentTitle(displayName)
-                    .setContentText(contentText)
-                    .setPriority(NotificationCompat.PRIORITY_HIGH)
-                    .setCategory(NotificationCompat.CATEGORY_CALL)
-                    .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                    .setOngoing(true)
-                    .setAutoCancel(false)
-                    .setSilent(true)
-                    .setContentIntent(fullScreenPendingIntent)
-                    .setFullScreenIntent(fullScreenPendingIntent, true)
-                    .setStyle(
-                        NotificationCompat.CallStyle.forIncomingCall(
-                            caller,
-                            declinePendingIntent,
-                            answerPendingIntent
-                        )
-                    )
-                    .build()
-
-                showNotification(payload.id, androidNotificationId, notification)
-                trackServerNotification(payload.id, androidNotificationId, TYPE_INCOMING_CALL, payload)
-                // Suppress the heads-up notification when app is in the foreground —
-                // the full-screen incoming call UI is already visible.
-                if (app.svarla.SvarlaApplication.isInForeground) {
-                    Log.d(TAG, "App is in foreground, cancelling incoming call notification to avoid overlap")
-                    notificationManager.cancel(androidNotificationId)
-                }
-                Log.d(TAG, "Showing incoming call notification: ${payload.sourceEntityId} from $displayName")
+                return
             }
 
             TYPE_INCOMING_SMS -> {
@@ -684,6 +627,19 @@ class NotificationHandler @Inject constructor(
                     (fromNumber != null && voiceCallManager.wasRecentCallDeclinedFrom(fromNumber))
                 ) {
                     Log.d(TAG, "Suppressing missed_call type change for declined call: id=${payload.id}, callId=$callId")
+                    notificationManager.cancel(androidNotificationId)
+                    untrackServerNotification(payload.id)
+                    return
+                }
+
+                // If VoiceCallManager already posted a missed-call notification locally when the
+                // call ended (the fast path), suppress this server-driven update so the user
+                // doesn't get a second missed-call notification. Dismiss any tracked incoming_call
+                // notification for this id and stop here.
+                if ((callId != null && missedCallNotifier.wasAlreadyNotified(callId)) ||
+                    (fromNumber != null && missedCallNotifier.wasRecentlyNotifiedForCaller(fromNumber))
+                ) {
+                    Log.d(TAG, "Suppressing missed_call type change: already notified locally (id=${payload.id}, callId=$callId)")
                     notificationManager.cancel(androidNotificationId)
                     untrackServerNotification(payload.id)
                     return
@@ -932,6 +888,17 @@ class NotificationHandler @Inject constructor(
                 providerNumber = providerNumber,
                 providerNumberLabel = providerNumberLabel
             )
+            // Enrich the already-posted Telecom_Path notification (id 902) with the real caller.
+            val enrichedName = payload.contactName
+                ?: contactResolver.resolveContactName(fromNumber)
+                ?: fromNumber
+            val enrichedProviderLabel = payload.providerNumberLabel?.takeIf { it.isNotEmpty() }
+                ?: payload.providerNumber?.takeIf { it.isNotEmpty() }
+            voiceCallManager.updateTelecomCallNotification(
+                callId = callId,
+                displayName = enrichedName,
+                providerLabel = enrichedProviderLabel
+            )
             return
         }
 
@@ -1102,6 +1069,15 @@ class NotificationHandler @Inject constructor(
         }
         if (callId == null && fromNumber != "Unknown" && voiceCallManager.wasRecentCallDeclinedFrom(fromNumber)) {
             Log.d(TAG, "Suppressing missed call notification for recently declined number: $fromNumber")
+            return
+        }
+
+        // If VoiceCallManager already posted a missed-call notification locally when the call
+        // ended, suppress this server-driven push to avoid a duplicate.
+        if ((callId != null && missedCallNotifier.wasAlreadyNotified(callId)) ||
+            (fromNumber != "Unknown" && missedCallNotifier.wasRecentlyNotifiedForCaller(fromNumber))
+        ) {
+            Log.d(TAG, "Suppressing missed call notification: already notified locally (callId=$callId, from=$fromNumber)")
             return
         }
 

@@ -88,7 +88,10 @@ class PushWebSocketService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_START -> {
-                goForeground(buildNotification("Connecting…"))
+                if (!goForeground(buildNotification("Connecting…"))) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 ensureWebSocketConnected()
                 observeConnectionState()
             }
@@ -103,7 +106,10 @@ class PushWebSocketService : Service() {
             }
             else -> {
                 // Service restarted by system — reconnect
-                goForeground(buildNotification("Reconnecting…"))
+                if (!goForeground(buildNotification("Reconnecting…"))) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
                 ensureWebSocketConnected()
                 observeConnectionState()
             }
@@ -178,15 +184,31 @@ class PushWebSocketService : Service() {
         }
     }
 
-    private fun goForeground(notification: Notification) {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+    /**
+     * Promotes the service to the foreground. Returns true on success.
+     *
+     * On Android 12+ (enforced on 14/15), calling startForeground() for a
+     * dataSync service that was started from a disallowed background context
+     * (e.g. a BOOT_COMPLETED receiver) throws
+     * ForegroundServiceStartNotAllowedException (a subclass of
+     * IllegalStateException). We catch it and return false so the caller can
+     * stop the service cleanly instead of crashing the process.
+     */
+    private fun goForeground(notification: Notification): Boolean {
+        return try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+                )
+            } else {
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            true
+        } catch (e: Exception) {
+            Log.w(TAG, "startForeground rejected, stopping service: ${e.message}")
+            false
         }
     }
 
