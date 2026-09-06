@@ -207,7 +207,14 @@ func (ml *ModemLifecycle) onModemConnected(initResult *modem.InitResult) {
 						return modem.OpenSerialPortWithTimeout(pcmPortPath, 0, pcmReadTimeout)
 					}
 					audioPipeline = audio.NewReopenable(opener, m, sampleRate)
-					log.Printf("Audio pipeline initialized on %s", pcmPortPath)
+					audioPipeline.SetRecoveryOptions(audio.RecoveryOptions{
+						SoftResetEnabled:   ml.cfg.Modem.AudioRecovery.SoftResetEnabled,
+						SoftResetThreshold: ml.cfg.Modem.AudioRecovery.SoftResetThreshold,
+					})
+					log.Printf("Audio pipeline initialized on %s (audio recovery: softReset=%t, threshold=%d)",
+						pcmPortPath,
+						ml.cfg.Modem.AudioRecovery.SoftResetEnabled,
+						ml.cfg.Modem.AudioRecovery.SoftResetThreshold)
 				}
 			}
 		}
