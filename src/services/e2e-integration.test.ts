@@ -70,7 +70,7 @@ function createMock46ElksProvider() {
     onEvent: vi.fn(),
     start: vi.fn(),
     stop: vi.fn(),
-    getWebhookEndpoints: vi.fn().mockReturnValue(['voice_start', 'voice_event', 'sms_incoming']),
+    getWebhookEndpoints: vi.fn().mockReturnValue(['voice_start', 'sms_incoming']),
     handleWebhook: vi.fn(),
   };
 }

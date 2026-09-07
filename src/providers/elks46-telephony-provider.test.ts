@@ -42,10 +42,11 @@ describe('Elks46TelephonyProvider', () => {
       expect(provider.handleWebhook).toBeTypeOf('function');
     });
 
-    it('should return correct webhook endpoints', () => {
+    it('should return correct webhook endpoints (dashboard-configured only)', () => {
+      // voice_event is intentionally excluded — it is set per-call as
+      // `whenhangup`, not statically configured in the 46elks dashboard.
       expect(provider.getWebhookEndpoints()).toEqual([
         'voice_start',
-        'voice_event',
         'sms_incoming',
       ]);
     });
@@ -275,6 +276,50 @@ describe('Elks46TelephonyProvider', () => {
 
       const numbers = await provider.listNumbers();
       expect(numbers).toEqual([]);
+    });
+  });
+
+  describe('checkHealth', () => {
+    it('should report healthy on a 200 from /a1/me', async () => {
+      const mockFetch = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+      vi.stubGlobal('fetch', mockFetch);
+
+      const health = await provider.checkHealth();
+
+      expect(mockFetch).toHaveBeenCalledWith(
+        'https://api.46elks.com/a1/me',
+        expect.objectContaining({ method: 'GET' }),
+      );
+      expect(health).toEqual({ healthy: true, reason: null });
+    });
+
+    it('should report an auth failure on 401 (so the registry stops retrying)', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 401 }));
+
+      const health = await provider.checkHealth();
+
+      expect(health.healthy).toBe(false);
+      expect(health.reason).toContain('401');
+      expect(health.authFailure).toBe(true);
+    });
+
+    it('should report a non-auth failure on other non-OK responses (still retryable)', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: false, status: 500 }));
+
+      const health = await provider.checkHealth();
+
+      expect(health.healthy).toBe(false);
+      expect(health.reason).toContain('500');
+      expect(health.authFailure).toBeFalsy();
+    });
+
+    it('should report unhealthy when the API is unreachable', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network error')));
+
+      const health = await provider.checkHealth();
+
+      expect(health.healthy).toBe(false);
+      expect(health.reason).toContain('unreachable');
     });
   });
 

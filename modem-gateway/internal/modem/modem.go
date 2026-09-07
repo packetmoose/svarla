@@ -543,6 +543,9 @@ var knownURCPrefixes = []string{
 	"+CRING:",
 	"MISSED_CALL:",
 	"VOICE CALL:",
+	// Emitted by the modem when SMS storage is full and a new message could not
+	// be stored. Handled by the SMS manager to reclaim space (drain).
+	"+SMS FULL",
 }
 
 // isKnownURC checks if a line starts with a known URC prefix.

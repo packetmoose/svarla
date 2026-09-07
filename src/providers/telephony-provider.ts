@@ -47,6 +47,26 @@ export interface ProviderNumber {
   capabilities: Set<NumberCapability>;
 }
 
+/**
+ * Result of a live provider health check.
+ *
+ * `healthy` reflects whether an authenticated probe against the provider's API
+ * succeeded. `reason` carries a short human-readable explanation when unhealthy
+ * (e.g. "Authentication failed (401)") and is null when healthy.
+ *
+ * `authFailure` is true when the failure is due to invalid credentials
+ * (e.g. HTTP 401/403). Such a failure will not recover on its own — it needs a
+ * config change — so the registry stops re-polling until the provider is
+ * reconfigured, avoiding pointless repeated calls with known-bad credentials
+ * (which can also trigger provider-side rate limiting or lockouts). Transient
+ * failures (network errors, 5xx, timeouts) leave this false so polling continues.
+ */
+export interface ProviderHealth {
+  healthy: boolean;
+  reason: string | null;
+  authFailure?: boolean;
+}
+
 // --- Event types ---
 
 export type TelephonyEvent =
@@ -87,6 +107,14 @@ export interface TelephonyProvider {
 
   /** Start the provider (connect to APIs, start listening for webhooks/signals). */
   start(): Promise<void>;
+
+  /**
+   * Perform a lightweight authenticated probe against the provider's API to
+   * verify credentials and reachability. Optional: providers that don't
+   * implement it are treated as healthy (e.g. modem-gateway, whose health is
+   * derived from its live WebSocket connection instead).
+   */
+  checkHealth?(): Promise<ProviderHealth>;
 
   /** Stop the provider and release resources. */
   stop(): Promise<void>;

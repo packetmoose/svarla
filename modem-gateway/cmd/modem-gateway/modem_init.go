@@ -29,6 +29,7 @@ type ModemLifecycle struct {
 	cfg           *config.Config
 	sigClient     *signaling.ReconnectingClient
 	smsBuffer     *buffer.PersistentBuffer[sms.IncomingSMS]
+	smsPartBuffer *buffer.PersistentBuffer[sms.StoredPart]
 	smsDelivery   *SMSDelivery
 	bridgeFactory func() *bridge.AudioBridge
 	ctx           context.Context
@@ -49,6 +50,7 @@ type ModemLifecycleConfig struct {
 	Cfg           *config.Config
 	SigClient     *signaling.ReconnectingClient
 	SmsBuffer     *buffer.PersistentBuffer[sms.IncomingSMS]
+	SmsPartBuffer *buffer.PersistentBuffer[sms.StoredPart]
 	SmsDelivery   *SMSDelivery
 	BridgeFactory func() *bridge.AudioBridge
 }
@@ -59,6 +61,7 @@ func NewModemLifecycle(cfg ModemLifecycleConfig) *ModemLifecycle {
 		cfg:           cfg.Cfg,
 		sigClient:     cfg.SigClient,
 		smsBuffer:     cfg.SmsBuffer,
+		smsPartBuffer: cfg.SmsPartBuffer,
 		smsDelivery:   cfg.SmsDelivery,
 		bridgeFactory: cfg.BridgeFactory,
 	}
@@ -80,6 +83,7 @@ func (ml *ModemLifecycle) Start(ctx context.Context) {
 		ml.cfg.Modem.SerialPort,
 		ml.cfg.Modem.PcmAudioPort,
 		0, // use default baud rate
+		ml.cfg.IsIdentityReportingEnabled(),
 		callbacks,
 	)
 
@@ -228,8 +232,15 @@ func (ml *ModemLifecycle) onModemConnected(initResult *modem.InitResult) {
 		log.Printf("Initial number discovery failed: %v", err)
 	}
 
-	// SMS manager.
-	smsMgr := sms.New(m, numberReporter.Number)
+	// SMS manager. Provide a durable concat-part store when available so
+	// multi-part messages don't wedge small SIM storage. Guard against a nil
+	// buffer (creation may have failed at startup) to avoid handing the
+	// reassembler a non-nil interface wrapping a nil pointer.
+	var partStore sms.PartStore
+	if ml.smsPartBuffer != nil {
+		partStore = ml.smsPartBuffer
+	}
+	smsMgr := sms.NewWithPartStore(m, numberReporter.Number, partStore)
 	smsMgr.RegisterURCHandlers()
 
 	// Delivery/status reports are not used on this hardware (see internal/sms),
@@ -266,6 +277,10 @@ func (ml *ModemLifecycle) onModemConnected(initResult *modem.InitResult) {
 		Model:              initResult.Info.Model,
 		Manufacturer:       initResult.Info.Manufacturer,
 		Firmware:           initResult.Info.Firmware,
+		IMEI:               initResult.Info.IMEI,
+		IMSI:               initResult.Info.IMSI,
+		ICCID:              initResult.Info.ICCID,
+		MSISDN:             initResult.Info.MSISDN,
 		UnsupportedWarning: initResult.Info.UnsupportedWarning,
 	})
 	statusReporter.Start(ml.ctx)

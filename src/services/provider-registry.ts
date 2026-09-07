@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { Kysely } from 'kysely';
 import type { Database } from '../database.js';
-import type { TelephonyProvider } from '../providers/telephony-provider.js';
+import type { TelephonyProvider, ProviderHealth } from '../providers/telephony-provider.js';
 import { validateProviderConfig } from '../validators/provider-config-validator.js';
 import { encryptConfig, decryptConfig } from './config-encryption.js';
 
@@ -16,6 +16,13 @@ export interface ProviderRegistryEntry {
   enabled: boolean;
   instance: TelephonyProvider | null;
   status: 'active' | 'unavailable' | 'disabled';
+  /**
+   * Latest live health-check result for providers that implement checkHealth().
+   * Absent/`null` means no check has run yet (or the provider does not support
+   * health checks), which callers should treat as "not yet known" rather than
+   * failed. The registry always initializes this to null for entries it creates.
+   */
+  health?: ProviderHealth | null;
 }
 
 /**
@@ -42,12 +49,23 @@ export type ProviderFactory = (
 ) => TelephonyProvider;
 
 /**
+ * Callback invoked whenever a provider instance becomes active — either when
+ * a new provider is added, or when an existing provider is (re)initialized
+ * after an update. Subscribers use this to attach runtime wiring (WebSocket
+ * handlers, event listeners, number sync) that must not require a server
+ * restart.
+ */
+export type ProviderActivatedListener = (entry: ProviderRegistryEntry) => void;
+
+/**
  * Static map of provider type to webhook endpoint suffixes.
  * Used until TelephonyProvider.getWebhookEndpoints() is added (task 6.1).
  */
 const WEBHOOK_ENDPOINTS: Record<string, string[]> = {
   vonage: ['answer', 'event', 'inbound-sms', 'sms-status'],
-  '46elks': ['voice_start', 'voice_event', 'sms_incoming'],
+  // `voice_event` is not a statically-configured webhook — it is passed
+  // per-call as `whenhangup`, so it is deliberately not listed here.
+  '46elks': ['voice_start', 'sms_incoming'],
   dummy: ['inbound-sms', 'event'],
   'modem-gateway': [],
 };
@@ -67,6 +85,8 @@ export class ProviderRegistry {
   private readonly logger: ProviderLogger;
   private readonly factory: ProviderFactory;
   private readonly encryptionKey: string | undefined;
+  private readonly activatedListeners: ProviderActivatedListener[] = [];
+  private healthPollTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(
     db: Kysely<Database>,
@@ -80,6 +100,41 @@ export class ProviderRegistry {
     this.logger = logger;
     this.factory = factory;
     this.encryptionKey = encryptionKey || undefined;
+  }
+
+  /**
+   * Register a listener that fires whenever a provider instance becomes active.
+   *
+   * The listener is invoked from {@link addProvider} (for newly created
+   * providers) and from {@link updateProvider} (when a provider is
+   * reinitialized after a config or enabled-status change). It is NOT invoked
+   * from {@link loadAll}; startup wiring is driven by the caller iterating
+   * {@link listProviders} so it can also run one-time startup-only work.
+   *
+   * This lets the server attach per-provider runtime wiring (e.g. the
+   * modem-gateway WebSocket handler and event listeners) at creation time,
+   * removing the need for a server restart before a new provider is usable.
+   */
+  onProviderActivated(listener: ProviderActivatedListener): void {
+    this.activatedListeners.push(listener);
+  }
+
+  /**
+   * Notify all activation listeners that a provider instance became active.
+   * Listener failures are isolated so one bad listener cannot prevent others
+   * (or the provider itself) from being wired up.
+   */
+  private emitProviderActivated(entry: ProviderRegistryEntry): void {
+    for (const listener of this.activatedListeners) {
+      try {
+        listener(entry);
+      } catch (err) {
+        this.logger.error(err, `Provider activation listener failed for ${entry.displayName} (${entry.id})`);
+      }
+    }
+    // Note: the immediate health check is awaited by addProvider/updateProvider
+    // (see checkProviderHealth calls there) so their API responses reflect the
+    // real, freshly-probed status rather than a stale value.
   }
 
   /**
@@ -117,6 +172,7 @@ export class ProviderRegistry {
         enabled: row.enabled,
         instance: null,
         status: 'unavailable',
+        health: null,
       };
 
       try {
@@ -147,6 +203,89 @@ export class ProviderRegistry {
    */
   getProvider(providerId: string): ProviderRegistryEntry | undefined {
     return this.providers.get(providerId);
+  }
+
+  /**
+   * Return the latest cached health result for a provider, or null if unknown
+   * (no check has run yet, or the provider does not support health checks).
+   */
+  getHealth(providerId: string): ProviderHealth | null {
+    return this.providers.get(providerId)?.health ?? null;
+  }
+
+  /**
+   * Run a single health check against one provider and cache the result on its
+   * entry. No-op (leaves health as-is) if the provider is missing, has no active
+   * instance, or its instance does not implement checkHealth(). Never throws —
+   * an unexpected error is recorded as an unhealthy result.
+   */
+  async checkProviderHealth(providerId: string): Promise<void> {
+    const entry = this.providers.get(providerId);
+    if (!entry || !entry.instance || typeof entry.instance.checkHealth !== 'function') {
+      return;
+    }
+    try {
+      entry.health = await entry.instance.checkHealth();
+      if (!entry.health.healthy) {
+        this.logger.warn(
+          `Provider ${entry.displayName} (${providerId}) health check failed: ${entry.health.reason ?? 'unknown'}`,
+        );
+      }
+    } catch (err) {
+      this.logger.error(err, `Health check threw for provider ${entry.displayName} (${providerId})`);
+      entry.health = { healthy: false, reason: 'Health check error' };
+    }
+  }
+
+  /**
+   * Run health checks for all enabled, active providers that support them,
+   * concurrently. Used on startup and by the periodic poller.
+   *
+   * Providers whose last check was an authentication failure are skipped: bad
+   * credentials won't recover without a config change, and re-probing with
+   * known-bad credentials wastes calls and risks provider-side rate limiting or
+   * lockouts. Reconfiguring a provider reinitializes it and clears this state
+   * (via updateProvider), and re-checks it immediately (via activation), so the
+   * skip is lifted as soon as the user updates credentials.
+   */
+  async checkAllHealth(): Promise<void> {
+    const targets = Array.from(this.providers.values()).filter(
+      (e) =>
+        e.enabled &&
+        e.instance &&
+        typeof e.instance.checkHealth === 'function' &&
+        !(e.health && e.health.authFailure),
+    );
+    await Promise.all(targets.map((e) => this.checkProviderHealth(e.id)));
+  }
+
+  /**
+   * Start periodic health polling. Runs an immediate check, then repeats every
+   * `intervalMs`. Safe to call once; a second call is ignored while polling is
+   * active. The interval timer is unref'd so it never keeps the process alive.
+   */
+  startHealthPolling(intervalMs: number): void {
+    if (this.healthPollTimer) {
+      return;
+    }
+    void this.checkAllHealth();
+    this.healthPollTimer = setInterval(() => {
+      void this.checkAllHealth();
+    }, intervalMs);
+    // Don't let the poll timer hold the event loop open (e.g. in tests / shutdown).
+    if (typeof this.healthPollTimer.unref === 'function') {
+      this.healthPollTimer.unref();
+    }
+  }
+
+  /**
+   * Stop periodic health polling and release the timer.
+   */
+  stopHealthPolling(): void {
+    if (this.healthPollTimer) {
+      clearInterval(this.healthPollTimer);
+      this.healthPollTimer = null;
+    }
   }
 
   /**
@@ -215,6 +354,7 @@ export class ProviderRegistry {
       enabled: true,
       instance: null,
       status: 'unavailable',
+      health: null,
     };
 
     try {
@@ -233,6 +373,16 @@ export class ProviderRegistry {
     }
 
     this.providers.set(providerId, entry);
+
+    // Wire up runtime handlers for the freshly-activated provider so it is
+    // usable immediately, without a server restart.
+    if (entry.status === 'active' && entry.instance) {
+      this.emitProviderActivated(entry);
+      // Await the initial health check so the caller (and the API response)
+      // reflects the real, freshly-probed status — e.g. surfacing invalid
+      // credentials immediately rather than showing "ok" until the next poll.
+      await this.checkProviderHealth(providerId);
+    }
 
     const webhookUrls = this.getWebhookUrls(providerId);
     this.logger.debug(`Provider ${providerId} webhook URLs: [${webhookUrls.join(', ')}]`);
@@ -307,6 +457,10 @@ export class ProviderRegistry {
     // Reinitialize if config or enabled status changed
     const needsReinit = mergedConfig !== undefined || updates.enabled !== undefined;
     if (needsReinit) {
+      // The instance (and thus its credentials) is being replaced, so any
+      // previously cached health result is stale. Clear it; a fresh check runs
+      // when the new instance is activated.
+      entry.health = null;
       // Stop existing instance if running
       if (entry.instance) {
         try {
@@ -325,6 +479,14 @@ export class ProviderRegistry {
           entry.instance = instance;
           entry.status = 'active';
           this.logger.info(`Provider ${entry.displayName} (${providerId}) reinitialized`);
+          // Re-wire runtime handlers on the new instance. The previous instance
+          // (and its handlers) was discarded when it was stopped above, so this
+          // reattaches the WebSocket handler and event listeners.
+          this.emitProviderActivated(entry);
+          // Await the health check so the update response reflects the real
+          // status of the new configuration (e.g. immediately flagging invalid
+          // credentials the user just saved).
+          await this.checkProviderHealth(providerId);
         } catch (err) {
           entry.status = 'unavailable';
           this.logger.error(err, `Failed to reinitialize provider ${entry.displayName} (${providerId})`);
@@ -404,6 +566,48 @@ export class ProviderRegistry {
     const base = this.webhookBaseUrl.replace(/\/$/, '');
 
     return endpoints.map((endpoint) => `${base}/webhooks/${providerId}/${endpoint}`);
+  }
+
+  /**
+   * Build the full signaling WebSocket URL that a modem-gateway binary should
+   * connect to, e.g. `wss://example.com/ws/providers/{id}/signaling`.
+   *
+   * The scheme is derived from the configured base URL (http → ws, https → wss),
+   * mirroring how webhook URLs are built from the same base. When no base URL is
+   * configured (e.g. local development), this falls back to the relative path so
+   * the value is still usable rather than malformed.
+   */
+  getSignalingWsUrl(providerId: string): string {
+    const path = `/ws/providers/${providerId}/signaling`;
+    const base = this.webhookBaseUrl.replace(/\/$/, '');
+    if (!base) {
+      return path;
+    }
+    // http → ws, https → wss. Leaves already-ws(s) bases untouched.
+    const wsBase = base.replace(/^http(s?):\/\//i, (_m, s: string) => `ws${s}://`);
+    return `${wsBase}${path}`;
+  }
+
+  /**
+   * Build the MediaBridge audio WebSocket base URL that 46elks connects to for
+   * call audio (its Realtime Voice API), e.g. `wss://example.com/audio/`.
+   *
+   * This is the URL a user registers against their 46elks WebSocket ("+4600…")
+   * number in the 46elks dashboard. It is proxied to the MediaBridge audio
+   * WebSocket (port 9091) behind TLS at the `/audio/` path — see the install
+   * docs. The scheme is derived from the configured base URL (http → ws,
+   * https → wss), matching how webhook and signaling URLs are built.
+   *
+   * Returns an empty string when no base URL is configured, since a relative
+   * audio URL is not usable by an external provider.
+   */
+  getAudioWsUrl(): string {
+    const base = this.webhookBaseUrl.replace(/\/$/, '');
+    if (!base) {
+      return '';
+    }
+    const wsBase = base.replace(/^http(s?):\/\//i, (_m, s: string) => `ws${s}://`);
+    return `${wsBase}/audio/`;
   }
 }
 

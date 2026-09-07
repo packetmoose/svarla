@@ -25,6 +25,7 @@ import { registerSessionMiddleware } from './middleware/session-middleware.js';
 import { registerWebhookRouter } from './routes/webhook-router.js';
 import { registerProviderRoutes } from './routes/provider-routes.js';
 import { ProviderRegistry } from './services/provider-registry.js';
+import type { ProviderRegistryEntry } from './services/provider-registry.js';
 import type { TelephonyProvider } from './providers/telephony-provider.js';
 import { VonageTelephonyProvider } from './providers/vonage-telephony-provider.js';
 import { DummyTelephonyProvider } from './providers/dummy-telephony-provider.js';
@@ -169,16 +170,6 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
 
   // Load all enabled providers from the database
   await registry.loadAll();
-
-  // Wire up ModemGatewayWsHandler for each active modem-gateway provider
-  for (const entry of registry.listProviders()) {
-    if (entry.type === 'modem-gateway' && entry.status === 'active' && entry.instance) {
-      const persistence = new ModemGatewayDbPersistence(db, entry.id);
-      const wsHandler = new ModemGatewayWsHandler(persistence, server.log);
-      (entry.instance as ModemGatewayTelephonyProvider).setWsHandler(wsHandler);
-      server.log.info(`WsHandler attached to modem-gateway provider "${entry.displayName}" (${entry.id})`);
-    }
-  }
 
   // Get the first active provider instance for services that still need a single provider
   // (ConversationService, legacy webhook routes, call routes)
@@ -345,8 +336,9 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
   );
   mediaBridgeFailureDetector.start();
 
-  // Sync numbers from all active providers into DB on startup
-  for (const providerEntry of activeProviders) {
+  // Sync numbers for a single provider into the DB. Used both on startup and
+  // whenever a provider is (re)activated at runtime.
+  async function syncProviderNumbers(providerEntry: ProviderRegistryEntry): Promise<void> {
     try {
       const syncResult = await numberManagementService.syncNumbers(providerEntry.id);
       if (syncResult.added.length > 0 || syncResult.removed.length > 0) {
@@ -359,13 +351,39 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
         );
       }
     } catch (err) {
-      server.log.warn(err, `Failed to sync numbers from provider "${providerEntry.displayName}" on startup`);
+      server.log.warn(err, `Failed to sync numbers from provider "${providerEntry.displayName}"`);
     }
   }
 
-  // Wire up provider events to services for all active providers
-  for (const providerEntry of activeProviders) {
-    const providerInstance = providerEntry.instance!;
+  // Attach all runtime wiring to a single active provider instance:
+  //   1. For modem-gateway: create and attach the signaling WebSocket handler
+  //      so the /ws/providers/:id/signaling route can accept the binary.
+  //   2. Register the provider event listener (incoming SMS / call handling).
+  //   3. For modem-gateway: wire automatic number sync on number_report.
+  //
+  // This runs for every active provider on startup AND for any provider that
+  // becomes active later via ProviderRegistry.addProvider / updateProvider.
+  // Centralizing it here is what lets a newly-created provider work without a
+  // server restart. It is safe to call exactly once per provider instance;
+  // each add/reinit produces a fresh instance with no listeners attached yet.
+  function wireProvider(providerEntry: ProviderRegistryEntry): void {
+    const providerInstance = providerEntry.instance;
+    if (!providerInstance) {
+      return;
+    }
+
+    // 1. Attach the WebSocket signaling handler for modem-gateway providers.
+    if (providerEntry.type === 'modem-gateway') {
+      const modemProvider = providerInstance as ModemGatewayTelephonyProvider;
+      if (!modemProvider.getWsHandler()) {
+        const persistence = new ModemGatewayDbPersistence(db, providerEntry.id);
+        const wsHandler = new ModemGatewayWsHandler(persistence, server.log);
+        modemProvider.setWsHandler(wsHandler);
+        server.log.info(`WsHandler attached to modem-gateway provider "${providerEntry.displayName}" (${providerEntry.id})`);
+      }
+    }
+
+    // 2. Wire provider events (incoming SMS / call handling) to services.
     providerInstance.onEvent((event) => {
       if (event.type === 'incoming_sms') {
         conversationService
@@ -550,14 +568,12 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
           });
       }
     });
-  }
 
-  // Wire up automatic number sync for modem-gateway providers.
-  // When a number_report is received, trigger syncNumbers() so the number
-  // is persisted to the database immediately without requiring manual sync.
-  for (const providerEntry of activeProviders) {
+    // 3. Wire automatic number sync for modem-gateway providers. When a
+    // number_report is received, trigger syncNumbers() so the number is
+    // persisted immediately without requiring a manual sync.
     if (providerEntry.type === 'modem-gateway') {
-      const modemProvider = providerEntry.instance as ModemGatewayTelephonyProvider;
+      const modemProvider = providerInstance as ModemGatewayTelephonyProvider;
       const providerId = providerEntry.id;
       modemProvider.onNumberReport(() => {
         numberManagementService.syncNumbers(providerId).catch((err) => {
@@ -566,6 +582,31 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
       });
     }
   }
+
+  // Wire every provider that is already active at startup, and sync its numbers.
+  for (const providerEntry of activeProviders) {
+    wireProvider(providerEntry);
+    await syncProviderNumbers(providerEntry);
+  }
+
+  // Wire any provider that becomes active later (created or reinitialized via
+  // the provider management API) so it is usable without a server restart.
+  // This is the fix for newly-created modem-gateway providers not registering
+  // their signaling WebSocket handler until a restart.
+  registry.onProviderActivated((providerEntry) => {
+    wireProvider(providerEntry);
+    // Fire-and-forget number sync; safe to run even for cloud providers.
+    void syncProviderNumbers(providerEntry);
+  });
+
+  // Start periodic health polling for cloud providers (Vonage, 46elks) so the
+  // UI reflects real API reachability / credential validity, not just whether
+  // the instance initialized at startup. Runs an immediate check, then repeats.
+  // Credentials/reachability change rarely, so a 5-minute interval is plenty and
+  // keeps provider API usage minimal. A fresh check also runs immediately when a
+  // provider is added or reconfigured, so this only covers drift over time.
+  const PROVIDER_HEALTH_POLL_INTERVAL_MS = 5 * 60_000;
+  registry.startHealthPolling(PROVIDER_HEALTH_POLL_INTERVAL_MS);
 
   // Middleware
   registerSessionMiddleware(server, authService, { webInterfaceEnabled: config.webInterfaceEnabled });
@@ -704,6 +745,7 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
   // Graceful shutdown hooks
   server.addHook('onClose', async () => {
     server.log.info('Server shutting down gracefully');
+    registry.stopHealthPolling();
     mediaBridgeFailureDetector.stop();
     mediaBridgeClient.stopHealthChecks();
     await mediaBridgeEventListener.stop();

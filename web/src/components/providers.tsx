@@ -1,4 +1,5 @@
 import { h, Component, Fragment } from "preact";
+import type { ComponentChildren } from "preact";
 import { api } from "../api";
 
 /* ---------- Types ---------- */
@@ -10,11 +11,17 @@ interface ProviderSummary {
   enabled: boolean;
   connected?: boolean;
   status: "ok" | "error" | "not_connected" | "disabled";
+  /** Explanation for an unhealthy status (bad credentials, API unreachable, etc.). */
+  healthReason?: string | null;
+  /** True when the error is specifically an authentication failure. */
+  authError?: boolean;
 }
 
 interface ProviderDetail extends ProviderSummary {
   config: Record<string, unknown>;
   webhookUrls: string[];
+  /** 46elks only: MediaBridge audio WebSocket URL to register in the 46elks dashboard. */
+  audioWsUrl?: string;
 }
 
 interface FieldError {
@@ -27,9 +34,15 @@ interface ModemStatus {
   signal: number | null;
   network: string | null;
   operator: string | null;
+  band: string | null;
+  networkTech: string | null;
   modemModel: string | null;
   modemManufacturer: string | null;
   firmware: string | null;
+  imei: string | null;
+  imsi: string | null;
+  iccid: string | null;
+  msisdn: string | null;
   stale: string[] | null;
   modemUnsupportedWarning: string | null;
 }
@@ -64,6 +77,49 @@ const CONFIG_FIELDS: Record<string, ConfigFieldDef[]> = {
   dummy: [],
   "modem-gateway": [],
 };
+
+/* ---------- Webhook endpoint labels ---------- */
+
+/**
+ * Friendly titles for webhook endpoints, keyed by the endpoint suffix (the last
+ * path segment of a webhook URL). Covers all provider types.
+ */
+const WEBHOOK_ENDPOINT_LABELS: Record<string, string> = {
+  // Vonage
+  answer: "Answer (voice)",
+  event: "Call events",
+  "inbound-sms": "Inbound SMS",
+  "sms-status": "SMS status",
+  // 46elks
+  voice_start: "Voice start",
+  sms_incoming: "Inbound SMS",
+};
+
+/**
+ * Derive a human-friendly title for a webhook URL from its endpoint suffix.
+ * Falls back to the raw suffix if the endpoint is not in the label map.
+ */
+function webhookEndpointLabel(url: string): string {
+  const suffix = url.split("?")[0].replace(/\/+$/, "").split("/").pop() ?? "";
+  return WEBHOOK_ENDPOINT_LABELS[suffix] ?? suffix ?? "Webhook";
+}
+
+/**
+ * Human-readable label for a provider's unified status. An error caused by an
+ * authentication failure is called out specifically as "Authentication Error".
+ */
+function providerStatusLabel(p: ProviderSummary): string {
+  switch (p.status) {
+    case "ok":
+      return "OK";
+    case "not_connected":
+      return "Not Connected";
+    case "disabled":
+      return "Disabled";
+    default:
+      return p.authError ? "Authentication Error" : "Error";
+  }
+}
 
 /* ---------- Pairing secret generation (client-side) ---------- */
 
@@ -245,6 +301,17 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
     }, 4000);
   };
 
+  /* ---------- Clipboard ---------- */
+
+  private handleCopy = async (text: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      this.showNotification(`${label} copied to clipboard`, "success");
+    } catch {
+      this.showNotification("Failed to copy to clipboard", "error");
+    }
+  };
+
   /* ---------- Toggle enable/disable ---------- */
 
   private handleToggleEnabled = async (provider: ProviderSummary) => {
@@ -411,13 +478,34 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
     );
 
     if (result.ok) {
+      // The update response reflects a fresh health check. If the saved config
+      // is unhealthy (e.g. invalid credentials), keep the provider open and warn
+      // instead of returning to the list — but the change IS saved either way.
       await this.fetchProviders();
-      this.setState({
-        editingProvider: null,
-        editSubmitting: false,
-        editErrors: [],
-      });
-      this.showNotification("Provider updated successfully", "success");
+      const updated = result.data;
+      if (updated.status === "error") {
+        this.stopStatusPolling();
+        this.setState({
+          editingProvider: null,
+          editSubmitting: false,
+          editErrors: [],
+          selectedProvider: updated, // reopen detail so the error + reason are visible
+          modemStatus: null,
+        });
+        this.showNotification(
+          updated.healthReason
+            ? `Saved, but the provider is in error: ${updated.healthReason}`
+            : "Saved, but the provider is in an error state",
+          "error",
+        );
+      } else {
+        this.setState({
+          editingProvider: null,
+          editSubmitting: false,
+          editErrors: [],
+        });
+        this.showNotification("Provider updated successfully", "success");
+      }
     } else {
       const errorData = result.data as { error?: string; fieldErrors?: FieldError[] };
       this.setState({
@@ -502,7 +590,22 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
           pairingSecretWsEndpoint: result.data.wsEndpoint || null,
         });
       } else {
-        this.showNotification("Provider added successfully", "success");
+        // Cloud providers: the create response reflects a fresh health check.
+        // Open the new provider's detail so its status is visible, and warn if
+        // it came back unhealthy (e.g. invalid credentials). It IS saved either
+        // way. fetchProviderDetail loads the freshly-probed status/healthReason.
+        const created = await api.get<ProviderDetail>(`/api/providers/${result.data.providerId}`);
+        if (created.ok && created.data.status === "error") {
+          this.setState({ selectedProvider: created.data });
+          this.showNotification(
+            created.data.healthReason
+              ? `Saved, but the provider is in error: ${created.data.healthReason}`
+              : "Saved, but the provider is in an error state",
+            "error",
+          );
+        } else {
+          this.showNotification("Provider added successfully", "success");
+        }
       }
     } else {
       const errorData = result.data as { error?: string; fieldErrors?: FieldError[] };
@@ -625,6 +728,32 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
     );
   }
 
+  /**
+   * Render a labeled, boxed URL with a copy button on the right.
+   * Used for webhook URLs and the 46elks audio WebSocket URL so they share
+   * one consistent style.
+   */
+  private renderCopyableUrl(label: string, url: string, hint?: ComponentChildren) {
+    return (
+      <div key={url} class="ws-endpoint-display" aria-label={label}>
+        <span class="ws-endpoint-label">{label}</span>
+        <div class="ws-endpoint-row">
+          <code class="ws-endpoint-value">{url}</code>
+          <button
+            type="button"
+            class="btn-copy"
+            onClick={() => this.handleCopy(url, label)}
+            aria-label={`Copy ${label} to clipboard`}
+            title="Copy to clipboard"
+          >
+            Copy
+          </button>
+        </div>
+        {hint}
+      </div>
+    );
+  }
+
   private renderPairingSecretDialog() {
     const { showPairingSecret, pairingSecretWsEndpoint } = this.state;
     if (!showPairingSecret) return null;
@@ -641,9 +770,13 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
             <code class="pairing-secret-value">{showPairingSecret}</code>
           </div>
           {pairingSecretWsEndpoint && (
-            <p class="form-hint">
-              WebSocket endpoint: <code>{pairingSecretWsEndpoint}</code>
-            </p>
+            <div class="ws-endpoint-display" aria-label="WebSocket connection URL">
+              <span class="ws-endpoint-label">Connection URL</span>
+              <code class="ws-endpoint-value">{pairingSecretWsEndpoint}</code>
+              <p class="form-hint ws-endpoint-hint">
+                Set this as <code>connection.url</code> in your modem-gateway configuration.
+              </p>
+            </div>
           )}
           <p class="form-hint">
             The secret expires after 24 hours. If you lose it, use "Reset Pairing" to generate a new one.
@@ -920,6 +1053,8 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
 
     if (!modemStatus) return null;
 
+    // `signal` is a percentage (0-100) as reported by the gateway. A value of 0
+    // means no/unknown signal. Bars map each 20% to one of five bars.
     const signalBars = modemStatus.signal != null ? Math.min(Math.max(Math.round(modemStatus.signal / 20), 0), 5) : 0;
     const signalLabel = modemStatus.signal != null ? `${modemStatus.signal}%` : "Unknown";
 
@@ -969,6 +1104,18 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
                   <dd>{modemStatus.network}</dd>
                 </Fragment>
               )}
+              {modemStatus.networkTech && (
+                <Fragment>
+                  <dt>Technology</dt>
+                  <dd>{modemStatus.networkTech}</dd>
+                </Fragment>
+              )}
+              {modemStatus.band && (
+                <Fragment>
+                  <dt>Band</dt>
+                  <dd>{modemStatus.band}</dd>
+                </Fragment>
+              )}
               {modemStatus.operator && (
                 <Fragment>
                   <dt>Operator</dt>
@@ -988,6 +1135,30 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
                 <Fragment>
                   <dt>Firmware</dt>
                   <dd class="monospace">{modemStatus.firmware}</dd>
+                </Fragment>
+              )}
+              {modemStatus.imei && (
+                <Fragment>
+                  <dt>IMEI</dt>
+                  <dd class="monospace">{modemStatus.imei}</dd>
+                </Fragment>
+              )}
+              {modemStatus.imsi && (
+                <Fragment>
+                  <dt>IMSI</dt>
+                  <dd class="monospace">{modemStatus.imsi}</dd>
+                </Fragment>
+              )}
+              {modemStatus.iccid && (
+                <Fragment>
+                  <dt>ICCID</dt>
+                  <dd class="monospace">{modemStatus.iccid}</dd>
+                </Fragment>
+              )}
+              {modemStatus.msisdn && (
+                <Fragment>
+                  <dt>Phone number</dt>
+                  <dd class="monospace">{modemStatus.msisdn}</dd>
                 </Fragment>
               )}
             </dl>
@@ -1045,11 +1216,11 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
               selectedProvider.status === "disabled" ? "badge-disabled" :
               "badge-error"
             }`}>
-              {selectedProvider.status === "ok" ? "OK" :
-               selectedProvider.status === "not_connected" ? "Not Connected" :
-               selectedProvider.status === "disabled" ? "Disabled" :
-               "Error"}
+              {providerStatusLabel(selectedProvider)}
             </span>
+            {selectedProvider.status === "error" && selectedProvider.healthReason && (
+              <p class="form-hint status-error-reason">{selectedProvider.healthReason}</p>
+            )}
           </dd>
           <dt>ID</dt>
           <dd class="monospace">{selectedProvider.id}</dd>
@@ -1074,13 +1245,28 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
         {selectedProvider.webhookUrls.length > 0 && (
           <Fragment>
             <h4>Webhook URLs</h4>
-            <ul class="webhook-urls">
-              {selectedProvider.webhookUrls.map((url) => (
-                <li key={url} class="monospace">
-                  {url}
-                </li>
-              ))}
-            </ul>
+            {selectedProvider.type === "46elks" && (
+              <p class="form-hint">
+                Configure these in the 46elks dashboard for your number.
+              </p>
+            )}
+            {selectedProvider.webhookUrls.map((url) =>
+              this.renderCopyableUrl(webhookEndpointLabel(url), url),
+            )}
+          </Fragment>
+        )}
+
+        {selectedProvider.type === "46elks" && selectedProvider.audioWsUrl && (
+          <Fragment>
+            <h4>Audio WebSocket URL</h4>
+            {this.renderCopyableUrl(
+              "Register in 46elks dashboard",
+              selectedProvider.audioWsUrl,
+              <p class="form-hint ws-endpoint-hint">
+                Set this as the WebSocket URL for your 46elks WebSocket number
+                (the <code>+4600…</code> number) so call audio reaches the MediaBridge.
+              </p>,
+            )}
           </Fragment>
         )}
 
@@ -1101,7 +1287,7 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
   }
 
   private renderProviderList() {
-    const { providers, loading } = this.state;
+    const { providers, loading, selectedProvider, editingProvider } = this.state;
 
     if (loading) {
       return <p>Loading providers...</p>;
@@ -1111,23 +1297,35 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
       return <p class="empty-state">No providers configured. Add one to get started.</p>;
     }
 
+    // Hide the row for the provider currently open in the detail or edit view,
+    // so it doesn't appear duplicated below the panel that "expanded" from it.
+    const openProviderId = editingProvider?.id ?? selectedProvider?.id ?? null;
+    const visibleProviders = openProviderId
+      ? providers.filter((p) => p.id !== openProviderId)
+      : providers;
+
+    if (visibleProviders.length === 0) {
+      return null;
+    }
+
     return (
       <ul class="provider-list" role="list">
-        {providers.map((provider) => (
-          <li key={provider.id} class="card provider-card">
-            <div
-              class="provider-info"
-              onClick={() => this.handleProviderClick(provider)}
-              onKeyDown={(e: KeyboardEvent) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  this.handleProviderClick(provider);
-                }
-              }}
-              role="button"
-              tabIndex={0}
-              aria-label={`View details for ${provider.displayName}`}
-            >
+        {visibleProviders.map((provider) => (
+          <li
+            key={provider.id}
+            class="card provider-card"
+            onClick={() => this.handleProviderClick(provider)}
+            onKeyDown={(e: KeyboardEvent) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                this.handleProviderClick(provider);
+              }
+            }}
+            role="button"
+            tabIndex={0}
+            aria-label={`View details for ${provider.displayName}`}
+          >
+            <div class="provider-info">
               <span class="provider-name">{provider.displayName}</span>
               <span class="provider-type badge">{provider.type}</span>
               <span class={`provider-status badge ${
@@ -1136,17 +1334,14 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
                 provider.status === "disabled" ? "badge-disabled" :
                 "badge-error"
               }`}>
-                {provider.status === "ok" ? "OK" :
-                 provider.status === "not_connected" ? "Not Connected" :
-                 provider.status === "disabled" ? "Disabled" :
-                 "Error"}
+                {providerStatusLabel(provider)}
               </span>
             </div>
             <div class="provider-actions">
               <button
                 type="button"
                 class="btn-sm"
-                onClick={() => this.handleSync(provider)}
+                onClick={(e: MouseEvent) => { e.stopPropagation(); this.handleSync(provider); }}
                 disabled={this.state.syncingProviderId === provider.id || !provider.enabled}
                 aria-label={`Sync numbers for ${provider.displayName}`}
                 aria-busy={this.state.syncingProviderId === provider.id ? "true" : undefined}
@@ -1156,7 +1351,7 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
               <button
                 type="button"
                 class={`btn-sm ${provider.enabled ? "btn-warning" : "btn-success-outline"}`}
-                onClick={() => this.handleToggleEnabled(provider)}
+                onClick={(e: MouseEvent) => { e.stopPropagation(); this.handleToggleEnabled(provider); }}
                 aria-label={provider.enabled ? `Disable ${provider.displayName}` : `Enable ${provider.displayName}`}
               >
                 {provider.enabled ? "Disable" : "Enable"}
@@ -1164,7 +1359,7 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
               <button
                 type="button"
                 class="btn-sm btn-danger"
-                onClick={() => this.handleDeleteClick(provider)}
+                onClick={(e: MouseEvent) => { e.stopPropagation(); this.handleDeleteClick(provider); }}
                 aria-label={`Remove ${provider.displayName}`}
               >
                 Remove

@@ -5,6 +5,7 @@ import type {
   CallAnswerResult,
   SmsResult,
   ProviderNumber,
+  ProviderHealth,
   TelephonyEvent,
   CallState,
 } from './telephony-provider.js';
@@ -286,12 +287,46 @@ export class Elks46TelephonyProvider implements TelephonyProvider {
   }
 
   /**
+   * Perform a lightweight authenticated health probe against the 46elks API.
+   *
+   * Uses `GET /a1/me` (the cheapest authenticated account endpoint) with the
+   * configured Basic credentials. A 200 means credentials are valid and the API
+   * is reachable; 401/403 indicate bad credentials; any other non-OK response or
+   * a network error is reported as unhealthy with a short reason.
+   */
+  async checkHealth(): Promise<ProviderHealth> {
+    try {
+      const response = await fetch('https://api.46elks.com/a1/me', {
+        method: 'GET',
+        headers: { 'Authorization': this.authHeader },
+      });
+
+      if (response.ok) {
+        return { healthy: true, reason: null };
+      }
+      if (response.status === 401 || response.status === 403) {
+        return { healthy: false, reason: `Authentication failed (${response.status})`, authFailure: true };
+      }
+      return { healthy: false, reason: `46elks API returned ${response.status}` };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown error';
+      return { healthy: false, reason: `46elks API unreachable: ${message}` };
+    }
+  }
+
+  /**
    * Return the webhook endpoint suffixes for the 46elks provider.
    *
    * Requirements: 7.10
    */
   getWebhookEndpoints(): string[] {
-    return ['voice_start', 'voice_event', 'sms_incoming'];
+    // Only the endpoints a user configures in the 46elks dashboard are listed
+    // here. `voice_event` is intentionally excluded: it is never a statically
+    // configured webhook — it is passed per-call as the `whenhangup` URL from
+    // makeCall() and from the inbound voice_start connect response. Listing it
+    // as a "webhook URL to configure" is misleading and has nowhere to be
+    // entered in the dashboard.
+    return ['voice_start', 'sms_incoming'];
   }
 
   /**

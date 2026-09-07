@@ -44,6 +44,7 @@ type ReconnectManager struct {
 	serialPortPath string
 	pcmPortPath    string
 	baudRate       int
+	reportIdentity bool
 	callbacks      ReconnectCallbacks
 
 	mu        sync.RWMutex
@@ -62,11 +63,15 @@ type ReconnectManager struct {
 // reopened on reconnection (the actual PCM port management is handled by
 // the audio pipeline, but the reconnect manager needs to know the path
 // for validation).
-func NewReconnectManager(serialPortPath, pcmPortPath string, baudRate int, callbacks ReconnectCallbacks) *ReconnectManager {
+//
+// reportIdentity controls whether best-effort modem/SIM identity fields
+// (IMEI, IMSI, ICCID, MSISDN) are queried during initialization.
+func NewReconnectManager(serialPortPath, pcmPortPath string, baudRate int, reportIdentity bool, callbacks ReconnectCallbacks) *ReconnectManager {
 	return &ReconnectManager{
 		serialPortPath: serialPortPath,
 		pcmPortPath:    pcmPortPath,
 		baudRate:       baudRate,
+		reportIdentity: reportIdentity,
 		callbacks:      callbacks,
 		done:           make(chan struct{}),
 	}
@@ -219,7 +224,7 @@ func (rm *ReconnectManager) connect(ctx context.Context) {
 		return
 	}
 
-	initResult, err := RunInitSequence(ctx, m)
+	initResult, err := RunInitSequence(ctx, m, rm.reportIdentity)
 	if err != nil {
 		slog.Warn("Modem initialization failed, entering reconnection loop",
 			"error", err,
@@ -304,7 +309,7 @@ func (rm *ReconnectManager) reconnectLoop(ctx context.Context) {
 			continue
 		}
 
-		initResult, err := RunInitSequence(ctx, m)
+		initResult, err := RunInitSequence(ctx, m, rm.reportIdentity)
 		if err != nil {
 			slog.Debug("Reconnection attempt failed: init sequence error",
 				"error", err,

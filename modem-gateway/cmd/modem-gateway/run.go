@@ -86,6 +86,20 @@ func run(ctx context.Context, configPath string) error {
 		log.Printf("WARNING: failed to create SMS buffer: %v", err)
 	}
 
+	// Durable store for in-flight concatenated-SMS parts. Persisting parts here
+	// lets the gateway delete each part from (small) SIM storage as soon as it
+	// is read, instead of holding parts on the SIM until the whole message
+	// arrives — which otherwise deadlocks storage ("+SMS FULL") when a message
+	// has more parts than the SIM has slots.
+	smsPartBuffer, err := buffer.NewKeyed[sms.StoredPart](
+		filepath.Join(configDir, "sms-parts.jsonl"),
+		buffer.DefaultCapacity,
+		func(p sms.StoredPart) string { return p.PartKey() },
+	)
+	if err != nil {
+		log.Printf("WARNING: failed to create SMS parts buffer: %v", err)
+	}
+
 	bridgeFactory := func() *bridge.AudioBridge {
 		return bridge.New(tlsConfig)
 	}
@@ -101,6 +115,7 @@ func run(ctx context.Context, configPath string) error {
 		Cfg:           cfg,
 		SigClient:     sigClient,
 		SmsBuffer:     smsBuffer,
+		SmsPartBuffer: smsPartBuffer,
 		SmsDelivery:   smsDelivery,
 		BridgeFactory: bridgeFactory,
 	})
