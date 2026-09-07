@@ -3,6 +3,7 @@ package signaling
 import (
 	"context"
 	"log/slog"
+	"math"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,9 +24,15 @@ type StatusPayload struct {
 	Signal                  int      `json:"signal"`
 	Network                 string   `json:"network"`
 	Operator                string   `json:"operator"`
+	Band                    string   `json:"band,omitempty"`
+	NetworkTech             string   `json:"networkTech,omitempty"`
 	ModemModel              string   `json:"modemModel,omitempty"`
 	ModemManufacturer       string   `json:"modemManufacturer,omitempty"`
 	Firmware                string   `json:"firmware,omitempty"`
+	IMEI                    string   `json:"imei,omitempty"`
+	IMSI                    string   `json:"imsi,omitempty"`
+	ICCID                   string   `json:"iccid,omitempty"`
+	MSISDN                  string   `json:"msisdn,omitempty"`
 	Stale                   []string `json:"stale,omitempty"`
 	ModemUnsupportedWarning string   `json:"modemUnsupportedWarning,omitempty"`
 }
@@ -47,6 +54,10 @@ type ModemInfo struct {
 	Model              string
 	Manufacturer       string
 	Firmware           string
+	IMEI               string
+	IMSI               string
+	ICCID              string
+	MSISDN             string
 	UnsupportedWarning string
 }
 
@@ -72,7 +83,7 @@ func NewStatusReporter(modem ModemCommander, client StatusSender, info ModemInfo
 		modem:      modem,
 		client:     client,
 		modemInfo:  info,
-		lastSignal: 99, // unknown
+		lastSignal: 0, // unknown (signal is a percentage; 0 = no/unknown signal)
 		lastNet:    "unknown",
 		lastOp:     "",
 		done:       make(chan struct{}),
@@ -118,13 +129,15 @@ func (sr *StatusReporter) run(ctx context.Context) {
 // reportStatus queries the modem and sends a status message.
 // If initial is true, modem identification fields are included.
 func (sr *StatusReporter) reportStatus(initial bool) {
-	signal, network, operator, stale := sr.queryAll()
+	signal, network, operator, band, networkTech, stale := sr.queryAll()
 
 	payload := StatusPayload{
-		Type:     TypeStatus,
-		Signal:   signal,
-		Network:  network,
-		Operator: operator,
+		Type:        TypeStatus,
+		Signal:      signal,
+		Network:     network,
+		Operator:    operator,
+		Band:        band,
+		NetworkTech: networkTech,
 	}
 
 	if len(stale) > 0 {
@@ -135,6 +148,10 @@ func (sr *StatusReporter) reportStatus(initial bool) {
 		payload.ModemModel = sr.modemInfo.Model
 		payload.ModemManufacturer = sr.modemInfo.Manufacturer
 		payload.Firmware = sr.modemInfo.Firmware
+		payload.IMEI = sr.modemInfo.IMEI
+		payload.IMSI = sr.modemInfo.IMSI
+		payload.ICCID = sr.modemInfo.ICCID
+		payload.MSISDN = sr.modemInfo.MSISDN
 		if sr.modemInfo.UnsupportedWarning != "" {
 			payload.ModemUnsupportedWarning = sr.modemInfo.UnsupportedWarning
 		}
@@ -154,7 +171,7 @@ func (sr *StatusReporter) reportStatus(initial bool) {
 // queryAll queries AT+CSQ, AT+CREG, and AT+COPS with a 5-second timeout each.
 // If a query times out or fails, the last known value is used and the field is
 // marked as stale.
-func (sr *StatusReporter) queryAll() (signal int, network string, operator string, stale []string) {
+func (sr *StatusReporter) queryAll() (signal int, network string, operator string, band string, tech string, stale []string) {
 	sr.mu.Lock()
 	defer sr.mu.Unlock()
 
@@ -195,12 +212,34 @@ func (sr *StatusReporter) queryAll() (signal int, network string, operator strin
 		net = "searching"
 	}
 
-	return sig, net, op, stale
+	// Query band and radio access technology (best-effort). AT+CPSI? is a SIMCOM
+	// command that returns the current system mode and serving-cell band. It is
+	// non-critical: on failure or when the modem is not registered, band and RAT
+	// are simply left empty and are NOT marked stale.
+	band, tech = sr.queryBandTech()
+
+	return sig, net, op, band, tech, stale
 }
 
-// querySignal sends AT+CSQ and parses the signal strength value (0-31).
-// The raw CSQ value 99 means "not known or not detectable" and is mapped to 0
-// so that clients don't misinterpret it as a high percentage.
+// queryBandTech sends AT+CPSI? and extracts the radio access technology and band.
+// Returns empty strings on failure or when the modem reports no service.
+func (sr *StatusReporter) queryBandTech() (band string, tech string) {
+	resp, err := sr.modem.SendCommand("AT+CPSI?", statusQueryTimeout)
+	if err != nil {
+		slog.Debug("Status query AT+CPSI? failed, band/tech unavailable", "error", err)
+		return "", ""
+	}
+	tech, band = parseCPSI(resp)
+	return band, tech
+}
+
+// querySignal sends AT+CSQ, parses the raw RSSI value (0-31), and converts it to
+// a percentage (0-100) for reporting.
+//
+// AT+CSQ returns an RSSI index on the 3GPP 0-31 scale (0 = weakest, 31 = strongest)
+// plus the special value 99 meaning "not known or not detectable". We convert to a
+// percentage so clients can display it directly; 99 (and any parse failure) maps to
+// 0, which the UI treats as "no signal".
 // Response format: +CSQ: <rssi>,<ber>
 func (sr *StatusReporter) querySignal() (int, error) {
 	resp, err := sr.modem.SendCommand("AT+CSQ", statusQueryTimeout)
@@ -208,11 +247,16 @@ func (sr *StatusReporter) querySignal() (int, error) {
 		return 0, err
 	}
 
-	val := parseCSQ(resp)
-	if val == 99 {
-		return 0, nil
+	return csqToPercent(parseCSQ(resp)), nil
+}
+
+// csqToPercent converts a raw AT+CSQ RSSI index (0-31, or 99 = unknown) to a
+// percentage (0-100). Unknown or out-of-range values map to 0.
+func csqToPercent(csq int) int {
+	if csq < 0 || csq > 31 {
+		return 0
 	}
-	return val, nil
+	return int(math.Round(float64(csq) / 31.0 * 100.0))
 }
 
 // queryNetwork sends AT+CREG? and parses the registration status.
@@ -343,4 +387,77 @@ func parseCOPS(resp string) string {
 	}
 
 	return ""
+}
+
+// parseCPSI extracts the radio access technology and serving-cell band from a
+// SIMCOM AT+CPSI? response.
+//
+// Response formats (SIM7600 family):
+//
+//	LTE:  +CPSI: LTE,Online,<MCC-MNC>,<TAC>,<SCellID>,<PCID>,<BAND>,<freq>,...
+//	      e.g. +CPSI: LTE,Online,240-01,0x000B,12345678,257,EUTRAN-BAND3,1300,5,...
+//	GSM:  +CPSI: GSM,Online,<MCC-MNC>,<LAC>,<CellID>,<BSIC>,<ARFCN>,...
+//	None: +CPSI: NO SERVICE,Online  (or just +CPSI: NO SERVICE)
+//
+// Returns (tech, band). Either may be empty when unavailable. The band is
+// recognized as the field containing a "BAND" token (e.g. "EUTRAN-BAND3").
+func parseCPSI(resp string) (tech string, band string) {
+	for _, line := range strings.Split(resp, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "+CPSI:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "+CPSI:"))
+		parts := strings.Split(data, ",")
+		if len(parts) == 0 {
+			return "", ""
+		}
+
+		tech = strings.TrimSpace(parts[0])
+		if strings.EqualFold(tech, "NO SERVICE") || tech == "" {
+			return "", ""
+		}
+
+		// Find the band field: the token containing "BAND" (case-insensitive),
+		// e.g. "EUTRAN-BAND3" or "LTE BAND 3". Normalize to a friendly form.
+		for _, p := range parts[1:] {
+			p = strings.TrimSpace(p)
+			if strings.Contains(strings.ToUpper(p), "BAND") {
+				band = normalizeBand(p)
+				break
+			}
+		}
+
+		return tech, band
+	}
+
+	return "", ""
+}
+
+// normalizeBand converts a known modem band token into a friendlier display
+// form, e.g. "EUTRAN-BAND3" -> "B3", "LTE BAND 3" -> "B3".
+//
+// Only recognized patterns are rewritten. Any other token is returned as the
+// original trimmed string, unchanged (including its original casing), so that
+// bands from modems/RATs we haven't special-cased (e.g. 5G "NR5G-BANDxx") are
+// still shown verbatim rather than being dropped or mangled.
+func normalizeBand(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	up := strings.ToUpper(trimmed)
+
+	replacements := []struct{ old, new string }{
+		{"EUTRAN-BAND", "B"},
+		{"EUTRAN BAND", "B"},
+		{"LTE BAND ", "B"},
+		{"LTE-BAND", "B"},
+		{"BAND ", "B"},
+	}
+	for _, r := range replacements {
+		if strings.Contains(up, r.old) {
+			return strings.TrimSpace(strings.ReplaceAll(up, r.old, r.new))
+		}
+	}
+
+	// Unrecognized format: show exactly what the modem reported.
+	return trimmed
 }

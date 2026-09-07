@@ -74,9 +74,15 @@ export interface StatusData {
   signal: number;
   network: string;
   operator: string;
+  band?: string;
+  networkTech?: string;
   modemModel?: string;
   modemManufacturer?: string;
   firmware?: string;
+  imei?: string;
+  imsi?: string;
+  iccid?: string;
+  msisdn?: string;
   stale?: string[];
   modemUnsupportedWarning?: string;
 }
@@ -664,9 +670,15 @@ export class ModemGatewayWsHandler {
             signal: msg.signal as number,
             network: msg.network as string,
             operator: msg.operator as string,
+            band: msg.band as string | undefined,
+            networkTech: msg.networkTech as string | undefined,
             modemModel: msg.modemModel as string | undefined,
             modemManufacturer: msg.modemManufacturer as string | undefined,
             firmware: msg.firmware as string | undefined,
+            imei: msg.imei as string | undefined,
+            imsi: msg.imsi as string | undefined,
+            iccid: msg.iccid as string | undefined,
+            msisdn: msg.msisdn as string | undefined,
             stale: msg.stale as string[] | undefined,
             modemUnsupportedWarning: msg.modemUnsupportedWarning as string | undefined,
           },

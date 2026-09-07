@@ -80,6 +80,7 @@ func (ml *ModemLifecycle) Start(ctx context.Context) {
 		ml.cfg.Modem.SerialPort,
 		ml.cfg.Modem.PcmAudioPort,
 		0, // use default baud rate
+		ml.cfg.IsIdentityReportingEnabled(),
 		callbacks,
 	)
 
@@ -266,6 +267,10 @@ func (ml *ModemLifecycle) onModemConnected(initResult *modem.InitResult) {
 		Model:              initResult.Info.Model,
 		Manufacturer:       initResult.Info.Manufacturer,
 		Firmware:           initResult.Info.Firmware,
+		IMEI:               initResult.Info.IMEI,
+		IMSI:               initResult.Info.IMSI,
+		ICCID:              initResult.Info.ICCID,
+		MSISDN:             initResult.Info.MSISDN,
 		UnsupportedWarning: initResult.Info.UnsupportedWarning,
 	})
 	statusReporter.Start(ml.ctx)

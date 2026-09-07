@@ -34,9 +34,15 @@ interface ModemStatus {
   signal: number | null;
   network: string | null;
   operator: string | null;
+  band: string | null;
+  networkTech: string | null;
   modemModel: string | null;
   modemManufacturer: string | null;
   firmware: string | null;
+  imei: string | null;
+  imsi: string | null;
+  iccid: string | null;
+  msisdn: string | null;
   stale: string[] | null;
   modemUnsupportedWarning: string | null;
 }
@@ -1047,6 +1053,8 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
 
     if (!modemStatus) return null;
 
+    // `signal` is a percentage (0-100) as reported by the gateway. A value of 0
+    // means no/unknown signal. Bars map each 20% to one of five bars.
     const signalBars = modemStatus.signal != null ? Math.min(Math.max(Math.round(modemStatus.signal / 20), 0), 5) : 0;
     const signalLabel = modemStatus.signal != null ? `${modemStatus.signal}%` : "Unknown";
 
@@ -1096,6 +1104,18 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
                   <dd>{modemStatus.network}</dd>
                 </Fragment>
               )}
+              {modemStatus.networkTech && (
+                <Fragment>
+                  <dt>Technology</dt>
+                  <dd>{modemStatus.networkTech}</dd>
+                </Fragment>
+              )}
+              {modemStatus.band && (
+                <Fragment>
+                  <dt>Band</dt>
+                  <dd>{modemStatus.band}</dd>
+                </Fragment>
+              )}
               {modemStatus.operator && (
                 <Fragment>
                   <dt>Operator</dt>
@@ -1115,6 +1135,30 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
                 <Fragment>
                   <dt>Firmware</dt>
                   <dd class="monospace">{modemStatus.firmware}</dd>
+                </Fragment>
+              )}
+              {modemStatus.imei && (
+                <Fragment>
+                  <dt>IMEI</dt>
+                  <dd class="monospace">{modemStatus.imei}</dd>
+                </Fragment>
+              )}
+              {modemStatus.imsi && (
+                <Fragment>
+                  <dt>IMSI</dt>
+                  <dd class="monospace">{modemStatus.imsi}</dd>
+                </Fragment>
+              )}
+              {modemStatus.iccid && (
+                <Fragment>
+                  <dt>ICCID</dt>
+                  <dd class="monospace">{modemStatus.iccid}</dd>
+                </Fragment>
+              )}
+              {modemStatus.msisdn && (
+                <Fragment>
+                  <dt>Phone number</dt>
+                  <dd class="monospace">{modemStatus.msisdn}</dd>
                 </Fragment>
               )}
             </dl>

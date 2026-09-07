@@ -132,7 +132,7 @@ func run(ctx context.Context, atPortPath, pcmPortPath string, baudRate, pcmBaud,
 		defer initCancel()
 	}
 	log.Println("Initializing modem...")
-	initResult, err := modem.RunInitSequence(initCtx, mdm)
+	initResult, err := modem.RunInitSequence(initCtx, mdm, false)
 	if err != nil {
 		return fmt.Errorf("modem init: %w", err)
 	}

@@ -467,15 +467,40 @@ export class ModemGatewayTelephonyProvider implements TelephonyProvider {
   }
 
   private handleStatus(msg: Record<string, unknown>): void {
+    // Merge into the existing status rather than replacing it wholesale.
+    //
+    // The gateway sends the dynamic fields (signal, network, operator, band,
+    // networkTech, stale) on every periodic status report, but sends the static
+    // identity fields (model, manufacturer, firmware, IMEI, IMSI, ICCID, MSISDN,
+    // unsupported warning) only in the first report after connecting. If we
+    // replaced the whole object each tick, those identity fields would be wiped
+    // ~30s after connect. So we always update the dynamic fields and only
+    // overwrite an identity field when the incoming message actually carries it.
+    const prev = this.modemStatus;
+
+    const keepPrev = <T>(incoming: T | undefined, previous: T | undefined): T | undefined =>
+      incoming !== undefined ? incoming : previous;
+
     this.modemStatus = {
+      // Dynamic fields: always taken from the latest report.
       signal: msg.signal as number,
       network: msg.network as string,
       operator: msg.operator as string,
-      modemModel: msg.modemModel as string | undefined,
-      modemManufacturer: msg.modemManufacturer as string | undefined,
-      firmware: msg.firmware as string | undefined,
+      band: msg.band as string | undefined,
+      networkTech: msg.networkTech as string | undefined,
       stale: msg.stale as string[] | undefined,
-      modemUnsupportedWarning: msg.modemUnsupportedWarning as string | undefined,
+      // Static identity fields: preserve prior value when absent from this report.
+      modemModel: keepPrev(msg.modemModel as string | undefined, prev?.modemModel),
+      modemManufacturer: keepPrev(msg.modemManufacturer as string | undefined, prev?.modemManufacturer),
+      firmware: keepPrev(msg.firmware as string | undefined, prev?.firmware),
+      imei: keepPrev(msg.imei as string | undefined, prev?.imei),
+      imsi: keepPrev(msg.imsi as string | undefined, prev?.imsi),
+      iccid: keepPrev(msg.iccid as string | undefined, prev?.iccid),
+      msisdn: keepPrev(msg.msisdn as string | undefined, prev?.msisdn),
+      modemUnsupportedWarning: keepPrev(
+        msg.modemUnsupportedWarning as string | undefined,
+        prev?.modemUnsupportedWarning,
+      ),
     };
   }
 

@@ -32,6 +32,7 @@ type ModemConfig struct {
 	PcmAudioPort        string              `yaml:"pcmAudioPort"`        // Optional override, auto-detected
 	NetworkRegistration bool                `yaml:"networkRegistration"` // Default: false
 	SimPin              string              `yaml:"simPin"`              // Optional
+	ReportIdentity      *bool               `yaml:"reportIdentity"`      // Default: true (pointer to distinguish unset from false)
 	AudioRecovery       AudioRecoveryConfig `yaml:"audioRecovery"`       // PCM audio subsystem recovery
 }
 
@@ -112,6 +113,11 @@ func applyDefaults(cfg *Config) {
 		cfg.Modem.VoiceEnabled = &t
 	}
 
+	if cfg.Modem.ReportIdentity == nil {
+		t := true
+		cfg.Modem.ReportIdentity = &t
+	}
+
 	if cfg.Modem.AudioRecovery.SoftResetThreshold <= 0 {
 		cfg.Modem.AudioRecovery.SoftResetThreshold = 3
 	}
@@ -182,6 +188,12 @@ modem:
   # Optional: SIM PIN for automatic unlock.
   # simPin: ""
 
+  # Report modem/SIM identity to the Svarla server for display in the provider
+  # management UI (default: true). This includes IMEI, IMSI, ICCID and the SIM's
+  # own phone number (MSISDN). Set to false to keep these identifiers on the
+  # device and never send them over the wire.
+  reportIdentity: true
+
   # PCM audio subsystem recovery.
   # Robust teardown and verification of the modem's PCM audio path run
   # automatically. These options control only the last-resort soft reset used
@@ -222,4 +234,15 @@ func (c *Config) IsVoiceEnabled() bool {
 		return true
 	}
 	return *c.Modem.VoiceEnabled
+}
+
+// IsIdentityReportingEnabled returns whether modem/SIM identity fields
+// (IMEI, IMSI, ICCID, MSISDN) should be queried and reported to the server.
+// This is a convenience method since ReportIdentity is a pointer to
+// distinguish unset (default true) from explicit false.
+func (c *Config) IsIdentityReportingEnabled() bool {
+	if c.Modem.ReportIdentity == nil {
+		return true
+	}
+	return *c.Modem.ReportIdentity
 }

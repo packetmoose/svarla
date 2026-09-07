@@ -27,6 +27,10 @@ type ModemInfo struct {
 	Model              string
 	Manufacturer       string
 	Firmware           string
+	IMEI               string // best-effort (AT+CGSN); empty if unavailable
+	IMSI               string // best-effort (AT+CIMI); empty if unavailable
+	ICCID              string // best-effort (AT+CCID); empty if unavailable
+	MSISDN             string // best-effort (AT+CNUM); empty if unavailable
 	UnsupportedWarning string // non-empty if modem model not recognized
 }
 
@@ -44,7 +48,7 @@ type InitResult struct {
 //
 // On success, the modem state transitions to StateReady.
 // The context allows cancellation of the backoff/retry loop.
-func RunInitSequence(ctx context.Context, m *Modem) (*InitResult, error) {
+func RunInitSequence(ctx context.Context, m *Modem, reportIdentity bool) (*InitResult, error) {
 	// Phase 1: Detect modem with exponential backoff.
 	if err := detectModem(ctx, m); err != nil {
 		return nil, fmt.Errorf("modem init: detection failed: %w", err)
@@ -129,6 +133,13 @@ func RunInitSequence(ctx context.Context, m *Modem) (*InitResult, error) {
 		slog.Warn("Unrecognized modem model", "model", info.Model, "warning", info.UnsupportedWarning)
 	}
 
+	// Phase 6: Best-effort identity fields (IMEI/IMSI/ICCID/MSISDN).
+	// These are diagnostic identifiers; a failure to read any of them must never
+	// abort initialization. Skipped entirely when identity reporting is disabled.
+	if reportIdentity {
+		queryModemIdentity(m, &info)
+	}
+
 	// Transition to ready state.
 	m.SetState(StateReady)
 
@@ -211,6 +222,86 @@ func queryModemInfo(m *Modem) (ModemInfo, error) {
 		Manufacturer: strings.TrimSpace(manufacturer),
 		Firmware:     strings.TrimSpace(firmware),
 	}, nil
+}
+
+// queryModemIdentity queries best-effort modem/SIM identity fields and populates
+// them on info. Every query is non-fatal: a failure (unsupported command, no SIM,
+// SIM locked, etc.) is logged and the corresponding field is left empty.
+func queryModemIdentity(m *Modem, info *ModemInfo) {
+	if imei, err := m.SendCommand("AT+CGSN", 0); err != nil {
+		slog.Warn("IMEI query (AT+CGSN) failed, continuing without it", "error", err)
+	} else {
+		info.IMEI = parseIdentityValue(imei, "")
+	}
+
+	if imsi, err := m.SendCommand("AT+CIMI", 0); err != nil {
+		slog.Warn("IMSI query (AT+CIMI) failed, continuing without it", "error", err)
+	} else {
+		info.IMSI = parseIdentityValue(imsi, "")
+	}
+
+	// AT+CCID (also +ICCID / +QCCID on some modems) returns the SIM serial.
+	// SIMCOM responds with a bare number or a "+ICCID: <value>" line.
+	if iccid, err := m.SendCommand("AT+CCID", 0); err != nil {
+		slog.Warn("ICCID query (AT+CCID) failed, continuing without it", "error", err)
+	} else {
+		info.ICCID = parseIdentityValue(iccid, "+ICCID:")
+	}
+
+	// AT+CNUM returns the SIM's own number: +CNUM: "<alpha>","<number>",<type>
+	if cnum, err := m.SendCommand("AT+CNUM", 0); err != nil {
+		slog.Warn("MSISDN query (AT+CNUM) failed, continuing without it", "error", err)
+	} else {
+		info.MSISDN = parseCNUM(cnum)
+	}
+
+	slog.Info("Modem identity queried",
+		"imei", info.IMEI,
+		"iccid", info.ICCID,
+		"msisdn", info.MSISDN,
+		// IMSI is intentionally not logged at info level; it identifies the subscriber.
+	)
+}
+
+// parseIdentityValue extracts a single identity value from a modem response.
+// It skips the "OK"/"ERROR" status lines and, if prefix is non-empty, strips it
+// (and any preceding label) from the matching line. Returns the first non-empty
+// data line found, trimmed.
+func parseIdentityValue(resp, prefix string) string {
+	for _, line := range strings.Split(resp, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || line == "OK" || line == "ERROR" {
+			continue
+		}
+		// If a prefixed line is present (e.g. "+ICCID: <value>"), strip the prefix.
+		if prefix != "" && strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		}
+		// Otherwise treat the first non-status line as the value. Many SIMCOM
+		// commands (AT+CGSN, AT+CIMI, and often AT+CCID) return a bare value with
+		// no label, so we accept that here regardless of the requested prefix.
+		return line
+	}
+	return ""
+}
+
+// parseCNUM extracts the phone number from an AT+CNUM response.
+// Response format: +CNUM: "<alpha>","<number>",<type>
+// Returns the <number> field, or empty string if not present.
+func parseCNUM(resp string) string {
+	for _, line := range strings.Split(resp, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "+CNUM:") {
+			continue
+		}
+		data := strings.TrimSpace(strings.TrimPrefix(line, "+CNUM:"))
+		parts := strings.Split(data, ",")
+		if len(parts) < 2 {
+			return ""
+		}
+		return strings.Trim(strings.TrimSpace(parts[1]), `"`)
+	}
+	return ""
 }
 
 // isKnownModel checks whether the model string starts with a known-supported prefix.
