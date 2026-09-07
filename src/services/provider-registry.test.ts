@@ -171,6 +171,121 @@ describe('ProviderRegistry.onProviderActivated', () => {
     expect(registry.getSignalingWsUrl('abc')).toBe('/ws/providers/abc/signaling');
   });
 
+  it('builds a wss:// audio URL from an https base URL', () => {
+    const db = createMockDb();
+    const registry = new ProviderRegistry(db, 'https://example.com', logger, vi.fn());
+    expect(registry.getAudioWsUrl()).toBe('wss://example.com/audio/');
+  });
+
+  it('builds a ws:// audio URL from an http base URL and strips trailing slash', () => {
+    const db = createMockDb();
+    const registry = new ProviderRegistry(db, 'http://localhost:3000/', logger, vi.fn());
+    expect(registry.getAudioWsUrl()).toBe('ws://localhost:3000/audio/');
+  });
+
+  it('returns an empty audio URL when no base URL is configured', () => {
+    const db = createMockDb();
+    const registry = new ProviderRegistry(db, '', logger, vi.fn());
+    expect(registry.getAudioWsUrl()).toBe('');
+  });
+
+  it('caches health and fires an immediate check when a provider is added', async () => {
+    const db = createMockDb();
+    const checkHealth = vi.fn(async () => ({ healthy: false, reason: 'bad creds' }));
+    const factory = vi.fn(() => createFakeProvider({ checkHealth }));
+    const registry = new ProviderRegistry(db, 'https://example.com', logger, factory);
+
+    // addProvider awaits the initial health check, so the result is cached by
+    // the time it resolves.
+    const { providerId } = await registry.addProvider('dummy', 'My Dummy', {});
+
+    expect(checkHealth).toHaveBeenCalledTimes(1);
+    expect(registry.getHealth(providerId)).toEqual({ healthy: false, reason: 'bad creds' });
+  });
+
+  it('awaits a fresh health check on updateProvider so the cached result reflects the new config', async () => {
+    const providerId = '99999999-9999-9999-9999-999999999999';
+    const db = createMockDb({
+      providers: [
+        { id: providerId, type: 'dummy', display_name: 'Dummy', config: {}, enabled: true },
+      ],
+    });
+    // Healthy on first init, unhealthy after the config change.
+    const checkHealth = vi
+      .fn()
+      .mockResolvedValueOnce({ healthy: true, reason: null })
+      .mockResolvedValueOnce({ healthy: false, reason: 'bad creds', authFailure: true });
+    const registry = new ProviderRegistry(db, 'https://example.com', logger, vi.fn(() => createFakeProvider({ checkHealth })));
+
+    await registry.loadAll();
+    // loadAll does not run health checks; run one to establish the healthy baseline.
+    await registry.checkProviderHealth(providerId);
+    expect(registry.getHealth(providerId)).toEqual({ healthy: true, reason: null });
+
+    await registry.updateProvider(providerId, { config: { name: 'changed' } });
+
+    // By the time updateProvider resolves, the fresh (unhealthy) result is cached.
+    expect(registry.getHealth(providerId)).toEqual({ healthy: false, reason: 'bad creds', authFailure: true });
+  });
+
+  it('records an unhealthy result when checkHealth throws', async () => {
+    const db = createMockDb();
+    const checkHealth = vi.fn(async () => { throw new Error('boom'); });
+    const factory = vi.fn(() => createFakeProvider({ checkHealth }));
+    const registry = new ProviderRegistry(db, 'https://example.com', logger, factory);
+
+    const { providerId } = await registry.addProvider('dummy', 'My Dummy', {});
+    await registry.checkProviderHealth(providerId);
+
+    expect(registry.getHealth(providerId)).toEqual({ healthy: false, reason: 'Health check error' });
+  });
+
+  it('leaves health null for providers without checkHealth()', async () => {
+    const db = createMockDb();
+    const factory = vi.fn(() => createFakeProvider()); // no checkHealth
+    const registry = new ProviderRegistry(db, 'https://example.com', logger, factory);
+
+    const { providerId } = await registry.addProvider('dummy', 'My Dummy', {});
+    await registry.checkProviderHealth(providerId);
+
+    expect(registry.getHealth(providerId)).toBeNull();
+  });
+
+  it('checkAllHealth checks every enabled provider that supports it', async () => {
+    const db = createMockDb();
+    const checkHealth = vi.fn(async () => ({ healthy: true, reason: null }));
+    const factory = vi.fn(() => createFakeProvider({ checkHealth }));
+    const registry = new ProviderRegistry(db, 'https://example.com', logger, factory);
+
+    await registry.addProvider('dummy', 'A', {});
+    await registry.addProvider('dummy', 'B', {});
+    checkHealth.mockClear();
+
+    await registry.checkAllHealth();
+
+    expect(checkHealth).toHaveBeenCalledTimes(2);
+  });
+
+  it('checkAllHealth skips providers with an auth failure but keeps retrying transient failures', async () => {
+    const db = createMockDb();
+    const authFail = vi.fn(async () => ({ healthy: false, reason: 'Authentication failed (401)', authFailure: true }));
+    const transientFail = vi.fn(async () => ({ healthy: false, reason: 'API returned 500' }));
+
+    const registryA = new ProviderRegistry(db, 'https://example.com', logger, vi.fn(() => createFakeProvider({ checkHealth: authFail })));
+    const { providerId: authId } = await registryA.addProvider('dummy', 'AuthBad', {});
+    await registryA.checkProviderHealth(authId); // cache the auth failure
+    authFail.mockClear();
+    await registryA.checkAllHealth();
+    expect(authFail).not.toHaveBeenCalled(); // skipped
+
+    const registryB = new ProviderRegistry(db, 'https://example.com', logger, vi.fn(() => createFakeProvider({ checkHealth: transientFail })));
+    const { providerId: transientId } = await registryB.addProvider('dummy', 'Flaky', {});
+    await registryB.checkProviderHealth(transientId); // cache the transient failure
+    transientFail.mockClear();
+    await registryB.checkAllHealth();
+    expect(transientFail).toHaveBeenCalledTimes(1); // still retried
+  });
+
   it('isolates listener failures so other listeners still run', async () => {
     const db = createMockDb();
     const factory = vi.fn(() => createFakeProvider());

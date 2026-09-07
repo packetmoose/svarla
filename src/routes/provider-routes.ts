@@ -1,6 +1,6 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { z } from 'zod';
-import type { ProviderRegistry } from '../services/provider-registry.js';
+import type { ProviderRegistry, ProviderRegistryEntry } from '../services/provider-registry.js';
 import {
   ProviderValidationError,
   ProviderNotFoundError,
@@ -8,6 +8,81 @@ import {
 } from '../services/provider-registry.js';
 import { ModemGatewayTelephonyProvider } from '../providers/modem-gateway-telephony-provider.js';
 import { getSupportedProviderTypes } from '../validators/provider-config-validator.js';
+
+/**
+ * Unified provider status surfaced to the UI.
+ */
+export type ProviderUiStatus = 'ok' | 'error' | 'not_connected' | 'disabled';
+
+/**
+ * Compute the unified UI status for a provider registry entry.
+ *
+ * Shared by the list (`GET /api/providers`) and detail (`GET /api/providers/:id`)
+ * endpoints so the two views can never disagree about a provider's status.
+ *
+ * - disabled: provider is disabled
+ * - error: enabled but the instance failed to initialize/is unavailable, or a
+ *   connected modem-gateway is reporting unhealthy/stale status
+ * - not_connected: modem-gateway whose signaling WebSocket is not connected
+ * - ok: enabled, active, and (for modem-gateway) connected + healthy
+ */
+function computeProviderStatus(p: ProviderRegistryEntry): ProviderUiStatus {
+  if (!p.enabled) {
+    return 'disabled';
+  }
+  if (p.status === 'unavailable') {
+    return 'error';
+  }
+  if (p.type === 'modem-gateway') {
+    const instance = p.instance as ModemGatewayTelephonyProvider | null;
+    const connected = instance?.getWsHandler()?.isConnected() ?? false;
+    if (!connected) {
+      return 'not_connected';
+    }
+    // WS is connected — check modem health
+    const modemStatus = instance?.getModemStatus();
+    if (!modemStatus || modemStatus.signal === 0 || !modemStatus.network) {
+      return 'error';
+    }
+    if (modemStatus.stale && modemStatus.stale.length >= 3) {
+      // All status fields are stale — modem is unreachable (stuck or disconnected)
+      return 'error';
+    }
+    return 'ok';
+  }
+  // Cloud providers (Vonage, 46elks): the instance must have initialized, and
+  // the latest live health check (if one has run) must not have failed. A null
+  // health means "not checked yet" and is treated as OK to avoid a transient
+  // error flash before the first probe completes.
+  if (p.status !== 'active') {
+    return 'error';
+  }
+  if (p.health && !p.health.healthy) {
+    return 'error';
+  }
+  return 'ok';
+}
+
+/**
+ * Health-derived response fields shared by the list, detail, and update
+ * endpoints so they never diverge:
+ * - status: the unified UI status
+ * - healthReason: why it's unhealthy (null when healthy or not yet checked)
+ * - authError: true when the unhealthy state is due to invalid credentials,
+ *   so the UI can show "Authentication Error" instead of a generic "Error"
+ */
+function providerStatusFields(p: ProviderRegistryEntry): {
+  status: ProviderUiStatus;
+  healthReason: string | null;
+  authError: boolean;
+} {
+  const unhealthy = p.health && !p.health.healthy ? p.health : null;
+  return {
+    status: computeProviderStatus(p),
+    healthReason: unhealthy ? unhealthy.reason : null,
+    authError: unhealthy?.authFailure === true,
+  };
+}
 
 /**
  * Fields considered secret per provider type.
@@ -134,40 +209,12 @@ export function registerProviderRoutes(
 
     return reply.status(200).send({
       providers: providers.map((p) => {
-        // Compute a unified status: 'ok' | 'error' | 'not_connected' | 'disabled'
-        let providerStatus: 'ok' | 'error' | 'not_connected' | 'disabled';
-        if (!p.enabled) {
-          providerStatus = 'disabled';
-        } else if (p.status === 'unavailable') {
-          providerStatus = 'error';
-        } else if (p.type === 'modem-gateway') {
-          const instance = p.instance as ModemGatewayTelephonyProvider | null;
-          const connected = instance?.getWsHandler()?.isConnected() ?? false;
-          if (!connected) {
-            providerStatus = 'not_connected';
-          } else {
-            // WS is connected — check modem health
-            const modemStatus = instance?.getModemStatus();
-            if (!modemStatus || modemStatus.signal === 0 || !modemStatus.network) {
-              providerStatus = 'error';
-            } else if (modemStatus.stale && modemStatus.stale.length >= 3) {
-              // All status fields are stale — modem is unreachable (likely stuck or disconnected)
-              providerStatus = 'error';
-            } else {
-              providerStatus = 'ok';
-            }
-          }
-        } else {
-          // Cloud providers: if active and enabled, they're OK
-          providerStatus = p.status === 'active' ? 'ok' : 'error';
-        }
-
         return {
           id: p.id,
           type: p.type,
           displayName: p.displayName,
           enabled: p.enabled,
-          status: providerStatus,
+          ...providerStatusFields(p),
           ...(p.type === 'modem-gateway' ? {
             connected: (p.instance as ModemGatewayTelephonyProvider | null)
               ?.getWsHandler()?.isConnected() ?? false,
@@ -278,7 +325,14 @@ export function registerProviderRoutes(
       displayName: provider.displayName,
       config: maskConfig(provider.type, provider.config),
       enabled: provider.enabled,
+      // Unified status + health explanation (shared with the list and update
+      // endpoints so all three agree).
+      ...providerStatusFields(provider),
       webhookUrls,
+      // 46elks routes call audio through the MediaBridge audio WebSocket. This
+      // is the URL the user registers against their WebSocket ("+4600…") number
+      // in the 46elks dashboard.
+      ...(provider.type === '46elks' ? { audioWsUrl: registry.getAudioWsUrl() } : {}),
     });
   });
 
@@ -338,7 +392,9 @@ export function registerProviderRoutes(
         displayName: provider.displayName,
         config: maskConfig(provider.type, provider.config),
         enabled: provider.enabled,
+        ...providerStatusFields(provider),
         webhookUrls,
+        ...(provider.type === '46elks' ? { audioWsUrl: registry.getAudioWsUrl() } : {}),
       });
     } catch (err) {
       if (err instanceof ProviderNotFoundError) {

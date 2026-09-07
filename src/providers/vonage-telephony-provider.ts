@@ -7,6 +7,7 @@ import type {
   CallAnswerResult,
   SmsResult,
   ProviderNumber,
+  ProviderHealth,
   TelephonyEvent,
   CallState,
   SmsDeliveryStatus,
@@ -69,6 +70,35 @@ function mapVonageStatusToCallState(status: VonageCallStatus): CallState | null 
     default:
       return null;
   }
+}
+
+/**
+ * Best-effort detection of an authentication failure from a thrown Vonage SDK
+ * error. Auth failures (bad API key/secret) won't recover without a config
+ * change, so the registry uses this to stop re-polling. We inspect any HTTP
+ * status code carried on the error (401/403) and fall back to matching common
+ * auth-related phrases in the message. When uncertain we return false, so the
+ * failure is treated as transient and polling continues.
+ */
+function isVonageAuthError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+  const err = error as { statusCode?: unknown; status?: unknown; response?: { status?: unknown }; message?: unknown };
+  const status =
+    (typeof err.statusCode === 'number' && err.statusCode) ||
+    (typeof err.status === 'number' && err.status) ||
+    (typeof err.response?.status === 'number' && err.response.status) ||
+    null;
+  if (status === 401 || status === 403) {
+    return true;
+  }
+  const message = typeof err.message === 'string' ? err.message.toLowerCase() : '';
+  return (
+    message.includes('unauthor') ||
+    message.includes('invalid credentials') ||
+    message.includes('authentication failed')
+  );
 }
 
 /**
@@ -260,6 +290,36 @@ export class VonageTelephonyProvider implements TelephonyProvider {
 
   onEvent(listener: (event: TelephonyEvent) => void): void {
     this.eventListeners.push(listener);
+  }
+
+  /**
+   * Perform a lightweight authenticated health probe against the Vonage API.
+   *
+   * Reuses the authenticated Numbers API call (`getOwnedNumbers`) that
+   * {@link listNumbers} uses. A successful response means the API key/secret are
+   * valid and the API is reachable; any thrown error (auth failure, network,
+   * etc.) is reported as unhealthy with a short reason.
+   */
+  async checkHealth(): Promise<ProviderHealth> {
+    try {
+      const { Vonage } = await import('@vonage/server-sdk');
+      const client = new Vonage({
+        apiKey: this.config.apiKey,
+        apiSecret: this.config.apiSecret,
+      });
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      await (client.numbers as any).getOwnedNumbers({
+        application_id: this.config.applicationId,
+      });
+      return { healthy: true, reason: null };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown error';
+      return {
+        healthy: false,
+        reason: `Vonage API check failed: ${message}`,
+        authFailure: isVonageAuthError(error),
+      };
+    }
   }
 
   /**

@@ -599,6 +599,15 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
     void syncProviderNumbers(providerEntry);
   });
 
+  // Start periodic health polling for cloud providers (Vonage, 46elks) so the
+  // UI reflects real API reachability / credential validity, not just whether
+  // the instance initialized at startup. Runs an immediate check, then repeats.
+  // Credentials/reachability change rarely, so a 5-minute interval is plenty and
+  // keeps provider API usage minimal. A fresh check also runs immediately when a
+  // provider is added or reconfigured, so this only covers drift over time.
+  const PROVIDER_HEALTH_POLL_INTERVAL_MS = 5 * 60_000;
+  registry.startHealthPolling(PROVIDER_HEALTH_POLL_INTERVAL_MS);
+
   // Middleware
   registerSessionMiddleware(server, authService, { webInterfaceEnabled: config.webInterfaceEnabled });
 
@@ -736,6 +745,7 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
   // Graceful shutdown hooks
   server.addHook('onClose', async () => {
     server.log.info('Server shutting down gracefully');
+    registry.stopHealthPolling();
     mediaBridgeFailureDetector.stop();
     mediaBridgeClient.stopHealthChecks();
     await mediaBridgeEventListener.stop();
