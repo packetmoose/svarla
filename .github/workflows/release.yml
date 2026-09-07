@@ -179,6 +179,7 @@ jobs:
             --build-arg VERSION=${{ needs.verify.outputs.tag }} \
             --build-arg COMMIT=${{ github.sha }} \
             --build-arg BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ) \
+            --target export \
             --output type=local,dest=./out \
             -f modem-gateway/Dockerfile.build \
             modem-gateway/

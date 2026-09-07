@@ -17,3 +17,8 @@ ENV CGO_ENABLED=0
 RUN GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.buildDate=${BUILD_DATE}" \
     -o /out/modem-gateway ./cmd/modem-gateway
+
+# Export stage: contains only the compiled binary so `--output type=local`
+# writes just modem-gateway, not the entire build context.
+FROM scratch AS export
+COPY --from=builder /out/modem-gateway /modem-gateway

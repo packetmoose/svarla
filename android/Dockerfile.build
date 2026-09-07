@@ -23,19 +23,16 @@ COPY . .
 
 RUN chmod +x gradlew
 
-# Inject version into build.gradle.kts if provided
-RUN if [ -n "$VERSION_NAME" ]; then \
-        sed -i "s/versionName = \".*\"/versionName = \"${VERSION_NAME}\"/" app/build.gradle.kts; \
-    fi && \
-    if [ -n "$VERSION_CODE" ]; then \
-        sed -i "s/versionCode = [0-9]*/versionCode = ${VERSION_CODE}/" app/build.gradle.kts; \
-    fi
-
-# Build based on BUILD_TYPE argument
-RUN if [ "$BUILD_TYPE" = "release" ]; then \
-        ./gradlew assembleRelease --no-daemon; \
+# Pass version info as Gradle project properties. build.gradle.kts reads these
+# via findProperty("versionCode") / findProperty("versionName"), so no source
+# rewriting is needed.
+RUN GRADLE_PROPS="" && \
+    if [ -n "$VERSION_NAME" ]; then GRADLE_PROPS="$GRADLE_PROPS -PversionName=${VERSION_NAME}"; fi && \
+    if [ -n "$VERSION_CODE" ]; then GRADLE_PROPS="$GRADLE_PROPS -PversionCode=${VERSION_CODE}"; fi && \
+    if [ "$BUILD_TYPE" = "release" ]; then \
+        ./gradlew assembleRelease --no-daemon $GRADLE_PROPS; \
     else \
-        ./gradlew assembleDebug --no-daemon; \
+        ./gradlew assembleDebug --no-daemon $GRADLE_PROPS; \
     fi
 
 # Signing is done at runtime via the entrypoint script
