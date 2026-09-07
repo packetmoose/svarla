@@ -67,6 +67,10 @@ type Manager struct {
 	// return an empty string if the number has not been discovered yet.
 	ownNumber func() string
 
+	// draining guards against overlapping drains (boot drain vs. a drain kicked
+	// by a "+SMS FULL" URC).
+	draining atomic.Bool
+
 	mu               sync.RWMutex
 	receivedHandlers []func(IncomingSMS) error
 	deliveryHandlers []func(DeliveryReport)
@@ -78,18 +82,33 @@ type Manager struct {
 	concatRef atomic.Uint32
 }
 
-// New creates a new SMS Manager. The modem is driven in PDU mode (AT+CMGF=0);
-// all encoding/decoding is handled in this package rather than by the modem's
-// text-mode character-set interpretation. ownNumber is called to fill the "to"
-// field on received messages; pass nil if the number is not available.
+// New creates a new SMS Manager without durable concat-part persistence. The
+// reassembler holds in-flight multi-part messages in memory only, and the
+// receive path leaves incomplete parts in modem storage as the crash-safe
+// backstop. Prefer NewWithPartStore in production so large multi-part messages
+// cannot wedge small SIM storage.
 func New(m *modem.Modem, ownNumber func() string) *Manager {
+	return NewWithPartStore(m, ownNumber, nil)
+}
+
+// NewWithPartStore creates a new SMS Manager backed by a durable PartStore for
+// concatenated-SMS reassembly. When a store is provided, each received part is
+// persisted off-modem the moment it is read, so it can be deleted from
+// SIM/modem storage immediately rather than held until the whole message
+// arrives. This prevents "+SMS FULL" deadlocks when a message has more parts
+// than the SIM has free slots. Pass a nil store for in-memory-only behavior.
+//
+// The modem is driven in PDU mode (AT+CMGF=0); all encoding/decoding is handled
+// in this package. ownNumber is called to fill the "to" field on received
+// messages; pass nil if the number is not available.
+func NewWithPartStore(m *modem.Modem, ownNumber func() string, store PartStore) *Manager {
 	if ownNumber == nil {
 		ownNumber = func() string { return "" }
 	}
 	return &Manager{
 		modem:       m,
 		ownNumber:   ownNumber,
-		reassembler: NewReassembler(0), // Use default 5-minute stale timeout
+		reassembler: NewReassemblerWithStore(0, store), // default 5-minute stale timeout
 	}
 }
 
@@ -254,6 +273,15 @@ func deterministicMessageID(p parsedMessage) string {
 // reads each with AT+CMGR, parses the PDU, reassembles concatenated parts via
 // the reassembler, and deletes each with AT+CMGD.
 func (mgr *Manager) DrainStoredMessages() {
+	// Guard against overlapping drains (boot drain and "+SMS FULL"-triggered
+	// drains). If one is already running, skip; the running drain will process
+	// everything currently stored.
+	if !mgr.draining.CompareAndSwap(false, true) {
+		slog.Debug("Drain already in progress; skipping")
+		return
+	}
+	defer mgr.draining.Store(false)
+
 	storages := []string{"SM", "ME", "SR"}
 	totalDrained := 0
 
@@ -318,8 +346,13 @@ func (mgr *Manager) processStoredIndex(idx int, delivered *int) {
 			msg.From, concat.RefNum, concat.SeqNum, concat.TotalParts, msg.Body,
 		)
 		if !complete {
-			// Incomplete concat part: leave it in storage until the message
-			// completes and is persisted (see handleCMTI). Do not delete now.
+			// Incomplete concat part. If the reassembler is durable, the part is
+			// now persisted off-modem, so we delete it from storage to free the
+			// slot (critical on small SIMs — see handleCMTI). Without a durable
+			// store we must leave it on the SIM as the only backstop.
+			if mgr.reassembler.Durable() {
+				mgr.deleteStored(idx)
+			}
 			return
 		}
 		msg.Body = assembled
@@ -334,7 +367,14 @@ func (mgr *Manager) processStoredIndex(idx int, delivered *int) {
 
 	mgr.deleteStored(idx)
 	if concat != nil {
-		mgr.deleteConcatParts(msg.From, concat.RefNum, concat.TotalParts)
+		if mgr.reassembler.Durable() {
+			// Assembled message is durably persisted downstream; drop source parts.
+			mgr.reassembler.Commit(msg.From, concat.RefNum)
+		} else {
+			// Non-durable path: parts were left on the SIM, so clean up the
+			// remaining ones now.
+			mgr.deleteConcatParts(msg.From, concat.RefNum, concat.TotalParts)
+		}
 	}
 	*delivered++
 }
@@ -394,8 +434,25 @@ func (mgr *Manager) RegisterURCHandlers() {
 		switch urc.Prefix {
 		case "+CMTI":
 			mgr.handleCMTI(urc)
+		case "+SMS FULL":
+			mgr.handleSMSFull()
 		}
 	})
+}
+
+// handleSMSFull responds to a "+SMS FULL" URC, which the modem emits when SMS
+// storage is full and an incoming message could not be stored. It logs a
+// warning and kicks off a drain to read, persist, and delete any stored
+// messages, reclaiming space so the SMSC can redeliver the held message(s).
+//
+// A drain is already the boot-time recovery path; running it here lets a
+// long-running gateway recover without a restart. Concurrent drains are
+// suppressed so a burst of "+SMS FULL" URCs triggers at most one at a time.
+func (mgr *Manager) handleSMSFull() {
+	slog.Warn("SMS storage full (+SMS FULL); draining stored messages to reclaim space")
+	// DrainStoredMessages self-guards against overlapping drains, so a burst of
+	// "+SMS FULL" URCs results in at most one active drain.
+	go mgr.DrainStoredMessages()
 }
 
 // handleCMTI processes a +CMTI URC (new SMS arrival notification). It reads the
@@ -425,12 +482,17 @@ func (mgr *Manager) handleCMTI(urc modem.URC) {
 			msg.From, concat.RefNum, concat.SeqNum, concat.TotalParts, msg.Body,
 		)
 		if !complete {
-			// This part is now held in the reassembler (in memory). We must not
-			// delete it from modem storage until the whole message is durably
-			// persisted, otherwise a crash would lose the buffered parts. Leave
-			// it on the SIM; the boot drain re-reads and re-feeds parts on
-			// restart. The SIM's storage capacity is the backstop, and the SMSC
-			// holds undelivered messages if storage fills.
+			// This part has been fed to the reassembler. If the reassembler is
+			// durable, AddPart has already persisted the raw part off-modem, so
+			// we delete it from storage immediately to free the slot. This is
+			// what prevents a large concatenated message (more parts than the
+			// SIM has slots) from wedging storage and triggering "+SMS FULL".
+			//
+			// Without a durable store, we must leave the part on the SIM as the
+			// only crash-safe backstop; the boot drain re-reads it on restart.
+			if mgr.reassembler.Durable() {
+				mgr.deleteStored(info.Index)
+			}
 			return
 		}
 		msg.Body = assembled
@@ -447,11 +509,16 @@ func (mgr *Manager) handleCMTI(urc modem.URC) {
 	}
 
 	mgr.deleteStored(info.Index)
-	// For a completed concatenated message, delete every part still held in
-	// storage as well, so parts read earlier (which we intentionally left) are
-	// cleaned up now that the message is durably persisted.
 	if concat != nil {
-		mgr.deleteConcatParts(msg.From, concat.RefNum, concat.TotalParts)
+		if mgr.reassembler.Durable() {
+			// The assembled message is now durably persisted downstream, so it
+			// is safe to discard the source parts from the durable store.
+			mgr.reassembler.Commit(msg.From, concat.RefNum)
+		} else {
+			// Non-durable path: earlier parts were left on the SIM; sweep the
+			// remaining ones now that the message is persisted.
+			mgr.deleteConcatParts(msg.From, concat.RefNum, concat.TotalParts)
+		}
 	}
 }
 
