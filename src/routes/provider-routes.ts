@@ -224,7 +224,7 @@ export function registerProviderRoutes(
         return reply.status(201).send({
           providerId: result.providerId,
           webhookUrls: result.webhookUrls,
-          wsEndpoint: `/ws/providers/${result.providerId}/signaling`,
+          wsEndpoint: registry.getSignalingWsUrl(result.providerId),
         });
       }
 
@@ -463,7 +463,7 @@ export function registerProviderRoutes(
     });
 
     return reply.status(200).send({
-      wsEndpoint: `/ws/providers/${id}/signaling`,
+      wsEndpoint: registry.getSignalingWsUrl(id),
     });
   });
 

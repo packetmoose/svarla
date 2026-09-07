@@ -641,9 +641,13 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
             <code class="pairing-secret-value">{showPairingSecret}</code>
           </div>
           {pairingSecretWsEndpoint && (
-            <p class="form-hint">
-              WebSocket endpoint: <code>{pairingSecretWsEndpoint}</code>
-            </p>
+            <div class="ws-endpoint-display" aria-label="WebSocket connection URL">
+              <span class="ws-endpoint-label">Connection URL</span>
+              <code class="ws-endpoint-value">{pairingSecretWsEndpoint}</code>
+              <p class="form-hint ws-endpoint-hint">
+                Set this as <code>connection.url</code> in your modem-gateway configuration.
+              </p>
+            </div>
           )}
           <p class="form-hint">
             The secret expires after 24 hours. If you lose it, use "Reset Pairing" to generate a new one.

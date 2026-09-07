@@ -153,6 +153,24 @@ describe('ProviderRegistry.onProviderActivated', () => {
     expect(registry.getProvider(providerId)?.status).toBe('disabled');
   });
 
+  it('builds a full wss:// signaling URL from an https base URL', () => {
+    const db = createMockDb();
+    const registry = new ProviderRegistry(db, 'https://example.com', logger, vi.fn());
+    expect(registry.getSignalingWsUrl('abc')).toBe('wss://example.com/ws/providers/abc/signaling');
+  });
+
+  it('builds a full ws:// signaling URL from an http base URL and strips trailing slash', () => {
+    const db = createMockDb();
+    const registry = new ProviderRegistry(db, 'http://localhost:3000/', logger, vi.fn());
+    expect(registry.getSignalingWsUrl('abc')).toBe('ws://localhost:3000/ws/providers/abc/signaling');
+  });
+
+  it('falls back to a relative path when no base URL is configured', () => {
+    const db = createMockDb();
+    const registry = new ProviderRegistry(db, '', logger, vi.fn());
+    expect(registry.getSignalingWsUrl('abc')).toBe('/ws/providers/abc/signaling');
+  });
+
   it('isolates listener failures so other listeners still run', async () => {
     const db = createMockDb();
     const factory = vi.fn(() => createFakeProvider());

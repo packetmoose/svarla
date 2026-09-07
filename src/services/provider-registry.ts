@@ -457,6 +457,26 @@ export class ProviderRegistry {
 
     return endpoints.map((endpoint) => `${base}/webhooks/${providerId}/${endpoint}`);
   }
+
+  /**
+   * Build the full signaling WebSocket URL that a modem-gateway binary should
+   * connect to, e.g. `wss://example.com/ws/providers/{id}/signaling`.
+   *
+   * The scheme is derived from the configured base URL (http → ws, https → wss),
+   * mirroring how webhook URLs are built from the same base. When no base URL is
+   * configured (e.g. local development), this falls back to the relative path so
+   * the value is still usable rather than malformed.
+   */
+  getSignalingWsUrl(providerId: string): string {
+    const path = `/ws/providers/${providerId}/signaling`;
+    const base = this.webhookBaseUrl.replace(/\/$/, '');
+    if (!base) {
+      return path;
+    }
+    // http → ws, https → wss. Leaves already-ws(s) bases untouched.
+    const wsBase = base.replace(/^http(s?):\/\//i, (_m, s: string) => `ws${s}://`);
+    return `${wsBase}${path}`;
+  }
 }
 
 /**

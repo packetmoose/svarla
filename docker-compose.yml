@@ -35,7 +35,10 @@ services:
       DATABASE_URL: postgresql://svarla:devpass@db:5432/svarla
       LOG_LEVEL: debug
       INITIAL_PASSWORD: dev
-      BASE_URL: ""
+      # Base URL used to build provider webhook URLs and the modem-gateway
+      # signaling WebSocket URL (http → ws, https → wss). The server is
+      # published on localhost:3000 below, so point at that in development.
+      BASE_URL: "http://localhost:3000"
       CORS_ORIGIN: ""
       MEDIA_BRIDGE_URL: http://mediabridge:9090
       APK_SOURCE: local

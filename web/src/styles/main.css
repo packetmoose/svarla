@@ -903,6 +903,40 @@ textarea {
   color: var(--md-primary);
 }
 
+/* ===== WebSocket Connection URL Display ===== */
+
+.ws-endpoint-display {
+  display: flex;
+  flex-direction: column;
+  gap: var(--md-space-xs);
+  background: var(--md-surface-variant);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-radius-md);
+  padding: var(--md-space-md);
+  margin-bottom: var(--md-space-lg);
+}
+
+.ws-endpoint-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--md-on-surface-variant);
+}
+
+.ws-endpoint-value {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--md-primary);
+  word-break: break-all;
+  user-select: all;
+}
+
+.ws-endpoint-hint {
+  margin: 0;
+}
+
 .detail-section {
   margin-top: var(--md-space-lg);
   padding-top: var(--md-space-md);
