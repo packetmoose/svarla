@@ -42,6 +42,15 @@ export type ProviderFactory = (
 ) => TelephonyProvider;
 
 /**
+ * Callback invoked whenever a provider instance becomes active — either when
+ * a new provider is added, or when an existing provider is (re)initialized
+ * after an update. Subscribers use this to attach runtime wiring (WebSocket
+ * handlers, event listeners, number sync) that must not require a server
+ * restart.
+ */
+export type ProviderActivatedListener = (entry: ProviderRegistryEntry) => void;
+
+/**
  * Static map of provider type to webhook endpoint suffixes.
  * Used until TelephonyProvider.getWebhookEndpoints() is added (task 6.1).
  */
@@ -67,6 +76,7 @@ export class ProviderRegistry {
   private readonly logger: ProviderLogger;
   private readonly factory: ProviderFactory;
   private readonly encryptionKey: string | undefined;
+  private readonly activatedListeners: ProviderActivatedListener[] = [];
 
   constructor(
     db: Kysely<Database>,
@@ -80,6 +90,38 @@ export class ProviderRegistry {
     this.logger = logger;
     this.factory = factory;
     this.encryptionKey = encryptionKey || undefined;
+  }
+
+  /**
+   * Register a listener that fires whenever a provider instance becomes active.
+   *
+   * The listener is invoked from {@link addProvider} (for newly created
+   * providers) and from {@link updateProvider} (when a provider is
+   * reinitialized after a config or enabled-status change). It is NOT invoked
+   * from {@link loadAll}; startup wiring is driven by the caller iterating
+   * {@link listProviders} so it can also run one-time startup-only work.
+   *
+   * This lets the server attach per-provider runtime wiring (e.g. the
+   * modem-gateway WebSocket handler and event listeners) at creation time,
+   * removing the need for a server restart before a new provider is usable.
+   */
+  onProviderActivated(listener: ProviderActivatedListener): void {
+    this.activatedListeners.push(listener);
+  }
+
+  /**
+   * Notify all activation listeners that a provider instance became active.
+   * Listener failures are isolated so one bad listener cannot prevent others
+   * (or the provider itself) from being wired up.
+   */
+  private emitProviderActivated(entry: ProviderRegistryEntry): void {
+    for (const listener of this.activatedListeners) {
+      try {
+        listener(entry);
+      } catch (err) {
+        this.logger.error(err, `Provider activation listener failed for ${entry.displayName} (${entry.id})`);
+      }
+    }
   }
 
   /**
@@ -234,6 +276,12 @@ export class ProviderRegistry {
 
     this.providers.set(providerId, entry);
 
+    // Wire up runtime handlers for the freshly-activated provider so it is
+    // usable immediately, without a server restart.
+    if (entry.status === 'active' && entry.instance) {
+      this.emitProviderActivated(entry);
+    }
+
     const webhookUrls = this.getWebhookUrls(providerId);
     this.logger.debug(`Provider ${providerId} webhook URLs: [${webhookUrls.join(', ')}]`);
     return { providerId, webhookUrls };
@@ -325,6 +373,10 @@ export class ProviderRegistry {
           entry.instance = instance;
           entry.status = 'active';
           this.logger.info(`Provider ${entry.displayName} (${providerId}) reinitialized`);
+          // Re-wire runtime handlers on the new instance. The previous instance
+          // (and its handlers) was discarded when it was stopped above, so this
+          // reattaches the WebSocket handler and event listeners.
+          this.emitProviderActivated(entry);
         } catch (err) {
           entry.status = 'unavailable';
           this.logger.error(err, `Failed to reinitialize provider ${entry.displayName} (${providerId})`);
