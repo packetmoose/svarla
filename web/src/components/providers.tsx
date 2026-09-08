@@ -105,6 +105,50 @@ function webhookEndpointLabel(url: string): string {
 }
 
 /**
+ * Material-style outline trash icon. Rendered as an inline SVG so it inherits
+ * the current text color (`currentColor`) and needs no extra assets.
+ */
+function trashIcon() {
+  return (
+    <svg
+      class="icon"
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.75"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M3 6h18" />
+      <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+      <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
+    </svg>
+  );
+}
+
+/**
+ * Friendly display label for a provider type, used in the list overview.
+ * The detail view intentionally shows the raw type (e.g. "modem-gateway")
+ * since that screen is technical/config-oriented.
+ */
+const PROVIDER_TYPE_LABELS: Record<string, string> = {
+  vonage: "Vonage",
+  "46elks": "46elks",
+  "modem-gateway": "Modem",
+  dummy: "Dummy",
+};
+
+function providerTypeLabel(type: string): string {
+  return PROVIDER_TYPE_LABELS[type] ?? type;
+}
+
+/**
  * Human-readable label for a provider's unified status. An error caused by an
  * authentication failure is called out specifically as "Authentication Error".
  */
@@ -314,23 +358,23 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
 
   /* ---------- Toggle enable/disable ---------- */
 
-  private handleToggleEnabled = async (provider: ProviderSummary) => {
+  // Providers can be disabled via the REST API, but the web UI only offers
+  // re-enabling one (disabling from the UI is intentionally not supported —
+  // per-number controls cover that need).
+  private handleEnable = async (provider: ProviderSummary) => {
     const result = await api.put<ProviderDetail>(`/api/providers/${provider.id}`, {
-      enabled: !provider.enabled,
+      enabled: true,
     });
     if (result.ok) {
       this.setState((prev) => ({
         providers: prev.providers.map((p) =>
-          p.id === provider.id ? { ...p, enabled: !p.enabled } : p
+          p.id === provider.id ? { ...p, enabled: true } : p
         ),
       }));
-      this.showNotification(
-        `Provider "${provider.displayName}" ${provider.enabled ? "disabled" : "enabled"}`,
-        "success"
-      );
+      this.showNotification(`Provider "${provider.displayName}" enabled`, "success");
     } else {
       const errorData = result.data as { error?: string };
-      this.showNotification(errorData.error || "Failed to update provider", "error");
+      this.showNotification(errorData.error || "Failed to enable provider", "error");
     }
   };
 
@@ -1194,6 +1238,15 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
           <div class="detail-header-actions">
             <button
               type="button"
+              class="btn-icon btn-icon-danger"
+              onClick={() => this.handleDeleteClick(selectedProvider)}
+              aria-label={`Remove ${selectedProvider.displayName}`}
+              title={`Remove ${selectedProvider.displayName}`}
+            >
+              {trashIcon()}
+            </button>
+            <button
+              type="button"
               class="btn-sm"
               onClick={() => this.handleEditClick(selectedProvider)}
               aria-label={`Edit ${selectedProvider.displayName}`}
@@ -1286,6 +1339,66 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
     );
   }
 
+  private renderProviderRow(provider: ProviderSummary) {
+    return (
+      <li
+        key={provider.id}
+        class="card provider-card"
+        onClick={() => this.handleProviderClick(provider)}
+        onKeyDown={(e: KeyboardEvent) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            this.handleProviderClick(provider);
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-label={`View details for ${provider.displayName}`}
+      >
+        <div class="provider-info">
+          <span class="provider-name">{provider.displayName}</span>
+          {/* Only surface a status badge when there's something to flag —
+              an OK provider shows nothing, keeping the list quiet. */}
+          {provider.status !== "ok" && (
+            <span class={`provider-status badge ${
+              provider.status === "not_connected" ? "badge-not-connected" :
+              provider.status === "disabled" ? "badge-disabled" :
+              "badge-error"
+            }`}>
+              {providerStatusLabel(provider)}
+            </span>
+          )}
+        </div>
+        <div class="provider-actions">
+          {provider.type !== "modem-gateway" && (
+            <button
+              type="button"
+              class="btn-sm btn-secondary"
+              onClick={(e: MouseEvent) => { e.stopPropagation(); this.handleSync(provider); }}
+              disabled={this.state.syncingProviderId === provider.id || !provider.enabled}
+              aria-label={`Sync numbers for ${provider.displayName}`}
+              aria-busy={this.state.syncingProviderId === provider.id ? "true" : undefined}
+            >
+              {this.state.syncingProviderId === provider.id ? "Syncing..." : "Sync"}
+            </button>
+          )}
+          {/* Providers can only be disabled via the REST API; the web UI
+              offers re-enabling if that has happened. */}
+          {!provider.enabled && (
+            <button
+              type="button"
+              class="btn-sm btn-success-outline"
+              onClick={(e: MouseEvent) => { e.stopPropagation(); this.handleEnable(provider); }}
+              aria-label={`Enable ${provider.displayName}`}
+            >
+              Enable
+            </button>
+          )}
+        </div>
+      </li>
+    );
+  }
+
   private renderProviderList() {
     const { providers, loading, selectedProvider, editingProvider } = this.state;
 
@@ -1308,66 +1421,35 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
       return null;
     }
 
+    // Group providers by type; the type becomes a section header, so it no
+    // longer needs to appear on each row. Groups preserve first-seen order.
+    const groups: { type: string; providers: ProviderSummary[] }[] = [];
+    for (const provider of visibleProviders) {
+      let group = groups.find((g) => g.type === provider.type);
+      if (!group) {
+        group = { type: provider.type, providers: [] };
+        groups.push(group);
+      }
+      group.providers.push(provider);
+    }
+
     return (
-      <ul class="provider-list" role="list">
-        {visibleProviders.map((provider) => (
-          <li
-            key={provider.id}
-            class="card provider-card"
-            onClick={() => this.handleProviderClick(provider)}
-            onKeyDown={(e: KeyboardEvent) => {
-              if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                this.handleProviderClick(provider);
-              }
-            }}
-            role="button"
-            tabIndex={0}
-            aria-label={`View details for ${provider.displayName}`}
+      <div class="provider-groups">
+        {groups.map((group) => (
+          <section
+            key={group.type}
+            class="provider-type-group"
+            aria-labelledby={`provider-type-${group.type}`}
           >
-            <div class="provider-info">
-              <span class="provider-name">{provider.displayName}</span>
-              <span class="provider-type badge">{provider.type}</span>
-              <span class={`provider-status badge ${
-                provider.status === "ok" ? "badge-ok" :
-                provider.status === "not_connected" ? "badge-not-connected" :
-                provider.status === "disabled" ? "badge-disabled" :
-                "badge-error"
-              }`}>
-                {providerStatusLabel(provider)}
-              </span>
-            </div>
-            <div class="provider-actions">
-              <button
-                type="button"
-                class="btn-sm"
-                onClick={(e: MouseEvent) => { e.stopPropagation(); this.handleSync(provider); }}
-                disabled={this.state.syncingProviderId === provider.id || !provider.enabled}
-                aria-label={`Sync numbers for ${provider.displayName}`}
-                aria-busy={this.state.syncingProviderId === provider.id ? "true" : undefined}
-              >
-                {this.state.syncingProviderId === provider.id ? "Syncing..." : "Sync"}
-              </button>
-              <button
-                type="button"
-                class={`btn-sm ${provider.enabled ? "btn-warning" : "btn-success-outline"}`}
-                onClick={(e: MouseEvent) => { e.stopPropagation(); this.handleToggleEnabled(provider); }}
-                aria-label={provider.enabled ? `Disable ${provider.displayName}` : `Enable ${provider.displayName}`}
-              >
-                {provider.enabled ? "Disable" : "Enable"}
-              </button>
-              <button
-                type="button"
-                class="btn-sm btn-danger"
-                onClick={(e: MouseEvent) => { e.stopPropagation(); this.handleDeleteClick(provider); }}
-                aria-label={`Remove ${provider.displayName}`}
-              >
-                Remove
-              </button>
-            </div>
-          </li>
+            <h3 id={`provider-type-${group.type}`} class="provider-group-title">
+              {providerTypeLabel(group.type)}
+            </h3>
+            <ul class="provider-list" role="list">
+              {group.providers.map((provider) => this.renderProviderRow(provider))}
+            </ul>
+          </section>
         ))}
-      </ul>
+      </div>
     );
   }
 

@@ -1,4 +1,12 @@
-/* ===== Material Design 3 Inspired Theme ===== */
+/* =====================================================================
+   Svarla Web — Theme Tokens
+   Brand: purple, aligned with the Svarla Android app.
+   See web/DESIGN.md for the full design guide.
+
+   Colors are defined as tokens so light/dark themes only need to
+   redefine this palette. Everything else (shape, spacing, motion) is
+   theme-independent. Prefer tokens over literal hex values everywhere.
+   ===================================================================== */
 
 *,
 *::before,
@@ -9,55 +17,75 @@
 }
 
 :root {
-  /* M3 Color System */
-  --md-primary: #1a73e8;
-  --md-primary-hover: #1557b0;
-  --md-primary-container: #d3e3fd;
+  /* ---- Color system (light theme) ---- */
+  /* Primary — Svarla deep purple */
+  --md-primary: #5b2d90;
+  --md-primary-hover: #4a2477;
+  --md-primary-container: #eaddff;
   --md-on-primary: #ffffff;
-  --md-on-primary-container: #041e49;
+  --md-on-primary-container: #21005d;
 
-  --md-secondary: #5f6368;
-  --md-secondary-container: #e8eaed;
+  /* Secondary — muted grey-purple */
+  --md-secondary: #625b71;
+  --md-secondary-container: #e8def8;
   --md-on-secondary: #ffffff;
 
+  /* Tertiary — teal accent */
+  --md-tertiary: #006b5f;
+  --md-tertiary-container: #74f8e4;
+  --md-on-tertiary-container: #00201c;
+
+  /* Surfaces — warm neutrals tinted toward the purple brand */
   --md-surface: #ffffff;
-  --md-surface-dim: #f8f9fa;
-  --md-surface-container: #f1f3f4;
-  --md-surface-container-high: #e8eaed;
-  --md-surface-container-highest: #dadce0;
+  --md-surface-dim: #f6f4f9;
+  --md-surface-variant: #ece7f2;
+  --md-surface-container: #f2eef8;
+  --md-surface-container-high: #ebe6f2;
+  --md-surface-container-highest: #e3dcec;
 
-  --md-on-surface: #1f1f1f;
-  --md-on-surface-variant: #5f6368;
-  --md-outline: #dadce0;
-  --md-outline-variant: #e8eaed;
+  --md-on-surface: #1c1b1f;
+  --md-on-surface-variant: #4a4458;
+  --md-outline: #cfc8d8;
+  --md-outline-variant: #e6e1ee;
 
-  --md-error: #d93025;
-  --md-error-container: #fce8e6;
+  /* Semantic */
+  --md-error: #ba1a1a;
+  --md-error-container: #ffdad6;
   --md-on-error: #ffffff;
-  --md-on-error-container: #a50e0e;
+  --md-on-error-container: #93000a;
 
-  --md-success: #1e8e3e;
-  --md-success-container: #e6f4ea;
-  --md-on-success-container: #0d652d;
+  --md-success: #2e7d32;
+  --md-success-container: #d5ecd6;
+  --md-on-success-container: #0d3d13;
 
-  --md-warning: #f9ab00;
-  --md-warning-container: #fef7e0;
+  --md-warning: #b26a00;
+  --md-warning-container: #ffeccc;
+  --md-on-warning-container: #4a2c00;
 
-  /* Elevation */
-  --md-elevation-1: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 1px 3px 1px rgba(60, 64, 67, 0.15);
-  --md-elevation-2: 0 1px 2px 0 rgba(60, 64, 67, 0.3), 0 2px 6px 2px rgba(60, 64, 67, 0.15);
-  --md-elevation-3: 0 4px 8px 3px rgba(60, 64, 67, 0.15), 0 1px 3px rgba(60, 64, 67, 0.3);
-  --md-elevation-4: 0 6px 10px 4px rgba(60, 64, 67, 0.15), 0 2px 3px rgba(60, 64, 67, 0.3);
+  /* Scrim / overlay */
+  --md-scrim: rgba(28, 27, 31, 0.5);
 
-  /* Shape */
-  --md-radius-xs: 4px;
-  --md-radius-sm: 8px;
-  --md-radius-md: 12px;
-  --md-radius-lg: 16px;
-  --md-radius-xl: 28px;
-  --md-radius-full: 9999px;
+  /* Failed-message glyph color (sits on the primary-colored sent bubble) */
+  --msg-failed: #ffcdd2;
 
-  /* Spacing */
+  /* ---- Elevation ---- */
+  /* Soft neutral shadows; used sparingly (hover, menus, modals). */
+  --md-elevation-1: 0 1px 2px rgba(28, 27, 31, 0.08), 0 1px 3px rgba(28, 27, 31, 0.06);
+  --md-elevation-2: 0 2px 4px rgba(28, 27, 31, 0.08), 0 1px 3px rgba(28, 27, 31, 0.10);
+  --md-elevation-3: 0 4px 10px rgba(28, 27, 31, 0.12), 0 2px 4px rgba(28, 27, 31, 0.08);
+  --md-elevation-4: 0 8px 24px rgba(28, 27, 31, 0.16), 0 3px 8px rgba(28, 27, 31, 0.10);
+
+  /* ---- Shape (theme-independent) ---- */
+  /* Restrained rounding: some softness, never pill-shaped by default. */
+  --md-radius-xs: 3px;
+  --md-radius-sm: 6px;
+  --md-radius-md: 8px;
+  --md-radius-lg: 10px;
+  --md-radius-xl: 14px;
+  --md-radius-full: 9999px; /* reserved for dots, avatars, intentional pills */
+  --md-radius-button: 6px;
+
+  /* ---- Spacing ---- */
   --md-space-xs: 4px;
   --md-space-sm: 8px;
   --md-space-md: 16px;
@@ -65,14 +93,133 @@
   --md-space-xl: 32px;
   --md-space-2xl: 48px;
 
-  /* Layout */
-  --nav-width: 280px;
-  --min-touch-target: 48px;
+  /* ---- Layout ---- */
+  --nav-width: 260px;
+  --min-touch-target: 48px; /* applied on touch/small screens only */
+  --control-height: 38px;   /* comfortable control height on pointer devices */
 
-  /* Motion */
+  /* ---- Motion ---- */
   --md-motion-ease: cubic-bezier(0.2, 0, 0, 1);
   --md-motion-duration-short: 150ms;
-  --md-motion-duration-medium: 300ms;
+  --md-motion-duration-medium: 260ms;
+
+  color-scheme: light;
+}
+
+/* =====================================================================
+   Dark theme
+   Only color-related tokens are redefined; shape/spacing/motion are
+   shared. Applied in two scopes:
+     1. OS preference, when the user has NOT chosen a theme.
+     2. Explicit user override via <html data-theme="dark">.
+   The dark palette is authored once and reused by both scopes.
+   ===================================================================== */
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Primary — lightens in dark mode so it reads on dark surfaces */
+  --md-primary: #d0bcff;
+  --md-primary-hover: #e0d1ff;
+  --md-primary-container: #4f378b;
+  --md-on-primary: #381e72;
+  --md-on-primary-container: #eaddff;
+
+  --md-secondary: #ccc2dc;
+  --md-secondary-container: #4a4458;
+  --md-on-secondary: #332d41;
+
+  --md-tertiary: #54dbc8;
+  --md-tertiary-container: #005048;
+  --md-on-tertiary-container: #74f8e4;
+
+  --md-surface: #1c1b1f;
+  --md-surface-dim: #141317;
+  --md-surface-variant: #2a2830;
+  --md-surface-container: #232128;
+  --md-surface-container-high: #2d2b33;
+  --md-surface-container-highest: #38353f;
+
+  --md-on-surface: #e6e1e9;
+  --md-on-surface-variant: #cac4d0;
+  --md-outline: #6b6577;
+  --md-outline-variant: #3a3742;
+
+  --md-error: #ffb4ab;
+  --md-error-container: #93000a;
+  --md-on-error: #690005;
+  --md-on-error-container: #ffdad6;
+
+  --md-success: #7fd589;
+  --md-success-container: #1f4d24;
+  --md-on-success-container: #c6f0c9;
+
+  --md-warning: #f2b866;
+  --md-warning-container: #573b12;
+  --md-on-warning-container: #ffeccc;
+
+  --md-scrim: rgba(0, 0, 0, 0.6);
+  --msg-failed: #7f1d1d;
+
+  /* Shadows read as darker/deeper on dark surfaces */
+  --md-elevation-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.3);
+  --md-elevation-2: 0 2px 4px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.35);
+  --md-elevation-3: 0 4px 10px rgba(0, 0, 0, 0.45), 0 2px 4px rgba(0, 0, 0, 0.35);
+  --md-elevation-4: 0 8px 24px rgba(0, 0, 0, 0.55), 0 3px 8px rgba(0, 0, 0, 0.4);
+}
+
+/* Follow the OS when the user has not made an explicit choice. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme]) {
+    color-scheme: dark;
+
+    --md-primary: #d0bcff;
+    --md-primary-hover: #e0d1ff;
+    --md-primary-container: #4f378b;
+    --md-on-primary: #381e72;
+    --md-on-primary-container: #eaddff;
+
+    --md-secondary: #ccc2dc;
+    --md-secondary-container: #4a4458;
+    --md-on-secondary: #332d41;
+
+    --md-tertiary: #54dbc8;
+    --md-tertiary-container: #005048;
+    --md-on-tertiary-container: #74f8e4;
+
+    --md-surface: #1c1b1f;
+    --md-surface-dim: #141317;
+    --md-surface-variant: #2a2830;
+    --md-surface-container: #232128;
+    --md-surface-container-high: #2d2b33;
+    --md-surface-container-highest: #38353f;
+
+    --md-on-surface: #e6e1e9;
+    --md-on-surface-variant: #cac4d0;
+    --md-outline: #6b6577;
+    --md-outline-variant: #3a3742;
+
+    --md-error: #ffb4ab;
+    --md-error-container: #93000a;
+    --md-on-error: #690005;
+    --md-on-error-container: #ffdad6;
+
+    --md-success: #7fd589;
+    --md-success-container: #1f4d24;
+    --md-on-success-container: #c6f0c9;
+
+    --md-warning: #f2b866;
+    --md-warning-container: #573b12;
+    --md-on-warning-container: #ffeccc;
+
+    --md-scrim: rgba(0, 0, 0, 0.6);
+    --msg-failed: #7f1d1d;
+
+    --md-elevation-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.3);
+    --md-elevation-2: 0 2px 4px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.35);
+    --md-elevation-3: 0 4px 10px rgba(0, 0, 0, 0.45), 0 2px 4px rgba(0, 0, 0, 0.35);
+    --md-elevation-4: 0 8px 24px rgba(0, 0, 0, 0.55), 0 3px 8px rgba(0, 0, 0, 0.4);
+  }
 }
 
 html,
@@ -119,25 +266,16 @@ h4 {
   color: var(--md-on-surface);
 }
 
-/* Touch-friendly targets */
-button,
-a,
-input[type="submit"],
-[role="button"],
-[role="menuitem"] {
-  min-height: var(--min-touch-target);
-  min-width: var(--min-touch-target);
-}
-
 button {
   cursor: pointer;
   border: none;
-  border-radius: var(--md-radius-full);
-  padding: 10px 24px;
+  border-radius: var(--md-radius-button);
+  padding: 9px 18px;
+  min-height: var(--control-height);
   font-size: 0.875rem;
   font-weight: 500;
   font-family: inherit;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.005em;
   background: var(--md-primary);
   color: var(--md-on-primary);
   transition: background var(--md-motion-duration-short) var(--md-motion-ease),
@@ -152,11 +290,20 @@ button {
 
 button:hover {
   background: var(--md-primary-hover);
-  box-shadow: var(--md-elevation-1);
 }
 
 button:active {
-  transform: scale(0.98);
+  transform: translateY(1px);
+}
+
+/* Generous touch targets on touch / small screens only */
+@media (max-width: 640px), (pointer: coarse) {
+  button,
+  a[role="button"],
+  input[type="submit"],
+  [role="menuitem"] {
+    min-height: var(--min-touch-target);
+  }
 }
 
 button:disabled {
@@ -260,7 +407,7 @@ textarea {
   min-height: var(--min-touch-target);
   min-width: var(--min-touch-target);
   padding: 0;
-  border-radius: var(--md-radius-full);
+  border-radius: var(--md-radius-md);
 }
 
 .nav-toggle:hover {
@@ -300,7 +447,7 @@ textarea {
   min-height: var(--min-touch-target);
   font-size: 0.875rem;
   font-weight: 500;
-  border-radius: var(--md-radius-full);
+  border-radius: var(--md-radius-md);
   margin: 2px var(--md-space-md);
   transition: background var(--md-motion-duration-short) var(--md-motion-ease),
               color var(--md-motion-duration-short) var(--md-motion-ease);
@@ -327,6 +474,42 @@ textarea {
   width: 24px;
   text-align: center;
   flex-shrink: 0;
+}
+
+/* Theme toggle */
+.nav-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-xs);
+}
+
+.theme-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0;
+  background: none;
+  color: var(--md-on-surface-variant);
+  border-radius: var(--md-radius-md);
+}
+
+.theme-toggle:hover {
+  background: var(--md-surface-container);
+  color: var(--md-on-surface);
+  box-shadow: none;
+}
+
+.theme-toggle:active {
+  transform: none;
+}
+
+.theme-toggle-icon {
+  font-size: 1.2rem;
+  line-height: 1;
 }
 
 /* Main content area */
@@ -360,7 +543,7 @@ textarea {
 
   .nav-header {
     flex-direction: row;
-    justify-content: flex-start;
+    justify-content: space-between;
     margin-bottom: var(--md-space-sm);
   }
 
@@ -370,6 +553,12 @@ textarea {
 
   .nav-toggle {
     display: none;
+  }
+
+  /* On desktop the hamburger is hidden; the actions group only holds
+     the theme toggle, sitting opposite the brand. */
+  .nav-header-actions {
+    order: 2;
   }
 
   .nav-links {
@@ -601,9 +790,9 @@ textarea {
 
 .btn-sm {
   font-size: 0.8125rem;
-  padding: 6px 16px;
-  min-height: 36px;
-  border-radius: var(--md-radius-full);
+  padding: 5px 14px;
+  min-height: 32px;
+  border-radius: var(--md-radius-button);
 }
 
 .btn-secondary {
@@ -629,11 +818,11 @@ textarea {
 
 .btn-warning {
   background: var(--md-warning);
-  color: #1f1f1f;
+  color: var(--md-on-primary);
 }
 
 .btn-warning:hover {
-  background: #e69900;
+  background: var(--md-on-warning-container);
 }
 
 .btn-success-outline {
@@ -645,6 +834,42 @@ textarea {
 .btn-success-outline:hover {
   background: var(--md-success-container);
   box-shadow: none;
+}
+
+/* Icon-only button: quiet by default, square, inherits text color. */
+.btn-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  background: transparent;
+  color: var(--md-on-surface-variant);
+  border: 1px solid transparent;
+  border-radius: var(--md-radius-button);
+}
+
+.btn-icon:hover {
+  background: var(--md-surface-container-high);
+  color: var(--md-on-surface);
+  box-shadow: none;
+}
+
+.btn-icon:active {
+  transform: none;
+}
+
+.btn-icon .icon {
+  display: block;
+}
+
+/* Danger variant: neutral until hovered, then reads as destructive. */
+.btn-icon-danger:hover {
+  background: var(--md-error-container);
+  color: var(--md-on-error-container);
 }
 
 /* ===== Provider Page ===== */
@@ -661,11 +886,26 @@ textarea {
   gap: var(--md-space-sm);
 }
 
-.provider-card {
+/* Providers are grouped by type (the type is a section header), so a row only
+   carries name, status, and actions. */
+.provider-groups {
   display: flex;
   flex-direction: column;
-  gap: var(--md-space-md);
-  padding: var(--md-space-md) var(--md-space-lg);
+  gap: var(--md-space-lg);
+}
+
+/* Mobile: name + status on the top row, actions below. .provider-info uses
+   display:contents so its children participate in the card grid directly. */
+.provider-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "name   actions"
+    "status actions";
+  align-items: center;
+  column-gap: var(--md-space-md);
+  row-gap: var(--md-space-sm);
+  padding: var(--md-space-md);
   border-radius: var(--md-radius-md);
   background: var(--md-surface);
   border: 1px solid var(--md-outline-variant);
@@ -684,27 +924,78 @@ textarea {
   outline-offset: 2px;
 }
 
-@media (min-width: 480px) {
-  .provider-card {
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-  }
-}
-
 .provider-info {
-  display: flex;
-  align-items: center;
-  gap: var(--md-space-sm);
-  flex-wrap: wrap;
-  flex: 1;
-  min-width: 0;
+  display: contents;
 }
 
 .provider-name {
+  grid-area: name;
   font-weight: 600;
+  font-size: 0.9375rem;
+  line-height: 1.3;
   word-break: break-word;
   color: var(--md-on-surface);
+  min-width: 0;
+}
+
+.provider-info .provider-status {
+  grid-area: status;
+  justify-self: start;
+}
+
+/* Keep status labels (e.g. "Authentication Error") on a single line. */
+.provider-status {
+  white-space: nowrap;
+}
+
+/* Mobile: a smaller status badge so it reads as a subtle sub-line under the
+   name rather than competing with it. */
+.provider-status {
+  font-size: 0.625rem;
+  padding: 2px 8px;
+}
+
+@media (min-width: 480px) {
+  .provider-status {
+    font-size: 0.6875rem;
+    padding: 4px 10px;
+  }
+}
+
+.provider-actions {
+  grid-area: actions;
+  justify-self: end;
+  align-self: center;
+}
+
+/* Hide an empty actions row so cards without actions don't get extra space. */
+.provider-actions:empty {
+  display: none;
+}
+
+@media (min-width: 480px) {
+  /* Single-row: name | status | (slack) | actions. The flexible track sits
+     between status and actions so status stays grouped near the name (left)
+     and slack pushes the Sync button to the right, away from the status. */
+  /* Name and status grouped together on the left (status hugs the name), with
+     all slack collapsing before the right-aligned actions. */
+  .provider-card {
+    grid-template-columns: max-content max-content minmax(var(--md-space-lg), 1fr) auto;
+    grid-template-areas: "name status . actions";
+    row-gap: 0;
+  }
+
+  .provider-name {
+    max-width: 22rem;
+  }
+
+  .provider-info .provider-status {
+    justify-self: start;
+  }
+
+  .provider-actions {
+    justify-self: end;
+  }
 }
 
 .provider-actions {
@@ -712,6 +1003,7 @@ textarea {
   gap: var(--md-space-sm);
   flex-shrink: 0;
   flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 /* ===== Add Provider Form ===== */
@@ -740,12 +1032,23 @@ textarea {
 
 .detail-header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: var(--md-space-md);
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--md-space-sm);
   margin-bottom: var(--md-space-md);
   padding-bottom: var(--md-space-md);
   border-bottom: 1px solid var(--md-outline-variant);
+}
+
+/* On wider screens the name and actions share one row. On mobile they stack:
+   name on top, action buttons on the row below (they don't fit side by side). */
+@media (min-width: 480px) {
+  .detail-header {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--md-space-md);
+  }
 }
 
 .detail-header h3 {
@@ -763,8 +1066,10 @@ textarea {
 
 .detail-list {
   display: grid;
-  grid-template-columns: auto 1fr;
-  gap: var(--md-space-sm) var(--md-space-lg);
+  /* Mobile: stack each label above its value so long values (IDs, URLs) get
+     the full width instead of being crammed into a narrow second column. */
+  grid-template-columns: 1fr;
+  gap: 2px;
   margin-bottom: var(--md-space-md);
 }
 
@@ -777,6 +1082,22 @@ textarea {
 .detail-list dd {
   margin: 0;
   word-break: break-all;
+}
+
+/* Add breathing room before the next label when pairs are stacked. */
+.detail-list dd:not(:last-child) {
+  margin-bottom: var(--md-space-sm);
+}
+
+@media (min-width: 480px) {
+  .detail-list {
+    grid-template-columns: auto 1fr;
+    gap: var(--md-space-sm) var(--md-space-lg);
+  }
+
+  .detail-list dd:not(:last-child) {
+    margin-bottom: 0;
+  }
 }
 
 .status-error-reason {
@@ -800,6 +1121,17 @@ textarea {
 .detail-header-actions {
   display: flex;
   gap: var(--md-space-sm);
+  align-items: center;
+  /* Mobile: actions sit on their own row above the name, aligned to the
+     right. order:-1 lifts them above the name without reordering the DOM. */
+  justify-content: flex-end;
+  order: -1;
+}
+
+@media (min-width: 480px) {
+  .detail-header-actions {
+    order: 0;
+  }
 }
 
 /* ===== Edit Provider Form ===== */
@@ -835,7 +1167,7 @@ textarea {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--md-scrim);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -997,21 +1329,21 @@ textarea {
 }
 
 .connection-dot.connected {
-  background: var(--md-success, #4caf50);
-  box-shadow: 0 0 4px var(--md-success, #4caf50);
+  background: var(--md-success);
+  box-shadow: 0 0 4px var(--md-success);
 }
 
 .connection-dot.disconnected {
-  background: var(--md-error, #f44336);
+  background: var(--md-error);
 }
 
 .text-connected {
-  color: var(--md-success, #4caf50);
+  color: var(--md-success);
   font-weight: 500;
 }
 
 .text-disconnected {
-  color: var(--md-error, #f44336);
+  color: var(--md-error);
   font-weight: 500;
 }
 
@@ -1056,8 +1388,8 @@ textarea {
 }
 
 .modem-warning {
-  background: var(--md-error-container, #fdecea);
-  color: var(--md-on-error-container, #b71c1c);
+  background: var(--md-error-container);
+  color: var(--md-on-error-container);
   border-radius: var(--md-radius-sm);
   padding: var(--md-space-sm) var(--md-space-md);
   margin-bottom: var(--md-space-md);
@@ -1079,11 +1411,11 @@ textarea {
 }
 
 .badge-connected {
-  color: var(--md-success, #4caf50);
+  color: var(--md-success);
 }
 
 .badge-disconnected {
-  color: var(--md-error, #f44336);
+  color: var(--md-error);
 }
 
 .connection-dot-sm {
@@ -1094,12 +1426,12 @@ textarea {
 }
 
 .connection-dot-sm.connected {
-  background: var(--md-success, #4caf50);
-  box-shadow: 0 0 3px var(--md-success, #4caf50);
+  background: var(--md-success);
+  box-shadow: 0 0 3px var(--md-success);
 }
 
 .connection-dot-sm.disconnected {
-  background: var(--md-error, #f44336);
+  background: var(--md-error);
 }
 
 /* ===== Empty State ===== */
@@ -1241,40 +1573,71 @@ textarea {
   gap: var(--md-space-sm);
 }
 
+/* Compact, clickable number row: number | label | badges. Mobile stacks
+   number+badges on the top row and the label preview beneath. */
 .number-item {
-  padding: var(--md-space-md) var(--md-space-lg);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "number badges"
+    "label  label";
+  align-items: center;
+  column-gap: var(--md-space-md);
+  row-gap: var(--md-space-xs);
+  padding: var(--md-space-md);
   background: var(--md-surface);
   border: 1px solid var(--md-outline-variant);
   border-radius: var(--md-radius-md);
-  display: flex;
-  flex-direction: column;
-  gap: var(--md-space-sm);
-  transition: box-shadow var(--md-motion-duration-short) var(--md-motion-ease);
+  cursor: pointer;
+  transition: box-shadow var(--md-motion-duration-short) var(--md-motion-ease),
+              border-color var(--md-motion-duration-short) var(--md-motion-ease);
 }
 
 .number-item:hover {
   box-shadow: var(--md-elevation-1);
+  border-color: var(--md-outline);
 }
 
-@media (min-width: 640px) {
-  .number-item {
-    flex-direction: row;
-    align-items: center;
-    justify-content: space-between;
-  }
-}
-
-.number-info {
-  display: flex;
-  align-items: center;
-  gap: var(--md-space-sm);
-  flex-wrap: wrap;
+.number-item:focus-visible {
+  outline: 2px solid var(--md-primary);
+  outline-offset: 2px;
 }
 
 .number-value {
+  grid-area: number;
+  display: inline-flex;
+  align-items: center;
   font-weight: 600;
   font-size: 0.9375rem;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  min-width: 0;
+}
+
+.number-item-label {
+  grid-area: label;
+  font-size: 0.8125rem;
+  color: var(--md-on-surface-variant);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.number-item-badges {
+  grid-area: badges;
+  display: inline-flex;
+  align-items: center;
+  gap: var(--md-space-xs);
+  justify-self: end;
+}
+
+@media (min-width: 640px) {
+  /* Single row: number | label | badges, aligned across rows. */
+  .number-item {
+    grid-template-columns: minmax(0, 14rem) minmax(0, 1fr) auto;
+    grid-template-areas: "number label badges";
+    row-gap: 0;
+  }
 }
 
 .number-status {
@@ -1284,6 +1647,7 @@ textarea {
   border-radius: var(--md-radius-full);
   text-transform: uppercase;
   letter-spacing: 0.03em;
+  white-space: nowrap;
 }
 
 .number-status.active {
@@ -1301,19 +1665,61 @@ textarea {
   color: var(--md-on-primary-container);
 }
 
+/* ===== Number detail view ===== */
+
+.number-detail-title {
+  display: inline-flex;
+  align-items: center;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 1rem;
+}
+
+/* The status row holds the Active/Inactive + Default badges side by side. */
+.number-detail .detail-list dd {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-sm);
+  flex-wrap: wrap;
+}
+
+/* A section with explanatory hint text on the left and its control on the
+   right (e.g. the set/clear default action). Stacks on mobile. */
+.detail-inline-control {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--md-space-sm);
+  margin-bottom: var(--md-space-md);
+}
+
+.detail-inline-control .form-hint {
+  margin: 0;
+}
+
+@media (min-width: 480px) {
+  .detail-inline-control {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--md-space-md);
+  }
+}
+
 .btn-default-set {
   font-size: 0.8125rem;
-  padding: 6px 12px;
-  border-radius: var(--md-radius-sm);
-  border: 1px solid var(--md-outline-variant);
-  background: var(--md-surface-container);
+  padding: 5px 14px;
+  min-height: 32px;
+  border-radius: var(--md-radius-button);
+  border: 1px solid var(--md-outline);
+  background: transparent;
   color: var(--md-primary);
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background var(--md-motion-duration-short) var(--md-motion-ease);
 }
 
 .btn-default-set:hover:not(:disabled) {
   background: var(--md-primary-container);
+  border-color: var(--md-primary);
 }
 
 .btn-default-set:disabled {
@@ -1323,13 +1729,14 @@ textarea {
 
 .btn-default-clear {
   font-size: 0.8125rem;
-  padding: 6px 12px;
-  border-radius: var(--md-radius-sm);
-  border: 1px solid var(--md-outline-variant);
-  background: var(--md-surface-container);
+  padding: 5px 14px;
+  min-height: 32px;
+  border-radius: var(--md-radius-button);
+  border: 1px solid var(--md-outline);
+  background: transparent;
   color: var(--md-on-surface-variant);
   cursor: pointer;
-  transition: background 0.15s;
+  transition: background var(--md-motion-duration-short) var(--md-motion-ease);
 }
 
 .btn-default-clear:hover:not(:disabled) {
@@ -1339,19 +1746,6 @@ textarea {
 .btn-default-clear:disabled {
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-.number-capabilities {
-  font-size: 0.75rem;
-  color: var(--md-on-surface-variant);
-  background: var(--md-surface-container);
-  padding: 2px 8px;
-  border-radius: var(--md-radius-full);
-}
-
-.number-label-section {
-  flex: 1;
-  min-width: 0;
 }
 
 .label-display {
@@ -1395,28 +1789,20 @@ textarea {
   margin-top: var(--md-space-xs);
 }
 
-.number-actions {
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
-}
-
 .block-inbound-toggle {
   display: flex;
   align-items: center;
   gap: 8px;
   cursor: pointer;
   font-size: 0.8125rem;
-  color: var(--md-sys-color-on-surface-variant, #444);
+  color: var(--md-on-surface-variant);
 }
 
 .block-inbound-toggle input[type="checkbox"] {
   width: 18px;
   height: 18px;
   cursor: pointer;
-  accent-color: var(--md-sys-color-primary, #6750a4);
+  accent-color: var(--md-primary);
 }
 
 .block-inbound-toggle .toggle-label {
@@ -1430,9 +1816,9 @@ textarea {
 .btn-activate,
 .btn-deactivate {
   font-size: 0.8125rem;
-  padding: 6px 16px;
-  min-height: 36px;
-  border-radius: var(--md-radius-full);
+  padding: 5px 14px;
+  min-height: 32px;
+  border-radius: var(--md-radius-button);
 }
 
 .btn-edit {
@@ -1462,23 +1848,30 @@ textarea {
   box-shadow: none;
 }
 
+/* Activate is a routine action — keep it quiet (outline), not a loud fill. */
 .btn-activate {
-  background: var(--md-success);
-  color: white;
+  background: transparent;
+  color: var(--md-primary);
+  border: 1px solid var(--md-outline);
 }
 
 .btn-activate:hover {
-  background: var(--md-on-success-container);
+  background: var(--md-primary-container);
+  border-color: var(--md-primary);
+  box-shadow: none;
 }
 
+/* Deactivate is neutral until hovered, then hints at its destructive nature. */
 .btn-deactivate {
   background: transparent;
-  color: var(--md-error);
-  border: 1px solid var(--md-error);
+  color: var(--md-on-surface-variant);
+  border: 1px solid var(--md-outline);
 }
 
 .btn-deactivate:hover {
   background: var(--md-error-container);
+  color: var(--md-on-error-container);
+  border-color: var(--md-error-container);
   box-shadow: none;
 }
 
@@ -1489,7 +1882,7 @@ textarea {
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: var(--md-scrim);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1541,7 +1934,7 @@ textarea {
 /* ===== Devices Page ===== */
 
 .devices-container {
-  max-width: 700px;
+  max-width: 900px;
 }
 
 .devices-container h1 {
@@ -1629,21 +2022,21 @@ textarea {
 
 .btn-confirm-remove {
   font-size: 0.8125rem;
-  padding: 6px 16px;
-  min-height: 36px;
+  padding: 5px 14px;
+  min-height: 32px;
   background: var(--md-error);
   color: var(--md-on-error);
-  border-radius: var(--md-radius-full);
+  border-radius: var(--md-radius-button);
 }
 
 .btn-cancel-remove {
   font-size: 0.8125rem;
-  padding: 6px 16px;
-  min-height: 36px;
+  padding: 5px 14px;
+  min-height: 32px;
   background: transparent;
   color: var(--md-on-surface-variant);
   border: 1px solid var(--md-outline);
-  border-radius: var(--md-radius-full);
+  border-radius: var(--md-radius-button);
 }
 
 .btn-cancel-remove:hover {
@@ -1653,12 +2046,12 @@ textarea {
 
 .btn-remove-device {
   font-size: 0.8125rem;
-  padding: 6px 16px;
-  min-height: 36px;
+  padding: 5px 14px;
+  min-height: 32px;
   background: transparent;
   color: var(--md-error);
   border: 1px solid var(--md-outline);
-  border-radius: var(--md-radius-full);
+  border-radius: var(--md-radius-button);
 }
 
 .btn-remove-device:hover {
@@ -1789,7 +2182,7 @@ textarea {
 
 .badge-declined {
   background: var(--md-warning-container);
-  color: #7c4a00;
+  color: var(--md-on-warning-container);
 }
 
 .badge-unanswered {
@@ -1851,11 +2244,11 @@ textarea {
 
 .btn-pagination {
   font-size: 0.8125rem;
-  padding: 8px 20px;
+  padding: 8px 18px;
   background: transparent;
   color: var(--md-primary);
   border: 1px solid var(--md-outline);
-  border-radius: var(--md-radius-full);
+  border-radius: var(--md-radius-button);
 }
 
 .btn-pagination:hover {
@@ -2116,7 +2509,7 @@ textarea {
   border: 1px solid var(--md-outline);
   padding: 8px 16px;
   font-size: 0.875rem;
-  border-radius: var(--md-radius-full);
+  border-radius: var(--md-radius-button);
 }
 
 .btn-back:hover {
@@ -2173,7 +2566,7 @@ textarea {
 .message-sent {
   align-self: flex-end;
   background: var(--md-primary);
-  color: white;
+  color: var(--md-on-primary);
   border-bottom-right-radius: var(--md-radius-xs);
 }
 
@@ -2207,7 +2600,9 @@ textarea {
 }
 
 .status-failed {
-  color: #ffcdd2;
+  /* Sits inside the "sent" bubble (background = --md-primary). Uses a
+     dedicated token because the required contrast flips between themes. */
+  color: var(--msg-failed);
 }
 
 /* Compose Area */
@@ -2268,9 +2663,9 @@ textarea {
 .btn-send {
   background: var(--md-primary);
   color: var(--md-on-primary);
-  padding: 8px 24px;
+  padding: 8px 20px;
   font-size: 0.875rem;
-  border-radius: var(--md-radius-full);
+  border-radius: var(--md-radius-button);
 }
 
 /* ===== Settings Page ===== */
@@ -2284,29 +2679,35 @@ textarea {
 }
 
 .settings-tabs {
-  display: flex;
+  /* Hidden on mobile — the dropdown menu is used instead. */
+  display: none;
   gap: var(--md-space-xs);
   border-bottom: 1px solid var(--md-outline-variant);
   margin-bottom: var(--md-space-xl);
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
+}
+
+@media (min-width: 640px) {
+  .settings-tabs {
+    display: flex;
+  }
 }
 
 .settings-tab {
   display: inline-flex;
   align-items: center;
   gap: var(--md-space-sm);
-  padding: var(--md-space-sm) var(--md-space-md);
-  font-size: 0.875rem;
+  padding: 10px var(--md-space-md);
+  font-size: 0.9375rem;
   font-weight: 500;
   color: var(--md-on-surface-variant);
   background: transparent;
   border: none;
   border-bottom: 2px solid transparent;
-  border-radius: 0;
+  border-radius: var(--md-radius-sm) var(--md-radius-sm) 0 0;
   white-space: nowrap;
-  min-height: 48px;
+  min-height: 44px;
   transition: color var(--md-motion-duration-short) var(--md-motion-ease),
+              background var(--md-motion-duration-short) var(--md-motion-ease),
               border-color var(--md-motion-duration-short) var(--md-motion-ease);
 }
 
@@ -2324,11 +2725,122 @@ textarea {
 
 .settings-tab-active:hover {
   color: var(--md-primary);
-  background: transparent;
+  background: var(--md-surface-container);
 }
 
+/* Icon slot: center the SVG and keep it aligned with the label text. */
 .settings-tab-icon {
-  font-size: 1.125rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-tab-icon .icon {
+  display: block;
+}
+
+/* ---- Mobile tab dropdown ---- */
+/* Shown below 640px; the desktop tab strip takes over at ≥640px. */
+.settings-tab-menu {
+  position: relative;
+  margin-bottom: var(--md-space-xl);
+}
+
+.settings-tab-menu-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--md-space-sm);
+  width: 100%;
+  padding: 10px var(--md-space-md);
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--md-on-surface);
+  background: var(--md-surface);
+  border: 1px solid var(--md-outline);
+  border-radius: var(--md-radius-md);
+}
+
+.settings-tab-menu-trigger:hover {
+  background: var(--md-surface-container);
+  box-shadow: none;
+}
+
+.settings-tab-menu-current {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--md-space-sm);
+  color: var(--md-primary);
+}
+
+.settings-tab-menu-chevron {
+  display: inline-flex;
+  color: var(--md-on-surface-variant);
+  transition: transform var(--md-motion-duration-short) var(--md-motion-ease);
+}
+
+.settings-tab-menu-trigger[aria-expanded="true"] .settings-tab-menu-chevron {
+  transform: rotate(180deg);
+}
+
+.settings-tab-menu-list {
+  position: absolute;
+  top: calc(100% + var(--md-space-xs));
+  left: 0;
+  right: 0;
+  z-index: 50;
+  list-style: none;
+  margin: 0;
+  padding: var(--md-space-xs);
+  background: var(--md-surface);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-radius-md);
+  box-shadow: var(--md-elevation-2);
+  animation: menu-in var(--md-motion-duration-short) var(--md-motion-ease);
+}
+
+@keyframes menu-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.settings-tab-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-sm);
+  width: 100%;
+  padding: 10px var(--md-space-sm);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  color: var(--md-on-surface-variant);
+  background: transparent;
+  border: none;
+  border-radius: var(--md-radius-sm);
+  text-align: left;
+  justify-content: flex-start;
+}
+
+.settings-tab-menu-item:hover {
+  background: var(--md-surface-container);
+  color: var(--md-on-surface);
+  box-shadow: none;
+}
+
+.settings-tab-menu-item-active {
+  color: var(--md-primary);
+  background: var(--md-primary-container);
+  font-weight: 600;
+}
+
+.settings-tab-menu-item-active:hover {
+  background: var(--md-primary-container);
+  color: var(--md-primary);
+}
+
+@media (min-width: 640px) {
+  .settings-tab-menu {
+    display: none;
+  }
 }
 
 .settings-tab-content {
@@ -2337,6 +2849,7 @@ textarea {
 
 .settings-account {
   max-width: 500px;
+  margin: 0 auto;
 }
 
 .settings-section-title {
@@ -2440,6 +2953,41 @@ textarea {
 :focus-visible {
   outline: 2px solid var(--md-primary);
   outline-offset: 2px;
+}
+
+/* Remove the default focus ring only when a visible one is provided. */
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* ===== Inline SVG icons ===== */
+
+/* Icons inherit text color (stroke="currentColor") and never shrink in a
+   flex row. Used by settings tabs, the provider trash button, etc. */
+.icon {
+  display: inline-block;
+  flex-shrink: 0;
+  vertical-align: middle;
+}
+
+/* ===== Text selection ===== */
+
+::selection {
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+}
+
+/* ===== Reduced motion ===== */
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 
@@ -2557,7 +3105,7 @@ textarea {
 }
 
 .new-device-banner-dismiss:hover {
-  background: rgba(0, 0, 0, 0.08);
+  background: var(--md-surface-container-high);
   box-shadow: none;
 }
 
@@ -2642,7 +3190,7 @@ textarea {
   background: var(--md-primary);
   color: var(--md-on-primary);
   border: none;
-  border-radius: var(--md-radius-xl);
+  border-radius: var(--md-radius-button);
   font-size: 1rem;
   font-weight: 500;
   text-decoration: none;
@@ -2749,7 +3297,7 @@ textarea {
 
 .android-banner-btn {
   border: none;
-  border-radius: var(--md-radius-xl);
+  border-radius: var(--md-radius-button);
   cursor: pointer;
   font-weight: 500;
   font-size: 0.875rem;

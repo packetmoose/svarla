@@ -51,6 +51,13 @@ services:
       MEDIA_BRIDGE_URL: http://mediabridge:9090
       APK_SOURCE: local
       EXPERIMENTAL_PROVIDERS: true
+      # Poll for file changes instead of relying on inotify, which is not
+      # reliably delivered across Docker bind mounts.
+      #   WATCH_POLL          → web/build.ts polling watcher (ms)
+      #   CHOKIDAR_USEPOLLING → tsx watch (backend) polling
+      WATCH_POLL: "300"
+      CHOKIDAR_USEPOLLING: "true"
+      CHOKIDAR_INTERVAL: "300"
     depends_on:
       db:
         condition: service_healthy
