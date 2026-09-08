@@ -1,3 +1,27 @@
+# Development image: full dependencies + source, runs tsx in watch mode.
+# Source is bind-mounted at runtime (see docker-compose.yml) so edits on the
+# host trigger an automatic reload inside the container.
+FROM node:20-slim AS dev
+
+WORKDIR /app
+
+COPY package.json package-lock.json* ./
+RUN npm ci
+
+COPY tsconfig.json ./
+COPY tsconfig.migrations.json ./
+COPY tsconfig.scripts.json ./
+COPY src/ ./src/
+COPY web/ ./web/
+COPY public/ ./public/
+COPY migrations/ ./migrations/
+COPY scripts/ ./scripts/
+COPY server-config.yaml ./
+
+EXPOSE 3000
+
+CMD ["npm", "run", "dev"]
+
 FROM node:20-slim AS builder
 
 WORKDIR /app

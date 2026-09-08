@@ -1,9 +1,12 @@
 # Svarla — Development
 #
-# Builds from source. All defaults are set for local development — no .env file needed.
+# Builds from source and runs the server in watch mode: source files are
+# bind-mounted from the host and `tsx watch` restarts the server on any change.
+# All defaults are set for local development — no .env file needed.
 #
 # Usage:
-#   docker compose up -d
+#   docker compose up        (foreground, so you can see reload logs)
+#   docker compose up -d     (background)
 
 services:
   db:
@@ -26,8 +29,13 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      target: dev
       tags:
         - "svarla-server:dev"
+    # Run both watchers: the web bundle builder (esbuild --watch, rebuilds
+    # dist/web/ on change) and the server (tsx watch, restarts on change).
+    # The web watcher runs in the background; if it exits, the container stops.
+    command: sh -c "npm run dev:web & npm run dev"
     ports:
       - "3000:3000"
     environment:
@@ -48,6 +56,19 @@ services:
         condition: service_healthy
     restart: unless-stopped
     volumes:
+      # Bind-mount source so edits on the host trigger tsx watch reloads.
+      - ./src:/app/src
+      - ./web:/app/web
+      - ./migrations:/app/migrations
+      - ./public:/app/public
+      - ./scripts:/app/scripts
+      - ./tsconfig.json:/app/tsconfig.json:ro
+      - ./tsconfig.migrations.json:/app/tsconfig.migrations.json:ro
+      - ./tsconfig.scripts.json:/app/tsconfig.scripts.json:ro
+      - ./package.json:/app/package.json:ro
+      # Keep the container's node_modules (built for the container platform);
+      # this anonymous volume shadows any host node_modules on the mounts above.
+      - /app/node_modules
       - ./server-config.yaml:/app/server-config.yaml:ro
       - ./build-output/svarla-signed.apk:/app/public/downloads/svarla.apk:ro
 
