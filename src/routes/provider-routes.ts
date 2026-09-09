@@ -7,6 +7,7 @@ import {
   ProviderRemovalBlockedError,
 } from '../services/provider-registry.js';
 import { ModemGatewayTelephonyProvider } from '../providers/modem-gateway-telephony-provider.js';
+import { DummyTelephonyProvider } from '../providers/dummy-telephony-provider.js';
 import { getSupportedProviderTypes } from '../validators/provider-config-validator.js';
 
 /**
@@ -158,6 +159,19 @@ const addProviderBodySchema = z.object({
   type: z.string().min(1, 'Provider type is required'),
   displayName: z.string().min(1, 'Display name is required').max(100, 'Display name must be 100 characters or fewer'),
   config: z.record(z.unknown()).default({}),
+});
+
+const simulateIncomingSmsBodySchema = z.object({
+  from: z.string().min(1, 'From number is required').max(64, 'From number is too long'),
+  body: z.string().min(1, 'Message body is required').max(1600, 'Message body is too long'),
+});
+
+const simulateIncomingCallBodySchema = z.object({
+  from: z.string().min(1, 'From number is required').max(64, 'From number is too long'),
+});
+
+const hangupIncomingCallBodySchema = z.object({
+  callId: z.string().min(1).max(128).optional(),
 });
 
 const updateProviderBodySchema = z.object({
@@ -612,5 +626,174 @@ export function registerProviderRoutes(
       stale: status.stale ?? null,
       modemUnsupportedWarning: status.modemUnsupportedWarning ?? null,
     });
+  });
+
+  /**
+   * POST /api/providers/:id/simulate-incoming-sms
+   * Test helper for the dummy provider: emit a fake inbound SMS from an
+   * arbitrary "from" number to the provider's own number. The message flows
+   * through the normal incoming-SMS pipeline (persistence, notification, WS
+   * broadcast), so clients can be tested without a real SMS.
+   */
+  server.post('/api/providers/:id/simulate-incoming-sms', async (request: FastifyRequest, reply: FastifyReply) => {
+    const paramResult = providerIdParamSchema.safeParse(request.params);
+    if (!paramResult.success) {
+      return reply.status(400).send({
+        error: 'Invalid provider ID format',
+        fieldErrors: paramResult.error.issues.map((issue) => ({
+          field: issue.path.join('.') || 'id',
+          message: issue.message,
+        })),
+      });
+    }
+
+    const { id } = paramResult.data;
+    const provider = registry.getProvider(id);
+
+    if (!provider) {
+      return reply.status(404).send({ error: `Provider ${id} not found` });
+    }
+
+    if (provider.type !== 'dummy') {
+      return reply.status(400).send({
+        error: 'Simulating incoming SMS is only supported for dummy providers',
+      });
+    }
+
+    const instance = provider.instance as DummyTelephonyProvider | null;
+    if (!instance) {
+      return reply.status(400).send({ error: 'Provider is not available' });
+    }
+
+    const bodyResult = simulateIncomingSmsBodySchema.safeParse(request.body);
+    if (!bodyResult.success) {
+      return reply.status(400).send({
+        error: 'Validation failed',
+        fieldErrors: bodyResult.error.issues.map((issue) => ({
+          field: issue.path.join('.') || 'body',
+          message: issue.message,
+        })),
+      });
+    }
+
+    const { from, body } = bodyResult.data;
+    instance.simulateIncomingSms(from, instance.getPrimaryNumber(), body);
+
+    return reply.status(202).send({ status: 'accepted' });
+  });
+
+  /**
+   * POST /api/providers/:id/simulate-incoming-call
+   * Test helper for the dummy provider: emit a fake inbound call from an
+   * arbitrary "from" number to the provider's own number. The call is routed
+   * through the call orchestrator (MediaBridge echo session + device
+   * notifications), so client inbound-call signaling can be tested end-to-end.
+   * When answered, audio is echoed back to the answering client.
+   */
+  server.post('/api/providers/:id/simulate-incoming-call', async (request: FastifyRequest, reply: FastifyReply) => {
+    const paramResult = providerIdParamSchema.safeParse(request.params);
+    if (!paramResult.success) {
+      return reply.status(400).send({
+        error: 'Invalid provider ID format',
+        fieldErrors: paramResult.error.issues.map((issue) => ({
+          field: issue.path.join('.') || 'id',
+          message: issue.message,
+        })),
+      });
+    }
+
+    const { id } = paramResult.data;
+    const provider = registry.getProvider(id);
+
+    if (!provider) {
+      return reply.status(404).send({ error: `Provider ${id} not found` });
+    }
+
+    if (provider.type !== 'dummy') {
+      return reply.status(400).send({
+        error: 'Simulating incoming calls is only supported for dummy providers',
+      });
+    }
+
+    if (!provider.enabled) {
+      return reply.status(400).send({ error: 'Provider is disabled' });
+    }
+
+    const instance = provider.instance as DummyTelephonyProvider | null;
+    if (!instance) {
+      return reply.status(400).send({ error: 'Provider is not available' });
+    }
+
+    const bodyResult = simulateIncomingCallBodySchema.safeParse(request.body);
+    if (!bodyResult.success) {
+      return reply.status(400).send({
+        error: 'Validation failed',
+        fieldErrors: bodyResult.error.issues.map((issue) => ({
+          field: issue.path.join('.') || 'body',
+          message: issue.message,
+        })),
+      });
+    }
+
+    const { from } = bodyResult.data;
+    const callId = instance.simulateIncomingCall(from);
+
+    return reply.status(202).send({ status: 'accepted', callId });
+  });
+
+  /**
+   * POST /api/providers/:id/hangup-incoming-call
+   * Test helper for the dummy provider: hang up a simulated inbound call from
+   * the provider (caller) side, as if the remote party ended the call. This
+   * exercises client remote-hangup handling. Ends the specified call, or the
+   * most recent simulated call when no callId is given.
+   */
+  server.post('/api/providers/:id/hangup-incoming-call', async (request: FastifyRequest, reply: FastifyReply) => {
+    const paramResult = providerIdParamSchema.safeParse(request.params);
+    if (!paramResult.success) {
+      return reply.status(400).send({
+        error: 'Invalid provider ID format',
+        fieldErrors: paramResult.error.issues.map((issue) => ({
+          field: issue.path.join('.') || 'id',
+          message: issue.message,
+        })),
+      });
+    }
+
+    const { id } = paramResult.data;
+    const provider = registry.getProvider(id);
+
+    if (!provider) {
+      return reply.status(404).send({ error: `Provider ${id} not found` });
+    }
+
+    if (provider.type !== 'dummy') {
+      return reply.status(400).send({
+        error: 'Hanging up incoming calls is only supported for dummy providers',
+      });
+    }
+
+    const instance = provider.instance as DummyTelephonyProvider | null;
+    if (!instance) {
+      return reply.status(400).send({ error: 'Provider is not available' });
+    }
+
+    const bodyResult = hangupIncomingCallBodySchema.safeParse(request.body ?? {});
+    if (!bodyResult.success) {
+      return reply.status(400).send({
+        error: 'Validation failed',
+        fieldErrors: bodyResult.error.issues.map((issue) => ({
+          field: issue.path.join('.') || 'body',
+          message: issue.message,
+        })),
+      });
+    }
+
+    const hungUp = instance.hangupSimulatedCall(bodyResult.data.callId);
+    if (!hungUp) {
+      return reply.status(404).send({ error: 'No active simulated call to hang up' });
+    }
+
+    return reply.status(202).send({ status: 'accepted', callId: hungUp });
   });
 }

@@ -1349,6 +1349,24 @@ textarea {
   border-top: 1px solid var(--md-outline-variant);
 }
 
+/* ===== Dummy provider testing ===== */
+
+.dummy-testing .dummy-test-form {
+  margin-top: var(--md-space-md);
+  padding: var(--md-space-md);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-radius-sm, 8px);
+}
+
+.dummy-testing .dummy-test-form h5 {
+  margin: 0 0 var(--md-space-sm);
+}
+
+.dummy-testing textarea {
+  width: 100%;
+  resize: vertical;
+}
+
 /* ===== Modem Status ===== */
 
 .modem-status-section {

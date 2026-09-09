@@ -240,12 +240,18 @@ export class CallOrchestrator {
     const callId = randomUUID();
     const sessionId = callId;
 
+    // The dummy provider is a test provider with no real carrier: its calls are
+    // routed to the MediaBridge echo leg (delayed loopback) so the entire
+    // call/media/signaling path can be exercised without an actual call. It
+    // still gets ringback so the flow mirrors a real "ringing → answered" call.
+    const isEchoProvider = providerEntry.type === 'dummy';
+
     let sessionInfo: SessionInfo;
     try {
       sessionInfo = await this.mediaBridge.createSession({
         sessionId,
-        providerLeg: { type: 'pending' },
-        options: { ringback: !provider.usesWebSocketAudio },
+        providerLeg: isEchoProvider ? { type: 'echo' } : { type: 'pending' },
+        options: { ringback: isEchoProvider ? true : !provider.usesWebSocketAudio },
       });
     } catch (err) {
       if (err instanceof MediaBridgeUnavailableError) {
@@ -272,22 +278,26 @@ export class CallOrchestrator {
     // For providers using WebSocket audio, tell the MediaBridge to expect
     // a WebSocket connection identified by the provider's callId.
     // For SIP-based providers, set the SIP URI.
-    try {
-      const isWebsocketProvider = provider.usesWebSocketAudio || providerEntry.type === '46elks';
-      if (isWebsocketProvider) {
-        await this.mediaBridge.updateSession(sessionId, {
-          providerLeg: { type: 'websocket', protocol: provider.providerId, expectedCallId: makeCallResult.callId },
-        });
-      } else {
-        await this.mediaBridge.updateSession(sessionId, {
-          providerLeg: { type: 'sip', uri: selectedSipUri },
-        });
+    // The echo (dummy) leg is fully configured at create time and has no
+    // external provider connection, so no patch is needed.
+    if (!isEchoProvider) {
+      try {
+        const isWebsocketProvider = provider.usesWebSocketAudio || providerEntry.type === '46elks';
+        if (isWebsocketProvider) {
+          await this.mediaBridge.updateSession(sessionId, {
+            providerLeg: { type: 'websocket', protocol: provider.providerId, expectedCallId: makeCallResult.callId },
+          });
+        } else {
+          await this.mediaBridge.updateSession(sessionId, {
+            providerLeg: { type: 'sip', uri: selectedSipUri },
+          });
+        }
+      } catch (err) {
+        this.logger.warn(
+          { err, sessionId } as Record<string, unknown>,
+          'Failed to patch MediaBridge session with provider leg',
+        );
       }
-    } catch (err) {
-      this.logger.warn(
-        { err, sessionId } as Record<string, unknown>,
-        'Failed to patch MediaBridge session with provider leg',
-      );
     }
 
     // 5. Track the active call
@@ -376,12 +386,18 @@ export class CallOrchestrator {
     // Ringback is only played by MediaBridge for SIP providers. WebSocket audio
     // providers (modem-gateway) get ringing from the carrier/modem directly, so
     // MediaBridge must not inject its own ringback tone.
+    // The dummy provider is a test provider: inbound calls use the MediaBridge
+    // echo leg so that, once a client answers and its WebRTC leg connects, the
+    // caller's audio is echoed back — exercising inbound signaling end-to-end.
+    // No ringback here: the callee sees the incoming-call UI, not a ring tone.
+    const isEchoProvider = providerEntry.type === 'dummy';
+
     let sessionInfo: SessionInfo;
     try {
       sessionInfo = await this.mediaBridge.createSession({
         sessionId,
-        providerLeg: { type: 'pending' },
-        options: { ringback: !provider.usesWebSocketAudio },
+        providerLeg: isEchoProvider ? { type: 'echo' } : { type: 'pending' },
+        options: { ringback: isEchoProvider ? false : !provider.usesWebSocketAudio },
       });
     } catch (err) {
       // Clean up the early mapping on failure

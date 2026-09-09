@@ -228,6 +228,15 @@ interface ProvidersState {
   // Sync state
   syncingProviderId: string | null;
 
+  // Dummy provider testing (fake inbound SMS / call)
+  dummySmsFrom: string;
+  dummySmsBody: string;
+  dummySmsSubmitting: boolean;
+  dummyCallFrom: string;
+  dummyCallSubmitting: boolean;
+  // Provider call ID of the in-progress simulated inbound call, if any.
+  dummyActiveCallId: string | null;
+
   // Notifications
   notifications: Notification[];
 }
@@ -265,6 +274,12 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
     modemStatus: null,
     modemStatusLoading: false,
     syncingProviderId: null,
+    dummySmsFrom: "",
+    dummySmsBody: "",
+    dummySmsSubmitting: false,
+    dummyCallFrom: "",
+    dummyCallSubmitting: false,
+    dummyActiveCallId: null,
     notifications: [],
   };
 
@@ -290,7 +305,15 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
   };
 
   private fetchProviderDetail = async (id: string) => {
-    this.setState({ detailLoading: true, modemStatus: null });
+    this.setState({
+      detailLoading: true,
+      modemStatus: null,
+      // Reset dummy testing inputs so they don't carry across providers.
+      dummySmsFrom: "",
+      dummySmsBody: "",
+      dummyCallFrom: "",
+      dummyActiveCallId: null,
+    });
     const result = await api.get<ProviderDetail>(`/api/providers/${id}`);
     if (result.ok) {
       this.setState({ selectedProvider: result.data, detailLoading: false });
@@ -439,6 +462,89 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
     } else {
       const errorData = result.data as { error?: string };
       this.showNotification(errorData.error || "Sync failed", "error");
+    }
+  };
+
+  /* ---------- Dummy provider testing ---------- */
+
+  private handleSimulateSms = async (e: Event) => {
+    e.preventDefault();
+    const { selectedProvider, dummySmsFrom, dummySmsBody } = this.state;
+    if (!selectedProvider) return;
+
+    const from = dummySmsFrom.trim();
+    const body = dummySmsBody.trim();
+    if (!from || !body) {
+      this.showNotification("Enter a from number and a message", "error");
+      return;
+    }
+
+    this.setState({ dummySmsSubmitting: true });
+    const result = await api.post(
+      `/api/providers/${selectedProvider.id}/simulate-incoming-sms`,
+      { from, body },
+    );
+    this.setState({ dummySmsSubmitting: false });
+
+    if (result.ok) {
+      this.setState({ dummySmsBody: "" });
+      this.showNotification("Fake incoming SMS sent", "success");
+    } else {
+      const errorData = result.data as { error?: string };
+      this.showNotification(errorData.error || "Failed to send fake SMS", "error");
+    }
+  };
+
+  private handleSimulateCall = async (e: Event) => {
+    e.preventDefault();
+    const { selectedProvider, dummyCallFrom } = this.state;
+    if (!selectedProvider) return;
+
+    const from = dummyCallFrom.trim();
+    if (!from) {
+      this.showNotification("Enter a from number", "error");
+      return;
+    }
+
+    this.setState({ dummyCallSubmitting: true });
+    const result = await api.post<{ status: string; callId: string }>(
+      `/api/providers/${selectedProvider.id}/simulate-incoming-call`,
+      { from },
+    );
+    this.setState({ dummyCallSubmitting: false });
+
+    if (result.ok) {
+      this.setState({ dummyActiveCallId: result.data.callId });
+      this.showNotification("Fake incoming call started", "success");
+    } else {
+      const errorData = result.data as { error?: string };
+      this.showNotification(errorData.error || "Failed to start fake call", "error");
+    }
+  };
+
+  private handleHangupCall = async (e: Event) => {
+    e.preventDefault();
+    const { selectedProvider, dummyActiveCallId } = this.state;
+    if (!selectedProvider) return;
+
+    this.setState({ dummyCallSubmitting: true });
+    const result = await api.post(
+      `/api/providers/${selectedProvider.id}/hangup-incoming-call`,
+      dummyActiveCallId ? { callId: dummyActiveCallId } : {},
+    );
+    this.setState({ dummyCallSubmitting: false });
+
+    if (result.ok) {
+      this.setState({ dummyActiveCallId: null });
+      this.showNotification("Fake caller hung up", "success");
+    } else {
+      const errorData = result.data as { error?: string };
+      // If the call is already gone (e.g. answered+ended elsewhere), clear the
+      // active state so the UI returns to the "start call" button.
+      if (result.status === 404) {
+        this.setState({ dummyActiveCallId: null });
+      }
+      this.showNotification(errorData.error || "Failed to hang up fake call", "error");
     }
   };
 
@@ -1218,6 +1324,90 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
     );
   }
 
+  /**
+   * Dummy-provider testing controls: send a fake inbound SMS and start a fake
+   * inbound call, both targeting the dummy provider's own number. Useful for
+   * exercising client messaging and inbound-call signaling without a carrier.
+   */
+  private renderDummyTesting() {
+    const {
+      dummySmsFrom,
+      dummySmsBody,
+      dummySmsSubmitting,
+      dummyCallFrom,
+      dummyCallSubmitting,
+      dummyActiveCallId,
+    } = this.state;
+
+    const callActive = dummyActiveCallId !== null;
+
+    return (
+      <div class="detail-section dummy-testing">
+        <h4>Testing</h4>
+
+        <form class="dummy-test-form" onSubmit={this.handleSimulateSms}>
+          <h5>Fake incoming SMS</h5>
+          <div class="form-field">
+            <label for="dummy-sms-from">From number</label>
+            <input
+              id="dummy-sms-from"
+              type="text"
+              value={dummySmsFrom}
+              placeholder="+15551234567"
+              onInput={(e: Event) =>
+                this.setState({ dummySmsFrom: (e.target as HTMLInputElement).value })
+              }
+            />
+          </div>
+          <div class="form-field">
+            <label for="dummy-sms-body">Message</label>
+            <textarea
+              id="dummy-sms-body"
+              value={dummySmsBody}
+              placeholder="Message text"
+              rows={2}
+              onInput={(e: Event) =>
+                this.setState({ dummySmsBody: (e.target as HTMLTextAreaElement).value })
+              }
+            />
+          </div>
+          <button type="submit" class="btn-sm" disabled={dummySmsSubmitting}>
+            {dummySmsSubmitting ? "Sending..." : "Send fake SMS"}
+          </button>
+        </form>
+
+        <form
+          class="dummy-test-form"
+          onSubmit={callActive ? this.handleHangupCall : this.handleSimulateCall}
+        >
+          <h5>Fake incoming call</h5>
+          <div class="form-field">
+            <label for="dummy-call-from">From number</label>
+            <input
+              id="dummy-call-from"
+              type="text"
+              value={dummyCallFrom}
+              placeholder="+15551234567"
+              disabled={callActive}
+              onInput={(e: Event) =>
+                this.setState({ dummyCallFrom: (e.target as HTMLInputElement).value })
+              }
+            />
+          </div>
+          {callActive ? (
+            <button type="submit" class="btn-sm btn-warning" disabled={dummyCallSubmitting}>
+              {dummyCallSubmitting ? "Hanging up..." : "Hang up (caller)"}
+            </button>
+          ) : (
+            <button type="submit" class="btn-sm" disabled={dummyCallSubmitting}>
+              {dummyCallSubmitting ? "Calling..." : "Simulate incoming call"}
+            </button>
+          )}
+        </form>
+      </div>
+    );
+  }
+
   private renderProviderDetail() {
     const { selectedProvider, detailLoading } = this.state;
 
@@ -1335,6 +1525,8 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
             </button>
           </div>
         )}
+
+        {selectedProvider.type === "dummy" && this.renderDummyTesting()}
       </div>
     );
   }

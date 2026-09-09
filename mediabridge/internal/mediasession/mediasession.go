@@ -41,6 +41,10 @@ type Config struct {
 	// connection-loss detection).
 	ProviderRTPTimeout time.Duration
 
+	// EchoDelay, when > 0, configures the underlying bridge for delayed
+	// loopback (echo) mode. Used by the echo provider leg (dummy provider).
+	EchoDelay time.Duration
+
 	// OnProviderTimeout is called (at most once) when the provider RTP leg
 	// goes silent for longer than ProviderRTPTimeout. It is the media-plane
 	// backup for a dropped provider leg when no SIP BYE is received — e.g.
@@ -89,6 +93,7 @@ func New(cfg Config) (*MediaSession, error) {
 		SIPCodec:       cfg.SIPCodec,
 		SIPClockRate:   cfg.SIPClockRate,
 		SIPPayloadType: cfg.SIPPayloadType,
+		EchoDelay:      cfg.EchoDelay,
 		Logger:         cfg.Logger,
 	})
 	if err != nil {

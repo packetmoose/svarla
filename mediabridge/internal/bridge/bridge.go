@@ -35,10 +35,20 @@ func (f RTPWriterFunc) WriteRTP(pkt *rtp.Packet) error {
 // PCMHandler is called with decoded PCM frames for additional processing (e.g., audio tap).
 type PCMHandler func(direction Direction, pcm []int16)
 
+// echoFrame is a single client audio payload held for delayed loopback.
+type echoFrame struct {
+	payload   []byte
+	playAtNano int64
+}
+
 // Config holds configuration for an audio bridge instance.
 type Config struct {
 	// SessionID identifies this bridge's session.
 	SessionID string
+
+	// EchoDelay, when > 0, puts the bridge in delayed-loopback (echo) mode:
+	// the client's own audio is played back to the WebRTC leg after this delay.
+	EchoDelay time.Duration
 
 	// SIPCodec is the negotiated SIP-side codec ("PCMU" for G.711 µ-law).
 	SIPCodec string
@@ -87,6 +97,13 @@ type Bridge struct {
 	webrtcSeqNum    uint16
 	webrtcTimestamp uint32
 
+	// Echo (delayed loopback) mode. When echoDelay > 0 the bridge loops the
+	// client's own audio back to the WebRTC leg after echoDelay. Used by the
+	// dummy provider to test the full media path without a real carrier.
+	echoDelay time.Duration
+	echoMu    sync.Mutex
+	echoQueue []echoFrame
+
 	// Lifecycle.
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -116,6 +133,7 @@ func New(cfg Config) (*Bridge, error) {
 		config:    cfg,
 		logger:    cfg.Logger,
 		jitterBuf: NewJitterBuffer(cfg.JitterDepth),
+		echoDelay: cfg.EchoDelay,
 		ctx:       ctx,
 		cancel:    cancel,
 	}, nil
@@ -149,10 +167,17 @@ func (b *Bridge) Start() {
 	b.wg.Add(1)
 	go b.jitterPlayoutLoop()
 
+	// In echo mode, start the delayed-loopback playout goroutine.
+	if b.echoDelay > 0 {
+		b.wg.Add(1)
+		go b.echoPlayoutLoop()
+	}
+
 	b.logger.Info("audio bridge started",
 		slog.String("sessionId", b.config.SessionID),
 		slog.String("sipCodec", b.config.SIPCodec),
 		slog.Int("jitterDepth", b.config.JitterDepth),
+		slog.Duration("echoDelay", b.echoDelay),
 	)
 }
 
@@ -178,6 +203,13 @@ func (b *Bridge) Stop() {
 // With PCMU negotiated, the browser sends G.711 µ-law at 8kHz.
 // We pass it directly to the SIP provider (same codec, zero transcoding).
 func (b *Bridge) HandleClientRTP(pkt *rtp.Packet) {
+	// Echo mode: loop the client's own audio back to the WebRTC leg after a
+	// fixed delay instead of forwarding to a provider.
+	if b.echoDelay > 0 {
+		b.enqueueEcho(pkt.Payload)
+		return
+	}
+
 	b.mu.RLock()
 	writer := b.sipWriter
 	b.mu.RUnlock()
@@ -354,6 +386,104 @@ func (b *Bridge) playoutFrame() {
 
 	if err := writer.WriteRTP(rtpPkt); err != nil {
 		b.logger.Debug("failed to write RTP to WebRTC",
+			slog.String("sessionId", b.config.SessionID),
+			slog.String("error", err.Error()),
+		)
+	}
+}
+
+// enqueueEcho copies the client payload into the echo queue with a scheduled
+// playback time of now + echoDelay. Called from the WebRTC OnTrack read loop.
+func (b *Bridge) enqueueEcho(payload []byte) {
+	if len(payload) == 0 {
+		return
+	}
+
+	// Copy the payload — the caller reuses its RTP read buffer.
+	buf := make([]byte, len(payload))
+	copy(buf, payload)
+
+	b.echoMu.Lock()
+	b.echoQueue = append(b.echoQueue, echoFrame{
+		payload:    buf,
+		playAtNano: time.Now().Add(b.echoDelay).UnixNano(),
+	})
+	b.echoMu.Unlock()
+}
+
+// echoPlayoutLoop runs in echo mode, replaying buffered client frames to the
+// WebRTC leg once their delay has elapsed. It ticks at the 20ms frame cadence
+// and emits every frame whose scheduled playback time has passed, preserving
+// the client's original pacing shifted forward by echoDelay.
+func (b *Bridge) echoPlayoutLoop() {
+	defer b.wg.Done()
+
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-b.ctx.Done():
+			return
+		case <-ticker.C:
+			now := time.Now().UnixNano()
+
+			// Collect all frames whose playback time has arrived.
+			b.echoMu.Lock()
+			var due [][]byte
+			i := 0
+			for i < len(b.echoQueue) && b.echoQueue[i].playAtNano <= now {
+				due = append(due, b.echoQueue[i].payload)
+				i++
+			}
+			if i > 0 {
+				b.echoQueue = b.echoQueue[i:]
+			}
+			b.echoMu.Unlock()
+
+			for _, payload := range due {
+				b.writeEchoFrame(payload)
+			}
+		}
+	}
+}
+
+// writeEchoFrame sends a single G.711 µ-law payload to the WebRTC leg,
+// re-stamping RTP sequence/timestamp like the normal provider→client path.
+func (b *Bridge) writeEchoFrame(payload []byte) {
+	b.mu.RLock()
+	writer := b.webrtcWriter
+	b.mu.RUnlock()
+
+	if writer == nil || len(payload) == 0 {
+		return
+	}
+
+	// Notify PCM handler (audio tap) if configured.
+	if b.config.PCMHandler != nil {
+		b.config.PCMHandler(ProviderToClient, DecodeUlaw(payload))
+	}
+
+	b.mu.Lock()
+	b.webrtcSeqNum++
+	seqNum := b.webrtcSeqNum
+	b.webrtcTimestamp += uint32(len(payload))
+	timestamp := b.webrtcTimestamp
+	b.mu.Unlock()
+
+	rtpPkt := &rtp.Packet{
+		Header: rtp.Header{
+			Version:        2,
+			PayloadType:    0, // PCMU
+			SequenceNumber: seqNum,
+			Timestamp:      timestamp,
+			SSRC:           0x87654321,
+		},
+		Payload: payload,
+	}
+
+	if err := writer.WriteRTP(rtpPkt); err != nil {
+		b.logger.Debug("failed to write echo RTP to WebRTC",
 			slog.String("sessionId", b.config.SessionID),
 			slog.String("error", err.Error()),
 		)

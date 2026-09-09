@@ -66,8 +66,9 @@ type CreateSessionRequest struct {
 
 // SessionOptions maps the "options" field in the create request.
 type SessionOptions struct {
-	Ringback bool                    `json:"ringback"`
-	AudioTap *session.AudioTapConfig `json:"audioTap,omitempty"`
+	Ringback    bool                    `json:"ringback"`
+	AudioTap    *session.AudioTapConfig `json:"audioTap,omitempty"`
+	EchoDelayMs int                     `json:"echoDelayMs,omitempty"`
 }
 
 // CreateSessionResponse is the JSON response for POST /sessions.
@@ -115,6 +116,7 @@ func (h *Handler) createSession(w http.ResponseWriter, r *http.Request) {
 	opts := session.Options{}
 	if req.Options != nil {
 		opts.Ringback = req.Options.Ringback
+		opts.EchoDelayMs = req.Options.EchoDelayMs
 		if req.Options.AudioTap != nil {
 			opts.AudioTap = req.Options.AudioTap
 		}
