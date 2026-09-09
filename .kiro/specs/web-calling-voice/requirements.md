@@ -8,7 +8,9 @@ The backend plumbing already exists and is provider-agnostic. The Server exposes
 
 The MediaBridge negotiates a PCM audio codec (16-bit LE, 16kHz mono) rather than Opus. Because `RTCPeerConnection` negotiates the codec via SDP, this does not materially change the browser client implementation. The MediaBridge uses ICE Lite and bundles all ICE candidates into the SDP answer, so the browser is not required to perform trickle ICE.
 
-**In scope:** outbound calling, inbound call receipt and answering, inbound call alerting (audible ringtone and attention signals), the WebRTC audio session lifecycle, remote audio playback (including autoplay handling and volume control), in-call controls (mute, DTMF, duration, hang up), browser capability and secure-context precondition handling, concurrency handling (a single active call per tab), accessibility of the call surfaces, call-history integration, browser device registration as a call target, multi-device "answered elsewhere" behavior, and failure/edge-case handling.
+The web UI now has a documented design system with light/dark theming (`web/DESIGN.md`, `web/src/theme.ts`), so the call surfaces introduced by this feature must conform to it: token-based styling, Svarla purple branding, light/dark support, and the existing inline-SVG icon conventions.
+
+**In scope:** outbound calling, inbound call receipt and answering, inbound call alerting (audible ringtone and attention signals), the WebRTC audio session lifecycle, remote audio playback (including autoplay handling and volume control), in-call controls (mute, DTMF, duration, hang up), browser capability and secure-context precondition handling, concurrency handling (a single active call per tab), accessibility of the call surfaces, call-history integration, browser device registration as a call target, multi-device "answered elsewhere" behavior, failure/edge-case handling, and visual consistency (the call surfaces adopt the existing web design system and support light and dark themes).
 
 **Out of scope (non-goals):** SMS and Conversations (already implemented and working), call waiting / holding a second concurrent call in the browser (a possible future enhancement), speaker/output-device selection via `setSinkId` (a possible future enhancement), any change to the MediaBridge media format or the ControlAPI, and any change to the Android application.
 
@@ -299,6 +301,18 @@ This requirement covers server-side registration cleanup for web-registered devi
 1. WHEN the Incoming_Call_Surface is presented, THE Web_Client SHALL announce the incoming call to assistive technologies via an ARIA live region and SHALL move keyboard focus to the Answer/Decline actions.
 2. THE In_Call_Surface and Incoming_Call_Surface controls SHALL be fully operable via keyboard and SHALL expose accessible names and roles.
 3. WHEN Call_Connection_State changes (Connecting, Connected, Failed, or ended), THE Web_Client SHALL announce the change to assistive technologies.
+
+### Requirement 19: Visual Consistency and Theming
+
+**User Story:** As a browser user, I want the calling UI to match the rest of the app in both light and dark mode, so that it feels like one product.
+
+#### Acceptance Criteria
+
+1. THE call surfaces (Dialer, Incoming_Call_Surface, In_Call_Surface) SHALL style all colors, radii, spacing, and elevation using the design-system CSS custom properties defined in `web/src/styles/main.css`, and SHALL NOT hardcode color values.
+2. WHEN the resolved theme is light or dark, THE call surfaces SHALL render using the corresponding themed token values without requiring per-theme component code.
+3. THE call surfaces SHALL use inline-SVG icons following the existing `web/src/components/icons.tsx` convention for call controls (answer, hang up/decline, mute, keypad, volume) rather than unicode or emoji glyphs.
+4. THE call duration timer and displayed phone numbers SHALL use the monospace typographic treatment defined by the design system.
+5. WHERE the user prefers reduced motion, THE call surfaces SHALL disable non-essential animations, such as the ringing pulse.
 
 ## Correctness Properties
 

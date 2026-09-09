@@ -8,6 +8,10 @@ The central thesis of this design is: **reuse the existing backend; build a brow
 
 The browser client mirrors the lifecycle of the Android `WebRtcAudioClient` (`android/app/src/main/kotlin/app/svarla/domain/call/WebRtcAudioClientImpl.kt`): create offer → POST offer → apply answer → play remote track → mute via `track.enabled` → DTMF via `RTCDTMFSender` → teardown closes the peer connection and stops tracks. The MediaBridge negotiates a PCM audio codec (16-bit LE, 16kHz mono) via SDP; because `RTCPeerConnection` negotiates the codec through SDP, the browser client does not special-case this. The MediaBridge uses **ICE Lite** and bundles all ICE candidates into the SDP answer, so the browser does **not** perform trickle ICE.
 
+**Design-system alignment.** Since this design was first drafted, the web UI adopted a documented design system and light/dark theming (merged from `main`, commit #29 "feat(web-ui): dark mode, brand theming, redesigned components"). The call surfaces in this feature MUST conform to it. The authoritative reference is `web/DESIGN.md` ("Svarla Web — Design Guide"): token-first styling with all colors/radii/spacing/shadows defined as CSS custom properties in `web/src/styles/main.css` (no hardcoded hex), Svarla deep-purple branding, and automatic light/dark support. Theming is driven by `web/src/theme.ts` (`initTheme` is called at boot in `web/src/main.tsx`), and icons follow the inline-SVG convention in `web/src/components/icons.tsx`. The new "UI Design System Integration" section below records exactly how the Dialer, IncomingCallSurface, and InCallSurface consume these tokens and icons.
+
+**Existing files referenced by this design:** `web/DESIGN.md` (design guide + tokens), `web/src/styles/main.css` (token definitions, where new call rules are added), `web/src/theme.ts` (`initTheme`/`toggleTheme`/`getResolvedTheme`/`subscribeTheme`/`ThemePreference`), `web/src/components/icons.tsx` (`iconSvg` convention + existing exports), `web/src/main.tsx` (App shell that renders the call surfaces and calls `initTheme()`), `web/src/components/call-banner.tsx` (the current passive banner, to be upgraded), `web/src/components/call-history.tsx`, and `src/routes/number-routes.ts` (`GET /api/numbers`, optional `?includeOrphaned=true`).
+
 **In scope:** outbound calling, inbound receipt/answering, inbound alerting (ringtone + attention signals), the WebRTC audio-session lifecycle, remote-audio playback (autoplay handling + volume), in-call controls (mute, DTMF, duration, hang up), capability/secure-context preconditions, single-active-call concurrency, accessibility, call-history integration, browser device lifecycle, multi-device "answered elsewhere" behavior, failure/edge handling, and the server-side stale-device reaper.
 
 **Out of scope (non-goals):** SMS and Conversations (already shipped), call waiting / a second concurrent call, output-device selection via `setSinkId`, any change to the MediaBridge media format or ControlAPI, and any change to the Android app.
@@ -38,7 +42,7 @@ The feature adds **no new runtime dependencies**. It uses browser-native WebRTC 
 
 ## Architecture
 
-The browser side introduces a call-session layer between the existing transport primitives (`api.ts`, `ws.ts`) and new UI surfaces. `call-banner.tsx` is **upgraded** from a passive banner into the active in-call surface (or replaced by an `InCallSurface` that supersedes it), rendered by the `App` shell in `web/src/main.tsx` alongside the new `Dialer` and `IncomingCallSurface`.
+The browser side introduces a call-session layer between the existing transport primitives (`api.ts`, `ws.ts`) and new UI surfaces. `call-banner.tsx` is **upgraded** from a passive banner into the active in-call surface (or replaced by an `InCallSurface` that supersedes it), rendered by the `App` shell in `web/src/main.tsx` alongside the new `Dialer` and `IncomingCallSurface`. This upgrade is also a **design-system migration**: the current banner renders a `📞` unicode glyph with ad hoc markup (`web/src/components/call-banner.tsx`), whereas the upgraded surfaces are styled entirely with the design tokens in `web/src/styles/main.css` and use inline-SVG icons added to `web/src/components/icons.tsx` (no emoji/unicode glyphs). All three surfaces are **theme-aware for free**: because they reference color/elevation/scrim tokens rather than literal colors, they render correctly in both light and dark themes with no theme-specific component code (theming is applied globally by `initTheme()` from `web/src/theme.ts`, already called at boot in `main.tsx`). See [UI Design System Integration](#ui-design-system-integration).
 
 ```mermaid
 graph TB
@@ -95,7 +99,7 @@ graph TB
 
 - **`CallController`** — the state machine. Owns `Call_Connection_State`, the active-call metadata, and the single-call guard. Exposes imperative methods (`placeCall`, `answer`, `decline`, `hangup`, `sendDtmf`, `setMuted`, `setVolume`) and an observable store the UI subscribes to. Subscribes to `ws.ts` `call_event`/`call_cancelled`/`ws_connected` and reconciles against `GET /api/calls/active`.
 - **`WebRtcCallClient`** — the browser analog of Android `WebRtcAudioClientImpl`. Owns exactly one `RTCPeerConnection` and the local mic track; performs offer/answer, playback, mute, DTMF, `getStats()` polling, and teardown.
-- **UI surfaces** — `Dialer` (compose/place), `IncomingCallSurface` (ringing answer/decline), `InCallSurface` (connecting/ringing/connected status, mute, DTMF keypad, duration, volume, hang up). Rendered by `main.tsx`.
+- **UI surfaces** — `Dialer` (compose/place), `IncomingCallSurface` (ringing answer/decline), `InCallSurface` (connecting/ringing/connected status, mute, DTMF keypad, duration, volume, hang up). Rendered by `main.tsx`. All three are token-styled and icon-based per the design system: `InCallSurface` supersedes the old `📞`/ad hoc banner, presenting a token-based surface with SVG icons; the surfaces are theme-aware via tokens (see [UI Design System Integration](#ui-design-system-integration)).
 - **`deviceLifecycle`** — reuses the login-provisioned `device_id`, registers a beacon on `pagehide`, and reconciles on `ws_connected`.
 - **`capabilityGuard`** — checks `window.isSecureContext` and WebRTC API presence at load, gating the calling UI.
 - **`alerting`** — ringtone/ringback playback and out-of-tab attention signals (title change, Notification).
@@ -366,6 +370,43 @@ export interface Alerting {
 
 `CallController.store` is a `createStore<CallControllerState>` instance (`web/src/state.ts`). A small `useCallState()` hook subscribes components to it. `main.tsx` instantiates one `CallController` for the app and renders `Dialer`, `IncomingCallSurface`, and `InCallSurface` (the upgraded `call-banner.tsx`) from its state. The `Dialer` fetches originating numbers from the number management API (`number-routes` / `multi-provider-number-routes`) to populate the "from" selector (Requirements 2.1, 2.9) and offers "call back" from `call-history.tsx` (Requirement 17.2).
 
+**"From" selector uses the default `GET /api/numbers` response.** `src/routes/number-routes.ts` now accepts an optional `?includeOrphaned=true`, but the **default** response is unchanged — it returns only numbers with a **live provider** (active and inactive). The Dialer MUST use the default (it does **not** pass `includeOrphaned`), so orphaned numbers whose provider was removed never appear as a place-a-call origin. The "call back" path (Requirement 17.2) reuses the existing `call-history.tsx`, which deliberately requests `/api/numbers?includeOrphaned=true` to label/filter history entries by every number that could appear in past calls (including orphaned ones); that opt-in is scoped to history and does not affect the Dialer's origin list.
+
+## UI Design System Integration
+
+The call surfaces (`Dialer`, `IncomingCallSurface`, `InCallSurface`) conform to the web design system documented in `web/DESIGN.md`. This section records the exact tokens, icons, and conventions they use. The guiding rule from the design guide is **token-first**: every color, radius, space, shadow, and motion value comes from a CSS custom property defined in `web/src/styles/main.css` — **no hardcoded hex** anywhere in the call styles. New call-specific rules are added to `main.css` as token-based rules (plain CSS custom properties; `main.css` is copied verbatim by `web/build.ts` / `npm run build:web`, so there is no preprocessor).
+
+### Token usage by call surface
+
+- **Color roles (by token, never by appearance):**
+  - `--md-primary` (deep purple `#5b2d90`; lavender `#d0bcff` in dark) — the primary call/answer affordance and active/emphasis states (e.g. the Dialer "Call" action, active keypad state).
+  - `--md-success` / `--md-success-container` / `--md-on-success-container` — the **Connected** state indication (status dot/label on `InCallSurface`); consider `.btn-success-outline` for the **Answer** control.
+  - `--md-error` / `--md-error-container` and the `.btn-danger` variant — **Decline** and **Hang up** (destructive actions).
+  - `--md-surface` / `--md-surface-dim` — the surface backgrounds (`--md-surface` for the raised banner/modal panel, `--md-surface-dim` for the app background behind it).
+  - `--md-on-surface` / `--md-on-surface-variant` — primary text and secondary/muted labels (e.g. status sub-text).
+  - `--md-outline` / `--md-outline-variant` — borders/dividers that define the flat surfaces at rest.
+  - `--md-scrim` — the backdrop behind the incoming-call modal overlay.
+- **Elevation:** surfaces are flat at rest and defined by borders; shadow is used sparingly. Use `--md-elevation-3` for the in-call **banner/snackbar** and `--md-elevation-4` for the incoming-call **modal/dialog**.
+- **Shape (radii):** all buttons use `--md-radius-button` (6px) — buttons are **not** pill-shaped. The incoming-call **modal** uses `--md-radius-lg` (10px); any card/list/menu chrome uses `--md-radius-md` (8px). `--md-radius-full` is reserved for the status dot / avatar / status pill only.
+- **Spacing:** padding, gaps, and margins use the 8px-scale tokens (`--md-space-xs` … `--md-space-2xl`), not literal pixels.
+- **Typography — monospace for numeric/technical values:** the call **duration timer** and the **dialed number / caller number** use the monospace treatment (`'JetBrains Mono', 'Fira Code', monospace`) per the design guide, which mandates monospace for phone numbers, endpoints, durations, and code. Section headers use the overline-style uppercase label treatment (`--md-on-surface-variant`, uppercase, `0.05em` spacing); body text is Inter.
+- **Controls & touch targets:** interactive controls use `--control-height` (38px) on pointer devices. `--min-touch-target` (48px) is applied **only** on touch/small screens (`max-width: 640px` or `pointer: coarse`). The **DTMF keypad** buttons and the **Answer/Decline** buttons MUST honor this touch-target sizing so they stay comfortably tappable on phones while staying compact on desktop. Button variants: primary (filled) for the call/answer affordance, `.btn-secondary` (outline) for neutral actions, `.btn-danger` for Decline/Hang up, `.btn-success-outline` as an option for Answer, and `.btn-sm` for compact contexts.
+- **Motion:** transitions use `--md-motion-ease` with `--md-motion-duration-short` (150ms) for small state changes and `--md-motion-duration-medium` (260ms) for entrances (the incoming-call modal / banner appearing). **Any ringing pulse or attention animation MUST be gated by `@media (prefers-reduced-motion: reduce)`** so it is fully disabled when the user prefers reduced motion (this is enforced globally by the design system, and the call surfaces must not introduce motion that cannot be disabled).
+- **Light/dark theming — automatic:** because the surfaces reference tokens rather than literal colors, they work in **both** light and dark themes with no theme-specific component code. Theming is applied globally by `initTheme()` (`web/src/theme.ts`), which sets `data-theme` on `<html>` and keeps the `theme-color` meta in sync; dark values are defined in `:root[data-theme="dark"]` and in `@media (prefers-color-scheme: dark) :root:not([data-theme])`. The call surfaces need no `subscribeTheme` wiring (there is no canvas or inline-colored element here). This complements — and does not replace — the existing accessibility design in Requirement 18.
+
+### New icons to add to `web/src/components/icons.tsx`
+
+`web/src/components/icons.tsx` currently exports `homeIcon`, `chatIcon`, `callIcon` (up-right arrow), `settingsIcon`, and `downloadIcon`, all built with the `iconSvg(children, size = 20)` helper (24px viewBox, `stroke="currentColor"`, stroke-width 1.75, `aria-hidden`). There are **no** mic/mute/hangup/answer/decline/keypad/volume icons yet. The call UI will **add** the following icons following this exact convention, replacing the `📞` unicode glyph used today in `call-banner.tsx`:
+
+- `phoneIcon` — Answer / call affordance (filled-handset outline).
+- `phoneOffIcon` — Hang up and Decline (handset with a slash).
+- `micIcon` — microphone (unmuted state).
+- `micOffIcon` — microphone with a slash (muted state).
+- `dialpadIcon` — DTMF keypad toggle (3×3 dot grid).
+- `volumeIcon` — remote-audio volume control.
+
+Each is defined via `iconSvg(...)` so it inherits `currentColor` and stays pixel-consistent with the existing icon set; icon-only controls (mute, hang up, keypad, volume) carry an `aria-label`/`title` per the accessibility checklist (Requirement 18).
+
 ## Data Models
 
 ### Call state object
@@ -422,6 +463,15 @@ interface ActiveCallsResponse {
   calls: Array<{ callId: string; status: string; from?: string }>;
 }
 ```
+
+### Originating-number list for the Dialer "from" selector
+
+```typescript
+// GET /api/numbers                 -> live-provider numbers only (DEFAULT; Dialer uses this)
+// GET /api/numbers?includeOrphaned=true -> also includes orphaned numbers (history filters only)
+```
+
+The Dialer populates its "from" selector from the **default** `GET /api/numbers` response (live-provider numbers only — active and inactive). It MUST NOT pass `?includeOrphaned=true`, so numbers whose provider was removed are never offered as a call origin. The `?includeOrphaned=true` variant is used exclusively by `call-history.tsx` to label and filter past entries (relevant to Requirement 17.2 "call back from history"), and does not affect the Dialer.
 
 
 ## Correctness Properties
@@ -582,6 +632,8 @@ interface WebDeviceReaperDeps {
 4. **Auto-decline second call vs. call waiting (Requirement 14).** Call waiting is a stated non-goal for v1. **Decision:** auto-decline the second inbound call. Trade-off: simpler, deterministic single-call guard; call waiting is a future enhancement.
 5. **`getStats()` polling for the media-inactivity watchdog.** The browser lacks Android's `onIceConnectionReceivingChange`. **Decision:** poll `inbound-rtp` `packetsReceived`/`bytesReceived` deltas at ≤1s intervals; treat 5s of no growth as inactive. Trade-off: a polling loop vs. an event callback, but it is the only portable browser signal for "media stopped while ICE stays up."
 6. **Ringtone/ringback autoplay limitations.** Browser autoplay policy may suppress the ringtone until a user gesture. **Decision:** the visible Incoming_Call_Surface is the primary guaranteed alert; ringtone is best-effort, and remote-audio playback is backed by a gesture-tied resume control (Requirement 4.12). Trade-off: audio may be delayed until the Answer gesture, accepted per the Requirement 16 note.
+7. **Adopt the existing `web/DESIGN.md` design system and theming vs. bespoke call styling.** The web UI already ships a documented token-first design system and light/dark theming (`web/DESIGN.md`, `web/src/styles/main.css`, `web/src/theme.ts`). **Decision:** style the call surfaces entirely with those tokens rather than inventing call-specific colors/shapes. Rationale/trade-off: it keeps the calling UI part of **one product** (consistent with the rest of the web app and the Android client) and gives **automatic light/dark** support with no theme-specific code — at the cost of staying within the token vocabulary (adding a new token in `main.css` when a genuinely new role is needed, rather than hardcoding a color).
+8. **Add call icons to `icons.tsx` following the inline-SVG convention vs. unicode/emoji.** The current banner uses a `📞` emoji glyph. **Decision:** add `phoneIcon`/`phoneOffIcon`/`micIcon`/`micOffIcon`/`dialpadIcon`/`volumeIcon` to `web/src/components/icons.tsx` via the established `iconSvg` helper (24px viewBox, `currentColor`, 1.75 stroke, `aria-hidden`). Rationale/trade-off: the SVG icons inherit theme text color, stay pixel-consistent with the rest of the UI, and render uniformly across platforms/fonts — unlike emoji, whose appearance varies by OS and does not follow the color tokens; the minor cost is authoring the SVG paths once.
 
 ## Requirements Traceability
 
@@ -591,6 +643,7 @@ interface WebDeviceReaperDeps {
 | `deviceLifecycle` | 1.1–1.14, 9 (logout), 13 (defers to reaper) |
 | `Dialer` + Components | 2.1–2.10, 17.2 |
 | Incoming / answer flow | 3.1–3.9, 16.1–16.3, 18.1 |
+| UI Design System Integration (tokens, icons, theming) | 18 (accessibility: focus ring, icon-only aria-labels, reduced-motion, touch targets); general UI 2, 3, 6, 7, 8; light/dark theming is a cross-cutting UI constraint across all UI surfaces |
 | `WebRtcCallClient` + establishment | 4.1–4.13, 12.1–12.4 |
 | `CallController` state machine | 5.1–5.10, 14.1–14.3 |
 | In-call controls | 6.1–6.7 (mute), 7.1–7.6 (DTMF), 8.1–8.5 (duration/hang up) |
@@ -600,4 +653,4 @@ interface WebDeviceReaperDeps {
 | Correctness Properties | 14 (P1), 4/5 (P2), 4/5/8/9 (P3), 3/9/10 (P4), 1 (P5), 13 (P6), 2 (P7), 8 (P8), 7 (P9) |
 | Server-Side Changes (reaper) | 13.1–13.7 |
 | Testing Strategy | 17.1, 9.8 (integration), all properties |
-| Design Decisions | 1.5 (deviation), 12 (refinement), 14 (auto-decline) |
+| Design Decisions | 1.5 (deviation), 12 (refinement), 14 (auto-decline), design-system adoption + icon convention (cross-cutting UI, Req 18) |
