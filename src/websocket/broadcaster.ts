@@ -285,10 +285,12 @@ export class WebSocketBroadcaster {
   }
 
   /**
-   * Get all connected device IDs.
+   * Get the set of all connected device IDs (read-only view over the
+   * `connections` map). A device appears here while it has at least one
+   * tracked socket, regardless of that socket's readyState.
    */
-  getConnectedDeviceIds(): string[] {
-    return Array.from(this.connections.keys());
+  getConnectedDeviceIds(): Set<string> {
+    return new Set(this.connections.keys());
   }
 
   /**

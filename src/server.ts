@@ -40,6 +40,7 @@ import { MediaBridgeEventListener } from './services/media-bridge-event-listener
 import { MediaBridgeFailureDetector } from './services/media-bridge-failure-detector.js';
 import { CallOrchestrator } from './services/call-orchestrator.js';
 import { NotificationService } from './services/notification-service.js';
+import { WebDeviceReaper } from './services/web-device-reaper.js';
 
 /**
  * Factory function that creates a TelephonyProvider instance from a type and config.
@@ -608,6 +609,31 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
   const PROVIDER_HEALTH_POLL_INTERVAL_MS = 5 * 60_000;
   registry.startHealthPolling(PROVIDER_HEALTH_POLL_INTERVAL_MS);
 
+  // --- WebDeviceReaper ---
+  // Deactivates orphaned browser (Web_Device) registrations and keeps
+  // still-connected browser devices fresh. It composes the registry manager,
+  // the broadcaster's read accessors, and the orchestrator's active-call
+  // accessor; it adds no new persistence and never touches Android/push
+  // devices or in-progress calls (Req 13.1-13.7).
+  //
+  // The sweep runs on its own interval aligned with the broadcaster's 30s ping
+  // cycle. A device must remain socket-less and stale beyond the reaper's
+  // (larger) staleness window before it is deactivated, so the cadence only
+  // controls how promptly an already-stale orphan is cleaned up.
+  const webDeviceReaper = new WebDeviceReaper({
+    registry: deviceRegistryManager,
+    broadcaster: wsBroadcaster,
+    orchestrator: callOrchestrator,
+  });
+  const WEB_DEVICE_REAPER_SWEEP_INTERVAL_MS = 30_000;
+  const webDeviceReaperInterval = setInterval(() => {
+    webDeviceReaper.sweep().catch((err) => {
+      server.log.error(err, 'WebDeviceReaper sweep failed');
+    });
+  }, WEB_DEVICE_REAPER_SWEEP_INTERVAL_MS);
+  // Don't let the sweep timer keep the process alive on shutdown.
+  webDeviceReaperInterval.unref?.();
+
   // Middleware
   registerSessionMiddleware(server, authService, { webInterfaceEnabled: config.webInterfaceEnabled });
 
@@ -745,6 +771,7 @@ export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
   // Graceful shutdown hooks
   server.addHook('onClose', async () => {
     server.log.info('Server shutting down gracefully');
+    clearInterval(webDeviceReaperInterval);
     registry.stopHealthPolling();
     mediaBridgeFailureDetector.stop();
     mediaBridgeClient.stopHealthChecks();

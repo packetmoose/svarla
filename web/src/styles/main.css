@@ -469,6 +469,52 @@ textarea {
   font-weight: 600;
 }
 
+/* "Dial" affordance — a button rendered inside the nav list, styled to match
+   the nav links. Disabled (dimmed) when calling is unavailable in this context,
+   with an explanatory note shown beneath it. */
+.nav-dial {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-md);
+  width: calc(100% - 2 * var(--md-space-md));
+  padding: 0 var(--md-space-lg);
+  margin: 2px var(--md-space-md);
+  min-height: var(--min-touch-target);
+  background: transparent;
+  border: none;
+  color: var(--md-on-surface-variant);
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-align: left;
+  border-radius: var(--md-radius-md);
+  cursor: pointer;
+  transition: background var(--md-motion-duration-short) var(--md-motion-ease),
+              color var(--md-motion-duration-short) var(--md-motion-ease);
+}
+
+.nav-dial:hover:not(:disabled) {
+  background: var(--md-surface-container);
+  color: var(--md-on-surface);
+}
+
+.nav-dial:focus-visible {
+  outline: 2px solid var(--md-primary);
+  outline-offset: -2px;
+}
+
+.nav-dial:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.nav-dial-note {
+  margin: 0 var(--md-space-md) var(--md-space-sm);
+  padding: 0 var(--md-space-lg);
+  font-size: 0.75rem;
+  line-height: 1.35;
+  color: var(--md-on-surface-variant);
+}
+
 .nav-icon {
   width: 24px;
   display: inline-flex;
@@ -3635,4 +3681,448 @@ textarea {
 
 .android-banner-btn-dismiss:hover {
   background: var(--md-surface-container);
+}
+
+/* =====================================================================
+   Call surfaces (web-calling-voice)
+   Token-first styles for the three call surfaces rendered from
+   CallController state: the Dialer popover/sheet, the IncomingCallSurface
+   modal, and the InCallSurface compact overlay (the upgraded call-banner).
+
+   Every color, radius, space, shadow, and motion value below references a
+   design token from :root — no hardcoded hex. Phone numbers and the
+   duration timer use the monospace treatment; touch targets grow to
+   --min-touch-target on touch/small screens; ringing/attention motion is
+   gated by @media (prefers-reduced-motion: reduce). See web/DESIGN.md and
+   the "UI Design System Integration" section of the design doc.
+   ===================================================================== */
+
+/* Shared monospace treatment for dialed/caller numbers and durations. */
+.call-number,
+.call-duration {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+/* ---------------------------------------------------------------------
+   Dialer — nav-launched popover/modal on desktop, full sheet on mobile
+   --------------------------------------------------------------------- */
+
+.dialer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1050;
+  background: var(--md-scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--md-space-md);
+  animation: overlay-in var(--md-motion-duration-medium) var(--md-motion-ease);
+}
+
+.dialer-panel {
+  width: 100%;
+  max-width: 400px;
+  background: var(--md-surface);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-radius-lg);
+  box-shadow: var(--md-elevation-4);
+  padding: var(--md-space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--md-space-md);
+  animation: modal-in var(--md-motion-duration-medium) var(--md-motion-ease);
+}
+
+.dialer-panel h3 {
+  margin: 0;
+}
+
+.dialer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--md-space-md);
+}
+
+/* The composed destination reads back in monospace like a phone number. */
+.dialer-input {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.dialer-from {
+  display: flex;
+  flex-direction: column;
+  gap: var(--md-space-xs);
+}
+
+.dialer-from-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--md-on-surface-variant);
+}
+
+.dialer-empty {
+  color: var(--md-on-surface-variant);
+  font-size: 0.8125rem;
+}
+
+.dialer-error {
+  color: var(--md-error);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.dialer-actions {
+  display: flex;
+  gap: var(--md-space-sm);
+  justify-content: flex-end;
+}
+
+/* The place-call affordance is the primary (filled) action. */
+.dialer-call-btn {
+  background: var(--md-primary);
+  color: var(--md-on-primary);
+}
+
+/* Mobile: the Dialer becomes a full-width bottom sheet. */
+@media (max-width: 640px), (pointer: coarse) {
+  .dialer-overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .dialer-panel {
+    max-width: 100%;
+    border-radius: var(--md-radius-lg) var(--md-radius-lg) 0 0;
+    border-bottom: none;
+    padding: var(--md-space-lg) var(--md-space-md)
+      calc(var(--md-space-lg) + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* ---------------------------------------------------------------------
+   IncomingCallSurface — centered modal + scrim, full sheet on mobile
+   --------------------------------------------------------------------- */
+
+.incoming-call-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1080;
+  background: var(--md-scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--md-space-md);
+  animation: overlay-in var(--md-motion-duration-medium) var(--md-motion-ease);
+}
+
+.incoming-call-surface {
+  width: 100%;
+  max-width: 360px;
+  background: var(--md-surface);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-radius-lg);
+  box-shadow: var(--md-elevation-4);
+  padding: var(--md-space-xl) var(--md-space-lg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--md-space-md);
+  text-align: center;
+  animation: modal-in var(--md-motion-duration-medium) var(--md-motion-ease);
+}
+
+.incoming-call-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--md-on-surface-variant);
+}
+
+.incoming-call-surface .call-number {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--md-on-surface);
+  word-break: break-all;
+}
+
+/* The pulsing avatar/glyph is decorative attention motion — see the
+   reduced-motion block below where the pulse is disabled. */
+.incoming-call-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: var(--md-radius-full);
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+  animation: call-ring-pulse 1.4s var(--md-motion-ease) infinite;
+}
+
+.incoming-call-actions {
+  display: flex;
+  gap: var(--md-space-md);
+  width: 100%;
+  margin-top: var(--md-space-sm);
+}
+
+.incoming-call-actions button {
+  flex: 1;
+}
+
+/* Answer uses the success role; Decline uses the destructive role. Both
+   variants (.btn-success-outline / .btn-danger) are defined above. */
+.incoming-call-answer {
+  color: var(--md-success);
+}
+
+/* Mobile: full-width sheet. */
+@media (max-width: 640px), (pointer: coarse) {
+  .incoming-call-overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .incoming-call-surface {
+    max-width: 100%;
+    border-radius: var(--md-radius-lg) var(--md-radius-lg) 0 0;
+    border-bottom: none;
+    padding: var(--md-space-xl) var(--md-space-md)
+      calc(var(--md-space-xl) + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* ---------------------------------------------------------------------
+   InCallSurface — compact anchored overlay, expandable DTMF keypad
+   (upgrades the passive .call-banner into the active in-call surface)
+   --------------------------------------------------------------------- */
+
+.in-call-surface {
+  position: fixed;
+  right: var(--md-space-lg);
+  bottom: var(--md-space-lg);
+  z-index: 1000;
+  width: 320px;
+  max-width: calc(100vw - 2 * var(--md-space-md));
+  background: var(--md-surface);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-radius-md);
+  box-shadow: var(--md-elevation-3);
+  padding: var(--md-space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--md-space-sm);
+  animation: modal-in var(--md-motion-duration-medium) var(--md-motion-ease);
+}
+
+.in-call-info {
+  display: flex;
+  flex-direction: column;
+  gap: var(--md-space-xs);
+  min-width: 0;
+}
+
+.in-call-surface .call-number {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--md-on-surface);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.in-call-status {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-xs);
+  font-size: 0.8125rem;
+  color: var(--md-on-surface-variant);
+}
+
+.in-call-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--md-radius-full);
+  flex-shrink: 0;
+  background: var(--md-on-surface-variant);
+}
+
+/* Connecting/Ringing progress — the dot pulses (attention motion, gated
+   by reduced-motion below). Connected is a steady success dot. */
+.in-call-status.connecting .in-call-status-dot,
+.in-call-status.ringing .in-call-status-dot {
+  background: var(--md-primary);
+  animation: call-ring-pulse 1.4s var(--md-motion-ease) infinite;
+}
+
+.in-call-status.connected {
+  color: var(--md-success);
+}
+
+.in-call-status.connected .in-call-status-dot {
+  background: var(--md-success);
+  box-shadow: 0 0 4px var(--md-success);
+}
+
+.in-call-status.failed {
+  color: var(--md-error);
+}
+
+.in-call-status.failed .in-call-status-dot {
+  background: var(--md-error);
+}
+
+.in-call-surface .call-duration {
+  font-size: 0.8125rem;
+  color: var(--md-on-surface-variant);
+}
+
+/* At-rest controls row: mute, keypad toggle, volume, hang up. */
+.in-call-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-sm);
+}
+
+.in-call-controls .in-call-spacer {
+  flex: 1;
+}
+
+/* Hang up is the destructive affordance (uses .btn-danger / .btn-icon-danger
+   from the button system). Kept here for the filled hang-up variant. */
+.in-call-hangup {
+  background: var(--md-error);
+  color: var(--md-on-error);
+}
+
+.in-call-hangup:hover {
+  background: var(--md-on-error-container);
+}
+
+/* A control reflecting an active/engaged toggle (mute on, keypad open). */
+.in-call-controls .btn-icon.active {
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+}
+
+/* "Could not apply" mute indicator (Req 6.7) and autoplay resume prompt. */
+.in-call-notice {
+  font-size: 0.75rem;
+  color: var(--md-error);
+  font-weight: 500;
+}
+
+.in-call-resume {
+  align-self: flex-start;
+  background: var(--md-primary);
+  color: var(--md-on-primary);
+}
+
+/* Expandable region: the 12-key DTMF grid + volume slider. Toggled open. */
+.in-call-keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--md-space-sm);
+  padding-top: var(--md-space-sm);
+  border-top: 1px solid var(--md-outline-variant);
+}
+
+.in-call-key {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--control-height);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 1.125rem;
+  font-weight: 600;
+  background: var(--md-surface-container);
+  color: var(--md-on-surface);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-radius-button);
+}
+
+.in-call-key:hover {
+  background: var(--md-surface-container-high);
+}
+
+.in-call-key:disabled {
+  background: var(--md-surface-container);
+  color: var(--md-on-surface-variant);
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.in-call-volume {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-sm);
+  padding-top: var(--md-space-sm);
+}
+
+.in-call-volume input[type="range"] {
+  flex: 1;
+  min-height: auto;
+  padding: 0;
+  accent-color: var(--md-primary);
+}
+
+/* Mobile: the in-call surface spans the full width at the bottom edge. */
+@media (max-width: 640px), (pointer: coarse) {
+  .in-call-surface {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    max-width: 100%;
+    border-radius: var(--md-radius-lg) var(--md-radius-lg) 0 0;
+    border-bottom: none;
+    padding: var(--md-space-md) var(--md-space-md)
+      calc(var(--md-space-md) + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Touch/small screens: keypad keys and call controls reach 48px. */
+  .in-call-key {
+    min-height: var(--min-touch-target);
+  }
+}
+
+/* Answer/Decline and DTMF keys grow to the touch target on touch/small
+   screens (the global button rule covers <button>; these cover the grid
+   keys and any anchored controls explicitly). */
+@media (max-width: 640px), (pointer: coarse) {
+  .incoming-call-actions button,
+  .in-call-key,
+  .in-call-controls .btn-icon {
+    min-height: var(--min-touch-target);
+    min-width: var(--min-touch-target);
+  }
+}
+
+/* ---------------------------------------------------------------------
+   Ringing pulse / attention motion — non-essential, disabled under
+   reduced-motion (the global reduced-motion block already neutralizes
+   animations, but keypad/pulse motion is called out explicitly here so
+   the intent is unambiguous per Requirement 19.5).
+   --------------------------------------------------------------------- */
+
+@keyframes call-ring-pulse {
+  0%   { transform: scale(1);    opacity: 1; }
+  50%  { transform: scale(1.08); opacity: 0.7; }
+  100% { transform: scale(1);    opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .incoming-call-avatar,
+  .in-call-status.connecting .in-call-status-dot,
+  .in-call-status.ringing .in-call-status-dot {
+    animation: none !important;
+  }
 }

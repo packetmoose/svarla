@@ -1116,6 +1116,26 @@ export class CallOrchestrator {
   }
 
   /**
+   * Get the set of device IDs that are currently associated with an active
+   * (non-ended) call via its `answeredByDevice` field. Null values (calls with
+   * no owning device yet) are excluded.
+   *
+   * Read-only view over `activeCalls`; adds no new state. Used by the stale
+   * Web_Device reaper's in-call guard so a device on a live call is never
+   * reaped (Requirement 13.7).
+   */
+  getActiveDeviceIds(): Set<string> {
+    const deviceIds = new Set<string>();
+    for (const call of this.activeCalls.values()) {
+      if (call.ended) continue;
+      if (call.answeredByDevice != null) {
+        deviceIds.add(call.answeredByDevice);
+      }
+    }
+    return deviceIds;
+  }
+
+  /**
    * End all active calls. Used during MediaBridge failure detection or shutdown.
    */
   async endAllCalls(reason: string): Promise<void> {

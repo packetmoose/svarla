@@ -79,7 +79,7 @@ describe('WebSocketBroadcaster', () => {
   describe('connection management', () => {
     it('should start with zero connections', () => {
       expect(broadcaster.getConnectionCount()).toBe(0);
-      expect(broadcaster.getConnectedDeviceIds()).toEqual([]);
+      expect(broadcaster.getConnectedDeviceIds()).toEqual(new Set());
     });
 
     it('should report device as not connected when not registered', () => {
@@ -301,7 +301,7 @@ describe('WebSocketBroadcaster', () => {
       setConnection(broadcaster, 'device-1', createMockSocket(1));
       setConnection(broadcaster, 'device-3', createMockSocket(1));
 
-      expect(broadcaster.getConnectedDeviceIds().sort()).toEqual(['device-1', 'device-3']);
+      expect(broadcaster.getConnectedDeviceIds()).toEqual(new Set(['device-1', 'device-3']));
     });
 
     it('should report device as connected when socket is open', () => {

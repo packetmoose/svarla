@@ -83,3 +83,81 @@ export function downloadIcon(size?: number) {
     size
   );
 }
+/** Handset — place/answer a call. Replaces the old 📞 glyph on call surfaces. */
+export function phoneIcon(size?: number) {
+  return iconSvg(
+    <path d="M6.5 3.5 9 3l1.5 4-2 1.5a12 12 0 0 0 5 5l1.5-2 4 1.5-.5 2.5A2 2 0 0 1 21 17a17 17 0 0 1-15-15 2 2 0 0 1 .5-1.5z" />,
+    size
+  );
+}
+
+/** Handset with a strike-through — hang up / decline a call. */
+export function phoneOffIcon(size?: number) {
+  return iconSvg(
+    <Fragment>
+      <path d="M6.5 3.5 9 3l1.5 4-2 1.5a12 12 0 0 0 5 5l1.5-2 4 1.5-.5 2.5A2 2 0 0 1 21 17a17 17 0 0 1-15-15 2 2 0 0 1 .5-1.5z" />
+      <path d="M3 3l18 18" />
+    </Fragment>,
+    size
+  );
+}
+
+/** Microphone — mic active / unmuted. */
+export function micIcon(size?: number) {
+  return iconSvg(
+    <Fragment>
+      <rect x="9" y="3" width="6" height="11" rx="3" />
+      <path d="M5 11a7 7 0 0 0 14 0" />
+      <path d="M12 18v3" />
+      <path d="M8 21h8" />
+    </Fragment>,
+    size
+  );
+}
+
+/** Microphone with a strike-through — muted. */
+export function micOffIcon(size?: number) {
+  return iconSvg(
+    <Fragment>
+      <path d="M9 9V6a3 3 0 0 1 5.12-2.12" />
+      <path d="M15 9.34V11a3 3 0 0 1-4.5 2.6" />
+      <path d="M5 11a7 7 0 0 0 10.9 5.8" />
+      <path d="M19 11a7 7 0 0 1-.5 2.6" />
+      <path d="M12 18v3" />
+      <path d="M8 21h8" />
+      <path d="M3 3l18 18" />
+    </Fragment>,
+    size
+  );
+}
+
+/** 3x4 grid of dots — the DTMF keypad. */
+export function dialpadIcon(size?: number) {
+  return iconSvg(
+    <Fragment>
+      <circle cx="7" cy="6" r="0.5" />
+      <circle cx="12" cy="6" r="0.5" />
+      <circle cx="17" cy="6" r="0.5" />
+      <circle cx="7" cy="11" r="0.5" />
+      <circle cx="12" cy="11" r="0.5" />
+      <circle cx="17" cy="11" r="0.5" />
+      <circle cx="7" cy="16" r="0.5" />
+      <circle cx="12" cy="16" r="0.5" />
+      <circle cx="17" cy="16" r="0.5" />
+      <circle cx="12" cy="21" r="0.5" />
+    </Fragment>,
+    size
+  );
+}
+
+/** Speaker with sound waves — call volume. */
+export function volumeIcon(size?: number) {
+  return iconSvg(
+    <Fragment>
+      <path d="M4 9v6h4l5 4V5L8 9H4z" />
+      <path d="M16 8.5a5 5 0 0 1 0 7" />
+      <path d="M18.5 6a8 8 0 0 1 0 12" />
+    </Fragment>,
+    size
+  );
+}

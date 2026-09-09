@@ -3,6 +3,8 @@ import type { ComponentChildren } from "preact";
 import { api } from "../api";
 import { navigate } from "../router";
 import { initWebSocket, getWebSocket } from "../ws";
+import { openDialer, isDialerAvailable } from "../call/dialer-bridge";
+import { phoneIcon } from "./icons";
 
 /* ---------- Direction icons ---------- */
 
@@ -426,6 +428,15 @@ export class CallHistory extends Component<
     navigate(path);
   };
 
+  // "Call back" opens the nav-launched Dialer pre-filled with this caller's
+  // number (Requirement 17.2). CallHistory is router-rendered and receives no
+  // App props, so it routes through the module-level dialer bridge that
+  // main.tsx registers the App's opener into — the same open path as the nav
+  // "dial" affordance.
+  private handleCallBackClick = (phoneNumber: string) => {
+    openDialer(phoneNumber);
+  };
+
   render() {
     const { entries, loading, error, page, totalPages, availableNumbers, filterNumber } = this.state;
 
@@ -529,8 +540,20 @@ export class CallHistory extends Component<
                     )}
                   </div>
                   <div class="call-entry-actions">
-                    {/* A call action button will slot in here once web calling
-                        lands; the container is sized for multiple buttons. */}
+                    {/* "Call back" pre-fills the Dialer with this number. Only
+                        shown when the browser supports calling (the bridge has
+                        a registered opener) and the number is dialable. */}
+                    {isDialerAvailable() && isMessageable(entry.phoneNumber) && (
+                      <button
+                        type="button"
+                        class="call-action-btn"
+                        onClick={() => this.handleCallBackClick(entry.phoneNumber)}
+                        aria-label={`Call back ${entry.phoneNumber}`}
+                        title={`Call back ${entry.phoneNumber}`}
+                      >
+                        {phoneIcon()}
+                      </button>
+                    )}
                     {(() => {
                       const messageable = isMessageable(entry.phoneNumber);
                       return (
