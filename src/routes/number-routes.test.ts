@@ -74,6 +74,55 @@ describe('Number Routes', () => {
       expect(body.numbers).toEqual([]);
       expect(body.defaultNumber).toBeNull();
     });
+
+    it('should default to excluding orphaned numbers (includeOrphaned: false)', async () => {
+      (mockService.getAllNumbers as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      (mockService.getDefaultNumber as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+      await server.inject({ method: 'GET', url: '/api/numbers' });
+
+      expect(mockService.getAllNumbers).toHaveBeenCalledWith({ includeOrphaned: false });
+    });
+
+    it('should pass includeOrphaned: true through when ?includeOrphaned=true', async () => {
+      (mockService.getAllNumbers as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      (mockService.getDefaultNumber as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+      await server.inject({ method: 'GET', url: '/api/numbers?includeOrphaned=true' });
+
+      expect(mockService.getAllNumbers).toHaveBeenCalledWith({ includeOrphaned: true });
+    });
+
+    it('should serialize orphaned numbers (null provider) without a display name', async () => {
+      const now = new Date();
+      (mockService.getAllNumbers as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          number: '+14155559999',
+          provider_id: null,
+          provider_display_name: undefined,
+          label: null,
+          color: null,
+          added_at: now,
+          is_active: false,
+          last_used_at: now,
+          block_inbound_calls: false,
+        },
+      ]);
+      (mockService.getDefaultNumber as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+
+      const response = await server.inject({
+        method: 'GET',
+        url: '/api/numbers?includeOrphaned=true',
+      });
+
+      expect(response.statusCode).toBe(200);
+      const body = JSON.parse(response.payload);
+      expect(body.numbers).toHaveLength(1);
+      expect(body.numbers[0].number).toBe('+14155559999');
+      expect(body.numbers[0].providerId).toBeNull();
+      expect(body.numbers[0].providerDisplayName).toBeNull();
+      expect(body.numbers[0].isActive).toBe(false);
+    });
   });
 
   describe('PUT /api/numbers/:number/label', () => {

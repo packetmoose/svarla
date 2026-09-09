@@ -11,6 +11,7 @@ import { Settings } from "./components/settings";
 import { Dashboard } from "./components/dashboard";
 import { Download } from "./components/download";
 import { initWebSocket } from "./ws";
+import { initTheme } from "./theme";
 
 // Register application routes (no login route — App handles that)
 registerRoutes([
@@ -80,6 +81,9 @@ class App extends Component<Record<string, never>, AppState> {
     );
   }
 }
+
+// Initialize theme (applies stored preference, syncs with OS changes)
+initTheme();
 
 // Initialize WebSocket connection if already authenticated
 if (isAuthenticated()) {

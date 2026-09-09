@@ -1,4 +1,5 @@
-import { h, Component } from "preact";
+import { h, Component, Fragment } from "preact";
+import type { ComponentChildren } from "preact";
 import { api } from "../api";
 import { navigate } from "../router";
 import { Providers } from "./providers";
@@ -12,15 +13,83 @@ type SettingsTab = "providers" | "numbers" | "devices" | "account";
 interface TabDef {
   id: SettingsTab;
   label: string;
-  icon: string;
 }
 
 const tabs: TabDef[] = [
-  { id: "providers", label: "Providers", icon: "◈" },
-  { id: "numbers", label: "Numbers", icon: "#" },
-  { id: "devices", label: "Devices", icon: "▣" },
-  { id: "account", label: "Account", icon: "⚙" },
+  { id: "providers", label: "Providers" },
+  { id: "numbers", label: "Numbers" },
+  { id: "devices", label: "Devices" },
+  { id: "account", label: "Account" },
 ];
+
+/* ---------- Tab icons ---------- */
+
+/**
+ * Material-style outline icons, rendered as inline SVG so they inherit the
+ * current text color and stay pixel-consistent (unlike the previous mix of
+ * unicode glyphs). All share a 24px viewBox and 1.75 stroke weight.
+ */
+function iconSvg(children: ComponentChildren) {
+  return (
+    <svg
+      class="icon"
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.75"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {children}
+    </svg>
+  );
+}
+
+function chevronIcon() {
+  return iconSvg(<path d="M6 9l6 6 6-6" />);
+}
+
+function tabIcon(id: SettingsTab) {
+  switch (id) {
+    case "providers":
+      // Cloud/hub — represents connected telephony providers
+      return iconSvg(
+        <Fragment>
+          <path d="M17.5 19a4.5 4.5 0 0 0 .5-8.97 6 6 0 0 0-11.64-1.6A4 4 0 0 0 6.5 19h11z" />
+        </Fragment>
+      );
+    case "numbers":
+      // Hash/dialpad — phone numbers
+      return iconSvg(
+        <Fragment>
+          <path d="M9 4 7 20" />
+          <path d="M17 4l-2 16" />
+          <path d="M4 9h16" />
+          <path d="M3 15h16" />
+        </Fragment>
+      );
+    case "devices":
+      // Smartphone — paired devices
+      return iconSvg(
+        <Fragment>
+          <rect x="6" y="3" width="12" height="18" rx="2" />
+          <path d="M11 18h2" />
+        </Fragment>
+      );
+    case "account":
+      // Person — account settings
+      return iconSvg(
+        <Fragment>
+          <circle cx="12" cy="8" r="4" />
+          <path d="M4 21a8 8 0 0 1 16 0" />
+        </Fragment>
+      );
+  }
+}
 
 interface VersionInfo {
   version: string;
@@ -33,6 +102,8 @@ interface VersionInfo {
 
 interface SettingsState {
   activeTab: SettingsTab;
+  /** Whether the mobile tab dropdown is open. */
+  tabMenuOpen: boolean;
   currentPassword: string;
   newPassword: string;
   confirmPassword: string;
@@ -50,6 +121,7 @@ interface ChangePasswordErrorData {
 export class Settings extends Component<Record<string, never>, SettingsState> {
   state: SettingsState = {
     activeTab: "providers",
+    tabMenuOpen: false,
     currentPassword: "",
     newPassword: "",
     confirmPassword: "",
@@ -77,10 +149,44 @@ export class Settings extends Component<Record<string, never>, SettingsState> {
         this.setState({ versionInfo: res.data });
       }
     });
+
+    document.addEventListener("click", this.handleDocumentClick);
+    document.addEventListener("keydown", this.handleKeyDown);
+  }
+
+  componentWillUnmount() {
+    document.removeEventListener("click", this.handleDocumentClick);
+    document.removeEventListener("keydown", this.handleKeyDown);
   }
 
   private handleTabChange = (tab: SettingsTab) => {
-    this.setState({ activeTab: tab });
+    this.setState({ activeTab: tab, tabMenuOpen: false });
+  };
+
+  private toggleTabMenu = () => {
+    this.setState((prev) => ({ tabMenuOpen: !prev.tabMenuOpen }));
+  };
+
+  private closeTabMenu = () => {
+    if (this.state.tabMenuOpen) {
+      this.setState({ tabMenuOpen: false });
+    }
+  };
+
+  // Close the mobile tab menu when clicking anywhere outside it.
+  private handleDocumentClick = (e: MouseEvent) => {
+    if (!this.state.tabMenuOpen) return;
+    const target = e.target as HTMLElement;
+    if (!target.closest(".settings-tab-menu")) {
+      this.setState({ tabMenuOpen: false });
+    }
+  };
+
+  // Close the menu on Escape for keyboard users.
+  private handleKeyDown = (e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      this.closeTabMenu();
+    }
   };
 
   private handleCurrentPasswordChange = (e: Event) => {
@@ -250,6 +356,7 @@ export class Settings extends Component<Record<string, never>, SettingsState> {
 
   render() {
     const { activeTab, versionInfo } = this.state;
+    const activeTabLabel = tabs.find((t) => t.id === activeTab)?.label ?? "";
 
     // Build tooltip with build metadata
     let versionTooltip = "";
@@ -265,6 +372,46 @@ export class Settings extends Component<Record<string, never>, SettingsState> {
       <div class="settings-container">
         <h1 class="settings-page-title">Settings</h1>
 
+        {/* Mobile: a compact dropdown instead of a horizontal scroll strip. */}
+        <div class="settings-tab-menu">
+          <button
+            type="button"
+            class="settings-tab-menu-trigger"
+            aria-haspopup="menu"
+            aria-expanded={this.state.tabMenuOpen}
+            onClick={this.toggleTabMenu}
+          >
+            <span class="settings-tab-menu-current">
+              <span class="settings-tab-icon">{tabIcon(activeTab)}</span>
+              {activeTabLabel}
+            </span>
+            <span class="settings-tab-menu-chevron" aria-hidden="true">
+              {chevronIcon()}
+            </span>
+          </button>
+          {this.state.tabMenuOpen && (
+            <ul class="settings-tab-menu-list" role="menu" aria-label="Settings sections">
+              {tabs.map((tab) => (
+                <li key={tab.id} role="none">
+                  <button
+                    type="button"
+                    role="menuitemradio"
+                    aria-checked={activeTab === tab.id}
+                    class={`settings-tab-menu-item${
+                      activeTab === tab.id ? " settings-tab-menu-item-active" : ""
+                    }`}
+                    onClick={() => this.handleTabChange(tab.id)}
+                  >
+                    <span class="settings-tab-icon">{tabIcon(tab.id)}</span>
+                    {tab.label}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        {/* Desktop: the standard tab strip. */}
         <div class="settings-tabs" role="tablist" aria-label="Settings sections">
           {tabs.map((tab) => (
             <button
@@ -274,7 +421,7 @@ export class Settings extends Component<Record<string, never>, SettingsState> {
               class={`settings-tab${activeTab === tab.id ? " settings-tab-active" : ""}`}
               onClick={() => this.handleTabChange(tab.id)}
             >
-              <span class="settings-tab-icon">{tab.icon}</span>
+              <span class="settings-tab-icon">{tabIcon(tab.id)}</span>
               {tab.label}
             </button>
           ))}

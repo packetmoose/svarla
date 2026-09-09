@@ -1,4 +1,4 @@
-import { h, Component } from "preact";
+import { h, Component, Fragment } from "preact";
 import { api } from "../api";
 
 interface NumberEntry {
@@ -28,6 +28,8 @@ interface NumbersState {
   groups: ProviderGroup[];
   loading: boolean;
   error: string;
+  /** Number currently open in the inline detail view (by number string). */
+  selectedNumber: string | null;
   editingNumber: string | null;
   editLabel: string;
   editError: string;
@@ -45,6 +47,7 @@ export class Numbers extends Component<Record<string, never>, NumbersState> {
     groups: [],
     loading: true,
     error: "",
+    selectedNumber: null,
     editingNumber: null,
     editLabel: "",
     editError: "",
@@ -96,6 +99,34 @@ export class Numbers extends Component<Record<string, never>, NumbersState> {
 
     return Array.from(map.values());
   }
+
+  /** Find a number entry by its number string across all groups. */
+  private findNumber(number: string): NumberEntry | null {
+    for (const group of this.state.groups) {
+      const found = group.numbers.find((n) => n.number === number);
+      if (found) return found;
+    }
+    return null;
+  }
+
+  private handleNumberClick = (num: NumberEntry) => {
+    this.setState({
+      selectedNumber: num.number,
+      // Reset any transient edit state when opening a fresh detail.
+      editingNumber: null,
+      editLabel: "",
+      editError: "",
+    });
+  };
+
+  private handleCloseDetail = () => {
+    this.setState({
+      selectedNumber: null,
+      editingNumber: null,
+      editLabel: "",
+      editError: "",
+    });
+  };
 
   private startEditing = (num: NumberEntry) => {
     this.setState({
@@ -276,15 +307,221 @@ export class Numbers extends Component<Record<string, never>, NumbersState> {
     this.setState({ defaultNumber: null });
   };
 
+  /** A compact, clickable summary row for the numbers list. */
+  private renderNumberRow(num: NumberEntry) {
+    const isDefault = this.state.defaultNumber === num.number;
+    return (
+      <li
+        key={num.number}
+        class="number-item"
+        onClick={() => this.handleNumberClick(num)}
+        onKeyDown={(e: KeyboardEvent) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            this.handleNumberClick(num);
+          }
+        }}
+        role="button"
+        tabIndex={0}
+        aria-label={`View details for ${num.number}`}
+      >
+        <span class="number-value">
+          <span
+            class="number-color-dot"
+            style={{ backgroundColor: num.color || "#6750A4" }}
+          />
+          {num.number}
+        </span>
+        <span class="number-item-label">
+          {num.label || <em class="no-label">No label</em>}
+        </span>
+        <span class="number-item-badges">
+          {isDefault && <span class="number-status default">Default</span>}
+          <span class={`number-status ${num.isActive ? "active" : "inactive"}`}>
+            {num.isActive ? "Active" : "Inactive"}
+          </span>
+        </span>
+      </li>
+    );
+  }
+
+  /** Inline detail view for a single number: label, block-inbound, default,
+   *  activate/deactivate, plus read-only info. */
+  private renderNumberDetail() {
+    const { selectedNumber, editingNumber, editLabel, editError, editSaving } = this.state;
+    if (!selectedNumber) return null;
+
+    const num = this.findNumber(selectedNumber);
+    if (!num) return null;
+
+    const isDefault = this.state.defaultNumber === num.number;
+    const providerName = num.providerDisplayName || num.providerId;
+
+    return (
+      <div class="card provider-detail number-detail">
+        <div class="detail-header">
+          <h3 class="number-detail-title">
+            <span
+              class="number-color-dot"
+              style={{ backgroundColor: num.color || "#6750A4" }}
+            />
+            {num.number}
+          </h3>
+          <div class="detail-header-actions">
+            {num.isActive ? (
+              <button
+                type="button"
+                class="btn-deactivate btn-sm"
+                onClick={() => this.showConfirmation(num.number, "deactivate")}
+                aria-label={`Deactivate ${num.number}`}
+              >
+                Deactivate
+              </button>
+            ) : (
+              <button
+                type="button"
+                class="btn-activate btn-sm"
+                onClick={() => this.showConfirmation(num.number, "activate")}
+                aria-label={`Activate ${num.number}`}
+              >
+                Activate
+              </button>
+            )}
+            <button type="button" class="btn-secondary btn-sm" onClick={this.handleCloseDetail}>
+              Close
+            </button>
+          </div>
+        </div>
+
+        <dl class="detail-list">
+          <dt>Status</dt>
+          <dd>
+            <span class={`number-status ${num.isActive ? "active" : "inactive"}`}>
+              {num.isActive ? "Active" : "Inactive"}
+            </span>
+            {isDefault && <span class="number-status default">Default</span>}
+          </dd>
+          <dt>Provider</dt>
+          <dd>{providerName}</dd>
+          <dt>Capabilities</dt>
+          <dd>SMS, Voice</dd>
+        </dl>
+
+        {/* Label */}
+        <h4>Label</h4>
+        {editingNumber === num.number ? (
+          <div class="label-edit" role="form" aria-label={`Edit label for ${num.number}`}>
+            <input
+              type="text"
+              value={editLabel}
+              onInput={this.handleLabelChange}
+              onKeyDown={this.handleLabelKeyDown}
+              maxLength={30}
+              minLength={1}
+              disabled={editSaving}
+              aria-label="Number label"
+              aria-describedby={editError ? "label-edit-error" : undefined}
+              aria-invalid={editError ? "true" : undefined}
+              class="label-input"
+              autoFocus
+            />
+            <span class="label-char-count">{editLabel.length}/30</span>
+            <button
+              type="button"
+              onClick={this.saveLabel}
+              disabled={editSaving || editLabel.length === 0}
+              class="btn-save btn-sm"
+              aria-busy={editSaving ? "true" : undefined}
+            >
+              {editSaving ? "Saving..." : "Save"}
+            </button>
+            <button
+              type="button"
+              onClick={this.cancelEditing}
+              disabled={editSaving}
+              class="btn-cancel btn-sm"
+            >
+              Cancel
+            </button>
+            {editError && (
+              <div id="label-edit-error" class="label-error" role="alert">
+                {editError}
+              </div>
+            )}
+          </div>
+        ) : (
+          <div class="label-display">
+            <span class="label-text">
+              {num.label || <em class="no-label">No label</em>}
+            </span>
+            <button
+              type="button"
+              onClick={() => this.startEditing(num)}
+              class="btn-edit btn-sm"
+              aria-label={`Edit label for ${num.number}`}
+            >
+              Edit
+            </button>
+          </div>
+        )}
+
+        {/* Default number */}
+        {num.isActive && (
+          <Fragment>
+            <h4>Default number</h4>
+            <div class="detail-inline-control">
+              <span class="form-hint">
+                {isDefault
+                  ? "This number is used by default for outbound messages and calls."
+                  : "Use this number by default for outbound messages and calls."}
+              </span>
+              {isDefault ? (
+                <button
+                  type="button"
+                  onClick={this.clearDefault}
+                  disabled={this.state.defaultSaving}
+                  class="btn-default-clear btn-sm"
+                  aria-label={`Clear ${num.number} as default number`}
+                >
+                  {this.state.defaultSaving ? "Saving..." : "Clear default"}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => this.setAsDefault(num)}
+                  disabled={this.state.defaultSaving}
+                  class="btn-default-set btn-sm"
+                  aria-label={`Set ${num.number} as default number`}
+                >
+                  {this.state.defaultSaving ? "Saving..." : "Set as default"}
+                </button>
+              )}
+            </div>
+          </Fragment>
+        )}
+
+        {/* Incoming calls */}
+        <h4>Incoming calls</h4>
+        <label class="block-inbound-toggle">
+          <input
+            type="checkbox"
+            checked={num.blockInboundCalls}
+            disabled={this.state.blockInboundSaving === num.number}
+            onChange={() => this.toggleBlockInbound(num)}
+            aria-label={`Block incoming calls for ${num.number}`}
+          />
+          <span class="toggle-label">Block incoming calls</span>
+        </label>
+      </div>
+    );
+  }
+
   render() {
     const {
       groups,
       loading,
       error,
-      editingNumber,
-      editLabel,
-      editError,
-      editSaving,
+      selectedNumber,
       confirmNumber,
       confirmAction,
       confirmLoading,
@@ -313,157 +550,32 @@ export class Numbers extends Component<Record<string, never>, NumbersState> {
           <p class="numbers-empty">No numbers configured.</p>
         )}
 
-        {groups.map((group) => (
-          <section
-            key={group.providerId}
-            class="numbers-provider-group"
-            aria-labelledby={`provider-${group.providerId}`}
-          >
-            <h2 id={`provider-${group.providerId}`} class="provider-group-title">
-              {group.providerName}
-            </h2>
+        {this.renderNumberDetail()}
 
-            <ul class="numbers-list" role="list">
-              {group.numbers.map((num) => (
-                <li key={num.number} class="number-item">
-                  <div class="number-info">
-                    <span class="number-value">
-                      <span
-                        class="number-color-dot"
-                        style={{ backgroundColor: num.color || "#6750A4" }}
-                      />
-                      {num.number}
-                    </span>
-                    <span class={`number-status ${num.isActive ? "active" : "inactive"}`}>
-                      {num.isActive ? "Active" : "Inactive"}
-                    </span>
-                    {this.state.defaultNumber === num.number && (
-                      <span class="number-status default">Default</span>
-                    )}
-                    <span class="number-capabilities">SMS, Voice</span>
-                  </div>
+        {groups.map((group) => {
+          // Hide the row for the number open in the detail view so it doesn't
+          // appear duplicated below the panel that "expanded" from it.
+          const visible = selectedNumber
+            ? group.numbers.filter((n) => n.number !== selectedNumber)
+            : group.numbers;
+          if (visible.length === 0) return null;
 
-                  <div class="number-label-section">
-                    {editingNumber === num.number ? (
-                      <div class="label-edit" role="form" aria-label={`Edit label for ${num.number}`}>
-                        <input
-                          type="text"
-                          value={editLabel}
-                          onInput={this.handleLabelChange}
-                          onKeyDown={this.handleLabelKeyDown}
-                          maxLength={30}
-                          minLength={1}
-                          disabled={editSaving}
-                          aria-label="Number label"
-                          aria-describedby={editError ? "label-edit-error" : undefined}
-                          aria-invalid={editError ? "true" : undefined}
-                          class="label-input"
-                          autoFocus
-                        />
-                        <span class="label-char-count">
-                          {editLabel.length}/30
-                        </span>
-                        <button
-                          type="button"
-                          onClick={this.saveLabel}
-                          disabled={editSaving || editLabel.length === 0}
-                          class="btn btn-save"
-                          aria-busy={editSaving ? "true" : undefined}
-                        >
-                          {editSaving ? "Saving..." : "Save"}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={this.cancelEditing}
-                          disabled={editSaving}
-                          class="btn btn-cancel"
-                        >
-                          Cancel
-                        </button>
-                        {editError && (
-                          <div id="label-edit-error" class="label-error" role="alert">
-                            {editError}
-                          </div>
-                        )}
-                      </div>
-                    ) : (
-                      <div class="label-display">
-                        <span class="label-text">
-                          {num.label || <em class="no-label">No label</em>}
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() => this.startEditing(num)}
-                          class="btn btn-edit"
-                          aria-label={`Edit label for ${num.number}`}
-                        >
-                          Edit
-                        </button>
-                      </div>
-                    )}
-                  </div>
+          return (
+            <section
+              key={group.providerId}
+              class="numbers-provider-group"
+              aria-labelledby={`provider-${group.providerId}`}
+            >
+              <h2 id={`provider-${group.providerId}`} class="provider-group-title">
+                {group.providerName}
+              </h2>
 
-                  <div class="number-actions">
-                    <label class="block-inbound-toggle">
-                      <input
-                        type="checkbox"
-                        checked={num.blockInboundCalls}
-                        disabled={this.state.blockInboundSaving === num.number}
-                        onChange={() => this.toggleBlockInbound(num)}
-                        aria-label={`Block incoming calls for ${num.number}`}
-                      />
-                      <span class="toggle-label">
-                        Block incoming calls
-                      </span>
-                    </label>
-                    {num.isActive && (
-                      this.state.defaultNumber === num.number ? (
-                        <button
-                          type="button"
-                          onClick={this.clearDefault}
-                          disabled={this.state.defaultSaving}
-                          class="btn btn-default-clear"
-                          aria-label={`Clear ${num.number} as default number`}
-                        >
-                          {this.state.defaultSaving ? "Saving..." : "Clear default"}
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => this.setAsDefault(num)}
-                          disabled={this.state.defaultSaving}
-                          class="btn btn-default-set"
-                          aria-label={`Set ${num.number} as default number`}
-                        >
-                          {this.state.defaultSaving ? "Saving..." : "Set as default"}
-                        </button>
-                      )
-                    )}
-                    {num.isActive ? (
-                      <button
-                        type="button"
-                        onClick={() => this.showConfirmation(num.number, "deactivate")}
-                        class="btn btn-deactivate"
-                        aria-label={`Deactivate ${num.number}`}
-                      >
-                        Deactivate
-                      </button>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => this.showConfirmation(num.number, "activate")}
-                        class="btn btn-activate"
-                        aria-label={`Activate ${num.number}`}
-                      >
-                        Activate
-                      </button>
-                    )}
-                  </div>
-                </li>
-              ))}
-            </ul>
-          </section>
-        ))}
+              <ul class="numbers-list" role="list">
+                {visible.map((num) => this.renderNumberRow(num))}
+              </ul>
+            </section>
+          );
+        })}
 
         {confirmNumber && confirmAction && (
           <div

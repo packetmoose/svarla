@@ -7,7 +7,7 @@
 type HttpMethod = "GET" | "POST" | "PUT" | "DELETE" | "PATCH";
 
 interface ApiResponse<T> {
-  ok: boolean;
+  ok: true;
   status: number;
   data: T;
 }

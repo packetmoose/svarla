@@ -83,10 +83,11 @@ export class DummyTelephonyProvider implements TelephonyProvider {
   }
 
   /**
-   * Return the webhook endpoint suffixes for the dummy provider type.
+   * The dummy provider simulates events internally and does not receive real
+   * inbound HTTP webhooks, so it exposes no webhook endpoints.
    */
   getWebhookEndpoints(): string[] {
-    return ['inbound-sms', 'event'];
+    return [];
   }
 
   /**

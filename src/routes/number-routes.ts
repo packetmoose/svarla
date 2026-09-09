@@ -25,9 +25,18 @@ export function registerNumberRoutes(
   /**
    * GET /api/numbers
    * List all numbers with labels and provider context.
+   *
+   * By default only numbers with a live provider are returned (active and
+   * inactive). Pass `?includeOrphaned=true` to also include orphaned numbers
+   * (provider removed, provider_id null) so history views can filter by every
+   * number that could appear in past entries. The default response is unchanged
+   * for existing callers.
    */
-  server.get('/api/numbers', async (_request: FastifyRequest, reply: FastifyReply) => {
-    const numbers = await numberService.getAllNumbers();
+  server.get('/api/numbers', async (request: FastifyRequest, reply: FastifyReply) => {
+    const { includeOrphaned } = request.query as { includeOrphaned?: string };
+    const numbers = await numberService.getAllNumbers({
+      includeOrphaned: includeOrphaned === 'true',
+    });
 
     return reply.status(200).send({
       numbers: numbers.map((n) => ({
