@@ -1,8 +1,13 @@
 import { h } from "preact";
+import type { VNode } from "preact";
 import { navigate } from "../router";
+import { chatIcon, callIcon, downloadIcon, settingsIcon } from "./icons";
+
+/** Dashboard cards render icons a touch larger than the 20px nav/tab default. */
+const CARD_ICON_SIZE = 28;
 
 interface DashboardItem {
-  icon: string;
+  icon: VNode;
   title: string;
   description: string;
   path: string;
@@ -10,25 +15,25 @@ interface DashboardItem {
 
 const items: DashboardItem[] = [
   {
-    icon: "◬",
+    icon: chatIcon(CARD_ICON_SIZE),
     title: "Conversations",
     description: "View and send SMS messages",
     path: "/conversations",
   },
   {
-    icon: "↗",
+    icon: callIcon(CARD_ICON_SIZE),
     title: "Call History",
     description: "Recent incoming and outgoing calls",
     path: "/call-history",
   },
   {
-    icon: "📥",
+    icon: downloadIcon(CARD_ICON_SIZE),
     title: "Download App",
     description: "Get the Svarla Android app",
     path: "/download",
   },
   {
-    icon: "⚙",
+    icon: settingsIcon(CARD_ICON_SIZE),
     title: "Settings",
     description: "Providers, numbers, devices, and account",
     path: "/settings",

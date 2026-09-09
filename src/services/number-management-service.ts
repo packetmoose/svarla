@@ -441,15 +441,34 @@ export class NumberManagementService {
 
   /**
    * Get all numbers (including inactive) for management UI.
-   * Orphaned numbers (provider_id IS NULL, from removed providers) are excluded
-   * by the INNER JOIN — they are retained only for historical reference in
-   * messages and call_history.
+   *
+   * By default, orphaned numbers (provider_id IS NULL, from removed providers)
+   * are excluded via an INNER JOIN — they are retained only for historical
+   * reference in messages and call_history.
+   *
+   * Pass `{ includeOrphaned: true }` to also return orphaned numbers via a LEFT
+   * JOIN. These carry a null provider_id and no provider_display_name. This is
+   * used by history views (e.g. the call-history filter) that need to offer
+   * every number that could appear in past entries, not just currently-provided
+   * ones. Callers that build send-source lists must keep the default so they
+   * never offer a number without a live provider.
+   *
    * Requirements: 9.1
    */
-  async getAllNumbers(): Promise<NumberRecord[]> {
-    const numbers = await this.db
-      .selectFrom('numbers')
-      .innerJoin('providers', 'providers.id', 'numbers.provider_id')
+  async getAllNumbers(
+    options: { includeOrphaned?: boolean } = {}
+  ): Promise<NumberRecord[]> {
+    const { includeOrphaned = false } = options;
+
+    const baseQuery = includeOrphaned
+      ? this.db
+          .selectFrom('numbers')
+          .leftJoin('providers', 'providers.id', 'numbers.provider_id')
+      : this.db
+          .selectFrom('numbers')
+          .innerJoin('providers', 'providers.id', 'numbers.provider_id');
+
+    const numbers = await baseQuery
       .select([
         'numbers.number',
         'numbers.provider_id',
@@ -461,6 +480,8 @@ export class NumberManagementService {
         'numbers.block_inbound_calls',
         'providers.display_name as provider_display_name',
       ])
+      // Nulls-last ordering keeps orphaned numbers (no provider name) grouped at
+      // the end rather than jumbled in by the database's default null sort.
       .orderBy('providers.display_name', 'asc')
       .orderBy('numbers.number', 'asc')
       .execute();
@@ -468,7 +489,7 @@ export class NumberManagementService {
     return numbers.map((n) => ({
       number: n.number,
       provider_id: n.provider_id,
-      provider_display_name: n.provider_display_name,
+      provider_display_name: n.provider_display_name ?? undefined,
       label: n.label,
       color: n.color,
       added_at: n.added_at,

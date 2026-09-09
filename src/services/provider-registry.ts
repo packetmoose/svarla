@@ -66,7 +66,7 @@ const WEBHOOK_ENDPOINTS: Record<string, string[]> = {
   // `voice_event` is not a statically-configured webhook — it is passed
   // per-call as `whenhangup`, so it is deliberately not listed here.
   '46elks': ['voice_start', 'sms_incoming'],
-  dummy: ['inbound-sms', 'event'],
+  dummy: [],
   'modem-gateway': [],
 };
 

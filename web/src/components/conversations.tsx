@@ -5,9 +5,21 @@ import { initWebSocket, getWebSocket } from "../ws";
 interface Conversation {
   phoneNumber: string;
   providerNumber: string | null;
-  providerNumberColor: string | null;
   lastMessagePreview: string | null;
   lastMessageTimestamp: string | null;
+  lastReceivedAt: string | null;
+  createdAt: string | null;
+  lastReadAt: string | null;
+}
+
+/**
+ * A conversation is uniquely identified by the (provider number, peer number)
+ * pair — the same peer reached from two different own-numbers is two separate
+ * threads. This mirrors the backend `threadKey` (`<provider>|<phone>`), with the
+ * empty string standing in for an unknown/legacy provider number.
+ */
+function threadKey(providerNumber: string | null, phoneNumber: string): string {
+  return `${providerNumber ?? ""}|${phoneNumber}`;
 }
 
 interface Message {
@@ -35,6 +47,17 @@ interface MessagesResponse {
   messages: Message[];
 }
 
+/** Shape of POST /api/sms/send — message fields are returned at the top level. */
+interface SendMessageResponse {
+  id: string;
+  conversationNumber: string;
+  providerNumber: string | null;
+  body: string;
+  direction: Message["direction"];
+  status: Message["status"];
+  timestamp: string;
+}
+
 interface NumbersResponse {
   numbers: NumberEntry[];
 }
@@ -44,6 +67,8 @@ interface ConversationsState {
   loading: boolean;
   error: string;
   selectedNumber: string | null;
+  /** Own provider number for the open thread; part of the (from, to) key. */
+  selectedProviderNumber: string | null;
   messages: Message[];
   messagesLoading: boolean;
   composeBody: string;
@@ -72,20 +97,24 @@ function formatTimestamp(iso: string | null): string {
   const date = new Date(iso);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
-  const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
+  const dayMs = 24 * 60 * 60 * 1000;
 
-  if (diffDays === 0) {
-    return date.toLocaleTimeString(undefined, {
+  // Matches the Android conversation list: time today, weekday this week, and a
+  // European dd/MM/yyyy date otherwise. en-GB + hour12:false keeps it 24-hour.
+  if (diffMs < dayMs) {
+    return date.toLocaleTimeString("en-GB", {
       hour: "2-digit",
       minute: "2-digit",
+      hour12: false,
     });
   }
-  if (diffDays < 7) {
-    return date.toLocaleDateString(undefined, { weekday: "short" });
+  if (diffMs < 7 * dayMs) {
+    return date.toLocaleDateString("en-GB", { weekday: "short" });
   }
-  return date.toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
+  return date.toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
   });
 }
 
@@ -110,6 +139,106 @@ function isValidE164(number: string): boolean {
  */
 function isNumericNumber(number: string): boolean {
   return /^\+?\d+$/.test(number);
+}
+
+/**
+ * A thread is unread when a message was received after it was last read (or it
+ * has never been read). Mirrors the Android list's timestamp-based detection.
+ */
+function isConversationUnread(conv: Conversation): boolean {
+  if (!conv.lastReceivedAt) return false;
+  if (!conv.lastReadAt) return true;
+  return new Date(conv.lastReceivedAt).getTime() > new Date(conv.lastReadAt).getTime();
+}
+
+/* ---------- Contact avatar (mirrors the Android ContactAvatar) ---------- */
+
+/**
+ * A display name is really a phone number (no contact resolved) when it's blank
+ * or starts with a digit or '+'. Those get a neutral grey person-icon avatar,
+ * matching the Android app.
+ */
+function isPhoneNumberDisplay(name: string): boolean {
+  if (!name || name.trim() === "") return true;
+  const first = name.trim()[0];
+  return /[0-9+]/.test(first);
+}
+
+/** Up to two initials from a contact name, matching Android's extractInitials. */
+function extractInitials(name: string): string {
+  if (!name || name.trim() === "") return "?";
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+  if (parts.length === 1) {
+    return parts[0].slice(0, 1).toUpperCase();
+  }
+  return "?";
+}
+
+/** Muted avatar palette, matching the Android app's avatarColorForName. */
+const AVATAR_PALETTE = [
+  "#5C6BC0", // Indigo
+  "#26A69A", // Teal
+  "#EF5350", // Red
+  "#AB47BC", // Purple
+  "#42A5F5", // Blue
+  "#66BB6A", // Green
+  "#FFA726", // Orange
+  "#78909C", // Blue Grey
+  "#EC407A", // Pink
+  "#8D6E63", // Brown
+];
+
+/** Deterministic avatar color for a name (same hashing intent as Android). */
+function avatarColorForName(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) {
+    hash = (hash * 31 + name.charCodeAt(i)) | 0;
+  }
+  const index = (hash & 0x7fffffff) % AVATAR_PALETTE.length;
+  return AVATAR_PALETTE[index];
+}
+
+/** Person glyph for unresolved (phone-number-only) contacts. */
+function personIcon() {
+  return (
+    <svg
+      class="avatar-person-icon"
+      width="22"
+      height="22"
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden="true"
+      focusable="false"
+    >
+      <path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10zm0 2c-4.4 0-8 2.7-8 6v2h16v-2c0-3.3-3.6-6-8-6z" />
+    </svg>
+  );
+}
+
+/**
+ * Renders a circular contact avatar: a grey person icon when the name is just a
+ * phone number, otherwise initials on a deterministic colored circle.
+ */
+function ContactAvatar({ displayName }: { displayName: string }) {
+  if (isPhoneNumberDisplay(displayName)) {
+    return (
+      <span class="conversation-avatar conversation-avatar-unknown" aria-hidden="true">
+        {personIcon()}
+      </span>
+    );
+  }
+  return (
+    <span
+      class="conversation-avatar"
+      style={{ backgroundColor: avatarColorForName(displayName) }}
+      aria-hidden="true"
+    >
+      {extractInitials(displayName)}
+    </span>
+  );
 }
 
 function getStatusIcon(status: string): string {
@@ -152,6 +281,7 @@ export class Conversations extends Component<Record<string, never>, Conversation
     loading: true,
     error: "",
     selectedNumber: null,
+    selectedProviderNumber: null,
     messages: [],
     messagesLoading: false,
     composeBody: "",
@@ -172,11 +302,30 @@ export class Conversations extends Component<Record<string, never>, Conversation
   private unsubNewMessage: (() => void) | null = null;
   private unsubMessageStatus: (() => void) | null = null;
   private unsubConnected: (() => void) | null = null;
+  private unsubReadState: (() => void) | null = null;
+
+  /** The scrollable messages viewport, so we can pin it to the newest message. */
+  private messagesListRef: HTMLDivElement | null = null;
+  /** Set after a fetch/open so the next render scrolls the thread to the bottom. */
+  private scrollToBottomOnUpdate = false;
 
   componentDidMount() {
     this.fetchConversations();
     this.fetchNumberLabels();
     this.setupWebSocket();
+
+    // Deep link: /conversations?to=<number> opens that thread directly (used by
+    // the Call History "message" action).
+    const hash = window.location.hash;
+    const queryIndex = hash.indexOf("?");
+    if (queryIndex !== -1) {
+      const params = new URLSearchParams(hash.slice(queryIndex + 1));
+      const to = params.get("to");
+      const from = params.get("from");
+      if (to) {
+        this.fetchMessages(to, from);
+      }
+    }
   }
 
   componentWillUnmount() {
@@ -192,19 +341,47 @@ export class Conversations extends Component<Record<string, never>, Conversation
       this.unsubConnected();
       this.unsubConnected = null;
     }
+    if (this.unsubReadState) {
+      this.unsubReadState();
+      this.unsubReadState = null;
+    }
+  }
+
+  componentDidUpdate(_prevProps: Record<string, never>, prevState: ConversationsState) {
+    // After a thread is opened or its messages change, pin the viewport to the
+    // newest message (which sits at the bottom, since messages are chronological).
+    const openedThread =
+      this.state.selectedNumber !== null && prevState.selectedNumber === null;
+    // Only a new message (count increase) should pull the view down — a
+    // status-only update (same count) must not yank the reader off their place.
+    const gotNewMessage = this.state.messages.length > prevState.messages.length;
+    const finishedLoading = prevState.messagesLoading && !this.state.messagesLoading;
+
+    if (this.scrollToBottomOnUpdate || openedThread || gotNewMessage || finishedLoading) {
+      this.scrollToBottomOnUpdate = false;
+      this.scrollMessagesToBottom();
+    }
+  }
+
+  /** Jump the messages viewport to the newest message at the bottom. */
+  private scrollMessagesToBottom() {
+    const el = this.messagesListRef;
+    if (el) {
+      el.scrollTop = el.scrollHeight;
+    }
   }
 
   private setupWebSocket() {
     const ws = getWebSocket() || initWebSocket();
 
     this.unsubNewMessage = ws.subscribe("new_message", (data: unknown) => {
-      // The new_message event is a lightweight notification and does NOT carry
-      // the message body or timestamp — only conversationNumber, messageId, and
-      // direction. Rather than trusting the partial payload, resync authoritative
-      // data from the server. This also picks up any messages we may have missed
-      // in other conversations, keeping the whole list up to date.
+      // The new_message event is a lightweight notification: it carries the
+      // thread identity (conversationNumber = peer, providerNumber = own) plus a
+      // messageId and direction, but not the body/timestamp. We resync the
+      // authoritative data from the server rather than trusting the payload.
       const notification = data as {
         conversationNumber: string;
+        providerNumber?: string | null;
         messageId: string;
         direction: string;
       };
@@ -212,14 +389,17 @@ export class Conversations extends Component<Record<string, never>, Conversation
       // Refresh the full conversation list (previews, timestamps, ordering).
       this.fetchConversations();
 
-      // If the message belongs to the currently open thread, refresh it so the
-      // new message appears with its full body and status. Use refreshMessages
-      // (not fetchMessages) so an in-progress reply and scroll state aren't reset.
-      if (
-        this.state.selectedNumber &&
-        notification.conversationNumber === this.state.selectedNumber
-      ) {
-        this.refreshMessages(this.state.selectedNumber);
+      // Only refresh the open thread when BOTH numbers match — a message to the
+      // same peer on a different own-number is a different conversation and must
+      // not disturb the thread currently on screen.
+      const sameThread =
+        !!this.state.selectedNumber &&
+        notification.conversationNumber === this.state.selectedNumber &&
+        threadKey(notification.providerNumber ?? null, notification.conversationNumber) ===
+          threadKey(this.state.selectedProviderNumber, this.state.selectedNumber);
+
+      if (sameThread) {
+        this.refreshMessages(this.state.selectedNumber as string);
       }
     });
 
@@ -242,8 +422,14 @@ export class Conversations extends Component<Record<string, never>, Conversation
       // Re-fetch data on WebSocket reconnect to pick up anything missed
       this.fetchConversations();
       if (this.state.selectedNumber) {
-        this.fetchMessages(this.state.selectedNumber);
+        this.fetchMessages(this.state.selectedNumber, this.state.selectedProviderNumber);
       }
+    });
+
+    // Another device marked something read; the event carries only global
+    // counts, so re-fetch the list to pick up fresh per-thread lastReadAt.
+    this.unsubReadState = ws.subscribe("read_state_updated", () => {
+      this.fetchConversations();
     });
   }
 
@@ -305,20 +491,30 @@ export class Conversations extends Component<Record<string, never>, Conversation
     return label || providerNumber;
   }
 
-  private async fetchMessages(phoneNumber: string) {
+  private async fetchMessages(phoneNumber: string, providerNumber: string | null = null) {
     this.setState({
       selectedNumber: phoneNumber,
+      selectedProviderNumber: providerNumber,
       messagesLoading: true,
       messages: [],
       composeBody: "",
       sendError: "",
     });
 
+    // Opening a thread clears its unread indicator (locally now, and on the
+    // server so other devices and the badge counts stay in sync).
+    this.markThreadRead(phoneNumber, providerNumber);
+
+    // A thread is keyed by (provider number, caller number). Pass `from` so a
+    // recipient reached from two different own-numbers stays in separate threads.
+    let messagesUrl = `/api/conversations/${encodeURIComponent(phoneNumber)}`;
+    if (providerNumber) {
+      messagesUrl += `?from=${encodeURIComponent(providerNumber)}`;
+    }
+
     // Fetch messages and source numbers in parallel
     const [messagesResult, numbersResult] = await Promise.all([
-      api.get<MessagesResponse>(
-        `/api/conversations/${encodeURIComponent(phoneNumber)}`
-      ),
+      api.get<MessagesResponse>(messagesUrl),
       api.get<NumbersResponse>("/api/numbers"),
     ]);
 
@@ -335,16 +531,51 @@ export class Conversations extends Component<Record<string, never>, Conversation
       (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
     );
 
-    // Load source numbers for sending
+    // Load source numbers for sending. Prefer the thread's own provider number
+    // as the reply source so a reply goes back out from the same number.
     if (numbersResult.ok) {
       const activeNumbers = numbersResult.data.numbers.filter((n) => n.isActive);
+      const preferredSource =
+        providerNumber && activeNumbers.some((n) => n.number === providerNumber)
+          ? providerNumber
+          : activeNumbers.length > 0
+            ? activeNumbers[0].number
+            : "";
       this.setState({
         sourceNumbers: activeNumbers,
-        selectedSource: activeNumbers.length > 0 ? activeNumbers[0].number : "",
+        selectedSource: preferredSource,
       });
     }
 
+    // Opening a thread should land at the newest message.
+    this.scrollToBottomOnUpdate = true;
     this.setState({ messages: sorted, messagesLoading: false });
+  }
+
+  /**
+   * Mark a thread as read: optimistically clear its unread state in the list,
+   * then tell the server (which broadcasts to other devices). The server keys
+   * read state by the (provider, peer) pair, so `from` is required.
+   */
+  private markThreadRead(phoneNumber: string, providerNumber: string | null) {
+    // Only numeric providers form a real thread key the server accepts; skip
+    // when we don't have a provider number (nothing to mark against).
+    if (!providerNumber) return;
+
+    // Optimistic: stamp lastReadAt=now on the matching row so the dot clears.
+    const now = new Date().toISOString();
+    this.setState((prev) => ({
+      conversations: prev.conversations.map((c) =>
+        c.phoneNumber === phoneNumber && c.providerNumber === providerNumber
+          ? { ...c, lastReadAt: now }
+          : c
+      ),
+    }));
+
+    const url = `/api/read-state/messages/${encodeURIComponent(phoneNumber)}?from=${encodeURIComponent(providerNumber)}`;
+    // Fire-and-forget; a failure just leaves the server-side state to be
+    // reconciled on the next list fetch.
+    void api.post(url, {});
   }
 
   /**
@@ -353,9 +584,11 @@ export class Conversations extends Component<Record<string, never>, Conversation
    * new_message notification arrives for the currently selected conversation.
    */
   private async refreshMessages(phoneNumber: string) {
-    const result = await api.get<MessagesResponse>(
-      `/api/conversations/${encodeURIComponent(phoneNumber)}`
-    );
+    let url = `/api/conversations/${encodeURIComponent(phoneNumber)}`;
+    if (this.state.selectedProviderNumber) {
+      url += `?from=${encodeURIComponent(this.state.selectedProviderNumber)}`;
+    }
+    const result = await api.get<MessagesResponse>(url);
 
     if (!result.ok) {
       return;
@@ -373,13 +606,17 @@ export class Conversations extends Component<Record<string, never>, Conversation
     this.setState({ messages: sorted });
   }
 
-  private handleSelectConversation = (phoneNumber: string) => {
-    this.fetchMessages(phoneNumber);
+  private handleSelectConversation = (
+    phoneNumber: string,
+    providerNumber: string | null = null
+  ) => {
+    this.fetchMessages(phoneNumber, providerNumber);
   };
 
   private handleBackToList = () => {
     this.setState({
       selectedNumber: null,
+      selectedProviderNumber: null,
       messages: [],
       composeBody: "",
       sendError: "",
@@ -401,8 +638,10 @@ export class Conversations extends Component<Record<string, never>, Conversation
       return;
     }
 
-    // Use the first source number as default or the selected source
+    // Prefer the thread's own provider number, then the explicit source
+    // selection, then the first available number.
     const from =
+      this.state.selectedProviderNumber ||
       this.state.selectedSource ||
       (sourceNumbers.length > 0 ? sourceNumbers[0].number : "");
 
@@ -413,7 +652,9 @@ export class Conversations extends Component<Record<string, never>, Conversation
 
     this.setState({ sending: true, sendError: "" });
 
-    const result = await api.post<{ message: Message }>("/api/sms/send", {
+    // POST /api/sms/send returns the created message fields at the top level
+    // (camelCase), not wrapped in { message }.
+    const result = await api.post<SendMessageResponse>("/api/sms/send", {
       to: selectedNumber,
       body: composeBody,
       from,
@@ -428,10 +669,24 @@ export class Conversations extends Component<Record<string, never>, Conversation
       return;
     }
 
-    // Append sent message to thread
-    if (result.data.message) {
+    // Optimistically append the sent message so it shows immediately (and the
+    // thread scrolls to it) rather than waiting for the WebSocket round-trip.
+    const sent = result.data;
+    if (sent && sent.id) {
+      const message: Message = {
+        id: sent.id,
+        conversation_number: sent.conversationNumber,
+        provider_number: sent.providerNumber,
+        body: sent.body,
+        direction: sent.direction,
+        status: sent.status,
+        timestamp: sent.timestamp,
+      };
       this.setState((prev) => ({
-        messages: [...prev.messages, result.data.message],
+        // Guard against a double-add if the WS refresh already delivered it.
+        messages: prev.messages.some((m) => m.id === message.id)
+          ? prev.messages
+          : [...prev.messages, message],
         composeBody: "",
         sending: false,
       }));
@@ -576,31 +831,55 @@ export class Conversations extends Component<Record<string, never>, Conversation
         <ul class="conversations-list" aria-label="Conversations">
           {conversations.map((conv) => {
             const providerDisplay = this.getProviderNumberDisplay(conv.providerNumber);
-            const providerColor = conv.providerNumber ? (this.state.numberColors[conv.providerNumber] || "#6750A4") : null;
+            const providerColor = conv.providerNumber
+              ? this.state.numberColors[conv.providerNumber] || "#6750A4"
+              : null;
+            const preview = truncatePreview(conv.lastMessagePreview, 50);
+            const unread = isConversationUnread(conv);
             return (
-              <li key={conv.phoneNumber} class="conversation-item">
+              <li key={threadKey(conv.providerNumber, conv.phoneNumber)} class="conversation-item">
                 <button
                   type="button"
-                  class="conversation-button"
-                  onClick={() => this.handleSelectConversation(conv.phoneNumber)}
-                  aria-label={`Open conversation with ${conv.phoneNumber}`}
+                  class={`conversation-button${unread ? " conversation-unread" : ""}`}
+                  onClick={() => this.handleSelectConversation(conv.phoneNumber, conv.providerNumber)}
+                  aria-label={
+                    `Open conversation with ${conv.phoneNumber}` +
+                    (providerDisplay ? ` via ${providerDisplay}` : "") +
+                    (unread ? " (unread)" : "")
+                  }
                 >
-                  <span class="conversation-number-group">
-                    <span class="conversation-number">{conv.phoneNumber}</span>
-                    {providerDisplay && providerColor && (
-                      <span
-                        class="number-badge"
-                        style={{ color: providerColor, backgroundColor: `${providerColor}1F` }}
-                      >
-                        {providerDisplay}
+                  <ContactAvatar displayName={conv.phoneNumber} />
+
+                  <span class="conversation-content">
+                    {/* Row 1: name + provider label with colored dot */}
+                    <span class="conversation-row-top">
+                      <span class="conversation-name">{conv.phoneNumber}</span>
+                      {providerDisplay && providerColor && (
+                        <span class="conversation-provider-label">
+                          <span class="conversation-provider-text">{providerDisplay}</span>
+                          <span
+                            class="conversation-provider-dot"
+                            style={{ backgroundColor: providerColor }}
+                            aria-hidden="true"
+                          />
+                        </span>
+                      )}
+                    </span>
+
+                    {/* Row 2: last message preview */}
+                    <span class="conversation-preview">
+                      {preview || "No messages yet"}
+                    </span>
+
+                    {/* Row 3: timestamp + unread indicator */}
+                    <span class="conversation-row-bottom">
+                      <span class="conversation-time">
+                        {formatTimestamp(conv.lastMessageTimestamp)}
                       </span>
-                    )}
-                  </span>
-                  <span class="conversation-preview">
-                    {truncatePreview(conv.lastMessagePreview, 50)}
-                  </span>
-                  <span class="conversation-time">
-                    {formatTimestamp(conv.lastMessageTimestamp)}
+                      {unread && (
+                        <span class="conversation-unread-dot" aria-hidden="true" />
+                      )}
+                    </span>
                   </span>
                 </button>
               </li>
@@ -717,9 +996,14 @@ export class Conversations extends Component<Record<string, never>, Conversation
           <div class="thread-title-group">
             <h2 class="thread-title">{selectedNumber}</h2>
             {(() => {
-              const conv = this.state.conversations.find(c => c.phoneNumber === selectedNumber);
-              const providerDisplay = this.getProviderNumberDisplay(conv?.providerNumber ?? null);
-              const providerColor = conv?.providerNumber ? (this.state.numberColors[conv.providerNumber] || "#6750A4") : null;
+              // Resolve the thread's own provider number from state (set when the
+              // thread was opened), not by peer-only lookup — two threads can
+              // share a peer, so matching on phoneNumber alone can mislabel.
+              const provider = this.state.selectedProviderNumber;
+              const providerDisplay = this.getProviderNumberDisplay(provider);
+              const providerColor = provider
+                ? this.state.numberColors[provider] || "#6750A4"
+                : null;
               return providerDisplay && providerColor ? (
                 <span
                   class="number-badge"
@@ -742,6 +1026,9 @@ export class Conversations extends Component<Record<string, never>, Conversation
             role="log"
             aria-label={`Messages with ${selectedNumber}`}
             aria-live="polite"
+            ref={(el) => {
+              this.messagesListRef = el as HTMLDivElement | null;
+            }}
           >
             {messages.length === 0 && (
               <p class="messages-empty">
