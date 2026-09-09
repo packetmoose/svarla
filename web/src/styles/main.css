@@ -469,52 +469,6 @@ textarea {
   font-weight: 600;
 }
 
-/* "Dial" affordance — a button rendered inside the nav list, styled to match
-   the nav links. Disabled (dimmed) when calling is unavailable in this context,
-   with an explanatory note shown beneath it. */
-.nav-dial {
-  display: flex;
-  align-items: center;
-  gap: var(--md-space-md);
-  width: calc(100% - 2 * var(--md-space-md));
-  padding: 0 var(--md-space-lg);
-  margin: 2px var(--md-space-md);
-  min-height: var(--min-touch-target);
-  background: transparent;
-  border: none;
-  color: var(--md-on-surface-variant);
-  font-size: 0.875rem;
-  font-weight: 500;
-  text-align: left;
-  border-radius: var(--md-radius-md);
-  cursor: pointer;
-  transition: background var(--md-motion-duration-short) var(--md-motion-ease),
-              color var(--md-motion-duration-short) var(--md-motion-ease);
-}
-
-.nav-dial:hover:not(:disabled) {
-  background: var(--md-surface-container);
-  color: var(--md-on-surface);
-}
-
-.nav-dial:focus-visible {
-  outline: 2px solid var(--md-primary);
-  outline-offset: -2px;
-}
-
-.nav-dial:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.nav-dial-note {
-  margin: 0 var(--md-space-md) var(--md-space-sm);
-  padding: 0 var(--md-space-lg);
-  font-size: 0.75rem;
-  line-height: 1.35;
-  color: var(--md-on-surface-variant);
-}
-
 .nav-icon {
   width: 24px;
   display: inline-flex;
@@ -2137,8 +2091,34 @@ textarea {
   max-width: 800px;
 }
 
-.call-history-page-title {
+/* Header row: page title on the left, the "Dial" action pinned to the right. */
+.call-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--md-space-md);
   margin-bottom: var(--md-space-lg);
+}
+
+.call-history-page-title {
+  margin: 0;
+}
+
+.call-history-dial {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--md-space-sm);
+  flex-shrink: 0;
+}
+
+.call-history-dial-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.call-history-dial:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Lighter, inline filter — no boxed surface, aligned to the muted-label

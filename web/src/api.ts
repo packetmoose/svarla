@@ -31,9 +31,18 @@ async function request<T>(
   path: string,
   body?: unknown
 ): Promise<ApiResponse<T> | ApiError> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+  const headers: Record<string, string> = {};
+
+  // Only advertise a JSON body when there actually is one. Sending
+  // `Content-Type: application/json` on a bodyless request (e.g. the bodyless
+  // POSTs used by decline/hangup/answer) makes Fastify's content-type parser
+  // reject it with FST_ERR_CTP_EMPTY_JSON_BODY (400) before the route runs —
+  // which previously caused declines to silently fail server-side, leaving the
+  // call ringing on other devices.
+  const hasBody = body !== undefined;
+  if (hasBody) {
+    headers["Content-Type"] = "application/json";
+  }
 
   const token = getSessionToken();
   if (token) {
@@ -43,7 +52,7 @@ async function request<T>(
   const res = await fetch(path, {
     method,
     headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: hasBody ? JSON.stringify(body) : undefined,
   });
 
   // Handle 401 by dispatching session-expired event

@@ -2,7 +2,7 @@ import { h } from "preact";
 import type { VNode } from "preact";
 import { useState, useEffect } from "preact/hooks";
 import { navigate } from "../router";
-import { homeIcon, chatIcon, callIcon, settingsIcon, phoneIcon } from "./icons";
+import { homeIcon, chatIcon, callIcon, settingsIcon } from "./icons";
 import {
   getResolvedTheme,
   toggleTheme,
@@ -19,7 +19,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { label: "Dashboard", path: "/", icon: homeIcon() },
   { label: "Conversations", path: "/conversations", icon: chatIcon() },
-  { label: "Call History", path: "/call-history", icon: callIcon() },
+  { label: "Calls", path: "/call-history", icon: callIcon() },
   { label: "Settings", path: "/settings", icon: settingsIcon() },
 ];
 
@@ -57,27 +57,7 @@ function ThemeToggle() {
   );
 }
 
-export interface NavProps {
-  /**
-   * Opens the nav-launched Dialer overlay, optionally pre-filled with a
-   * destination. Provided by the App shell (`main.tsx`) only when the browser
-   * supports calling. The "dial" nav affordance that calls this is added by
-   * Task 9.2; the prop is threaded through here so the App-level open-state
-   * plumbing (Task 9.1) type-checks.
-   */
-  openDialer?: (destination?: string) => void;
-  /**
-   * When calling is NOT available in this browsing context (e.g. a non-secure
-   * HTTP origin, or a browser missing the WebRTC APIs), the App shell passes a
-   * human-readable reason here. The "Dial" affordance is then rendered in a
-   * DISABLED state with this reason as its tooltip/announcement, so the user
-   * always sees the entry point and understands why it is unavailable
-   * (Requirements 15.2, 15.3) rather than finding nothing at all.
-   */
-  callingDisabledReason?: string;
-}
-
-export function Nav(props: NavProps = {}) {
+export function Nav() {
   const [isOpen, setIsOpen] = useState(false);
   const [activePath, setActivePath] = useState(getCurrentPath());
 
@@ -92,15 +72,6 @@ export function Nav(props: NavProps = {}) {
   function handleNavClick(path: string) {
     navigate(path);
     setActivePath(path);
-    setIsOpen(false);
-  }
-
-  function handleDialClick() {
-    if (!props.openDialer) return;
-    // "Dial" is an action, not a route: it opens the nav-launched Dialer
-    // overlay (Requirement 17.2). Provided by the App shell only when the
-    // browser supports calling, so the affordance is omitted otherwise.
-    props.openDialer?.();
     setIsOpen(false);
   }
 
@@ -149,28 +120,6 @@ export function Nav(props: NavProps = {}) {
             </a>
           </li>
         ))}
-        {(props.openDialer || props.callingDisabledReason) && (
-          <li role="none">
-            <button
-              type="button"
-              role="menuitem"
-              class="nav-dial"
-              onClick={handleDialClick}
-              disabled={!props.openDialer}
-              aria-label="Place a call"
-              aria-disabled={!props.openDialer}
-              title={props.callingDisabledReason ?? undefined}
-            >
-              <span class="nav-icon">{phoneIcon()}</span>
-              Dial
-            </button>
-            {props.callingDisabledReason && (
-              <p class="nav-dial-note" role="note">
-                {props.callingDisabledReason}
-              </p>
-            )}
-          </li>
-        )}
       </ul>
     </nav>
   );

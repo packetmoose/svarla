@@ -79,3 +79,18 @@ export function capabilityMessage(
   if (!report.secureContext) return "requires a secure (HTTPS) connection";
   return "unsupported browser";
 }
+
+/**
+ * Human-readable reason calling is unavailable in this browsing context, or
+ * `null` when calling is supported. Surfaced on a disabled "Dial" affordance so
+ * the user understands WHY they cannot start a call rather than seeing nothing
+ * at all (Requirements 15.2, 15.3).
+ */
+export function callingUnavailableReason(): string | null {
+  const key = capabilityMessage(detectCapabilities());
+  if (key === null) return null;
+  if (key === "requires a secure (HTTPS) connection") {
+    return "Calling requires a secure (HTTPS) connection. Open this app over HTTPS or via http://localhost to place calls.";
+  }
+  return "Calling isn't supported in this browser.";
+}

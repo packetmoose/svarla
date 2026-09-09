@@ -13,10 +13,7 @@ import { initWebSocket, getWebSocket } from "./ws";
 import { initTheme } from "./theme";
 
 // Calling stack (Task 9.1 wiring).
-import {
-  detectCapabilities,
-  capabilityMessage,
-} from "./call/capability-guard";
+import { detectCapabilities } from "./call/capability-guard";
 import {
   createCallController,
   type CallController,
@@ -42,21 +39,6 @@ registerRoutes([
 
 function isAuthenticated(): boolean {
   return !!localStorage.getItem("session_token");
-}
-
-/**
- * Human-readable reason calling is unavailable in this browsing context, or
- * `null` when calling is supported. Surfaced on a disabled "Dial" affordance so
- * the user understands WHY they cannot start a call rather than seeing nothing
- * at all (Requirements 15.2, 15.3).
- */
-function callingUnavailableReason(): string | null {
-  const key = capabilityMessage(detectCapabilities());
-  if (key === null) return null;
-  if (key === "requires a secure (HTTPS) connection") {
-    return "Calling requires a secure (HTTPS) connection. Open this app over HTTPS or via http://localhost to place calls.";
-  }
-  return "Calling isn't supported in this browser.";
 }
 
 /**
@@ -286,10 +268,7 @@ class App extends Component<Record<string, never>, AppState> {
 
     return (
       <div class="layout">
-        <Nav
-          openDialer={stack ? this.openDialer : undefined}
-          callingDisabledReason={stack ? undefined : callingUnavailableReason() ?? undefined}
-        />
+        <Nav />
         <main class="main-content">
           <Router />
         </main>

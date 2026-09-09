@@ -286,6 +286,30 @@ describe('CallOrchestrator', () => {
       );
     });
 
+    it('should broadcast a ringing inbound call_event so connected clients present/enrich the incoming call', async () => {
+      const { orchestrator, deps } = createOrchestrator();
+
+      const result = await orchestrator.handleInbound('provider-entry-1', 'prov-call-1', '+46709876543', '+46701234567');
+
+      // The browser has no push channel, so it relies on this real-time
+      // call_event to present the Incoming_Call_Surface. Status is `ringing`
+      // (the canonical unanswered-inbound status): the web client presents on
+      // it, and the Android client uses it to enrich its ringing call's
+      // temporary callId with this internal callId so a later teardown matches.
+      // `from` carries the caller number for display.
+      expect(deps.wsBroadcaster.broadcast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'call_event',
+          data: expect.objectContaining({
+            callId: result.callId,
+            status: 'ringing',
+            direction: 'inbound',
+            from: '+46709876543',
+          }),
+        }),
+      );
+    });
+
     it('should not directly send push notifications (NotificationService handles delivery)', async () => {
       const { orchestrator, deps } = createOrchestrator();
 
@@ -539,6 +563,65 @@ describe('CallOrchestrator', () => {
           }),
         }),
       );
+    });
+
+    it('should broadcast call_cancelled with reason "declined" so ringing devices stop ringing when declined', async () => {
+      const { orchestrator, deps } = createOrchestrator();
+
+      await orchestrator.handleInbound('provider-entry-1', 'prov-call-1', '+46709876543', '+46701234567');
+      const callId = orchestrator.getAllActiveCalls()[0].callId;
+      (deps.wsBroadcaster.broadcast as any).mockClear();
+
+      await orchestrator.endCall(callId, 'declined');
+
+      // A `disconnected` call_event alone is ignored by an endpoint that is
+      // still RINGING the call; a `call_cancelled` is what tears the ringing
+      // UI down on the other devices. The callId matches what those devices
+      // enriched from the inbound `ringing` broadcast.
+      expect(deps.wsBroadcaster.broadcast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'call_cancelled',
+          data: expect.objectContaining({
+            callId,
+            reason: 'declined',
+          }),
+        }),
+      );
+    });
+
+    it('should broadcast call_cancelled with reason "caller_disconnect" for a non-decline end of an unanswered call', async () => {
+      const { orchestrator, deps } = createOrchestrator();
+
+      await orchestrator.handleInbound('provider-entry-1', 'prov-call-1', '+46709876543', '+46701234567');
+      const callId = orchestrator.getAllActiveCalls()[0].callId;
+      (deps.wsBroadcaster.broadcast as any).mockClear();
+
+      await orchestrator.endCall(callId);
+
+      expect(deps.wsBroadcaster.broadcast).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: 'call_cancelled',
+          data: expect.objectContaining({
+            callId,
+            reason: 'caller_disconnect',
+          }),
+        }),
+      );
+    });
+
+    it('should remove a declined inbound call from active calls so it is not re-presented on reconnect', async () => {
+      const { orchestrator } = createOrchestrator();
+
+      await orchestrator.handleInbound('provider-entry-1', 'prov-call-1', '+46709876543', '+46701234567');
+      const callId = orchestrator.getAllActiveCalls()[0].callId;
+
+      await orchestrator.endCall(callId, 'declined');
+
+      // getAllActiveCalls backs GET /api/calls/active, which the web client
+      // reconciles against on (re)connect. A declined call must be gone so the
+      // Incoming_Call_Surface is not re-presented on refresh.
+      expect(orchestrator.getAllActiveCalls()).toHaveLength(0);
+      expect(orchestrator.getActiveCall(callId)).toBeNull();
     });
 
     it('should mark inbound unanswered call as MISSED', async () => {

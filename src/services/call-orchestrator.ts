@@ -485,6 +485,35 @@ export class CallOrchestrator {
         );
       });
 
+    // 5. Broadcast a `call_event` so connected clients present the incoming
+    // call over their live WebSocket. Native apps are also woken via the
+    // UnifiedPush wake signal in createNotification above, but the browser has
+    // no push channel — it relies on this real-time event.
+    //
+    // The status is `ringing` — the canonical unanswered-inbound status, shared
+    // with the `GET /api/calls/active` reconcile contract (getAllActiveCalls
+    // reports unanswered calls as `ringing`). Using `ringing` (rather than
+    // `connected`) is important for BOTH clients:
+    //   - Web: onCallEvent presents the Incoming_Call_Surface for a ringing
+    //     inbound offer.
+    //   - Android: the `ringing` branch routes to handleIncomingCall, which
+    //     ENRICHES the ringing call's temporary (notification-id) callId with
+    //     this server-internal `callId`. That reconciliation is what lets a
+    //     later teardown (see endCall's `call_cancelled` broadcast) match the
+    //     call on-device and stop the ring. A `connected` event, by contrast,
+    //     is ignored by the Android inbound path, so the ids would never align
+    //     and a decline elsewhere could never dismiss the Android ring.
+    // The caller number is passed as `from` so the surface shows the number.
+    this.wsBroadcaster.broadcast({
+      type: 'call_event',
+      data: {
+        callId,
+        status: 'ringing',
+        direction: 'inbound',
+        from,
+      },
+    });
+
     this.logger.info(
       { callId, from, to, providerCallId, providerId } as Record<string, unknown>,
       'Inbound call received — devices notified',
@@ -834,6 +863,31 @@ export class CallOrchestrator {
       data: {
         callId,
         status: 'disconnected',
+      },
+    });
+
+    // 1b. Also broadcast a `call_cancelled` so that endpoints which are still
+    // RINGING this call tear their incoming-call UI down. This is required in
+    // addition to the `call_event: disconnected` above because a ringing
+    // endpoint deliberately IGNORES a non-matching `disconnected` event (to
+    // avoid stray internal-leg events killing a live ring) — the Android client
+    // only tears a ringing call down on a `call_cancelled`. Without this, a
+    // decline (or caller hang-up before answer) on one device left every OTHER
+    // device ringing indefinitely. The web client dismisses its
+    // Incoming_Call_Surface on this event too. This mirrors the
+    // `answered_elsewhere` cancellation that answerCall already fans out.
+    //
+    // Reason mapping: an explicit user decline is `declined`; any other end of
+    // an as-yet-unanswered call (caller hung up, timeout, watchdog) is a
+    // caller-side disconnect. Answered calls that later end do not need the
+    // ringing-teardown semantics, but broadcasting the cancel is harmless
+    // there (no endpoint is ringing) and keeps a single teardown path.
+    const cancelReason = trigger === 'declined' ? 'declined' : 'caller_disconnect';
+    this.wsBroadcaster.broadcast({
+      type: 'call_cancelled',
+      data: {
+        callId,
+        reason: cancelReason,
       },
     });
 

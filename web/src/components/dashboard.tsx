@@ -22,8 +22,8 @@ const items: DashboardItem[] = [
   },
   {
     icon: callIcon(CARD_ICON_SIZE),
-    title: "Call History",
-    description: "Recent incoming and outgoing calls",
+    title: "Calls",
+    description: "Recent calls, and place a new one",
     path: "/call-history",
   },
   {

@@ -4,6 +4,7 @@ import { api } from "../api";
 import { navigate } from "../router";
 import { initWebSocket, getWebSocket } from "../ws";
 import { openDialer, isDialerAvailable } from "../call/dialer-bridge";
+import { callingUnavailableReason } from "../call/capability-guard";
 import { phoneIcon } from "./icons";
 
 /* ---------- Direction icons ---------- */
@@ -308,7 +309,7 @@ export class CallHistory extends Component<
     if (!result.ok) {
       this.setState({
         loading: false,
-        error: "Failed to load call history",
+        error: "Failed to load calls",
       });
       return;
     }
@@ -437,15 +438,47 @@ export class CallHistory extends Component<
     openDialer(phoneNumber);
   };
 
+  // The page header: the title on the left and a "Dial" action on the right.
+  // Placing Dial here (rather than in the nav) matches the mental model of
+  // opening Calls, glancing at recent activity, then dialing. The button opens
+  // the same nav-launched Dialer overlay via the dialer bridge. When calling is
+  // unavailable in this browsing context the button is DISABLED and carries the
+  // reason as its tooltip/announcement, so the entry point is always visible
+  // and self-explanatory (Requirements 15.2, 15.3).
+  private renderHeader() {
+    const dialAvailable = isDialerAvailable();
+    const disabledReason = dialAvailable ? undefined : callingUnavailableReason() ?? undefined;
+
+    return (
+      <div class="call-history-header">
+        <h1 class="call-history-page-title">Calls</h1>
+        <button
+          type="button"
+          class="btn btn-primary call-history-dial"
+          onClick={() => openDialer()}
+          disabled={!dialAvailable}
+          aria-disabled={!dialAvailable}
+          aria-label="Place a call"
+          title={disabledReason}
+        >
+          <span class="call-history-dial-icon" aria-hidden="true">
+            {phoneIcon(18)}
+          </span>
+          <span>Dial</span>
+        </button>
+      </div>
+    );
+  }
+
   render() {
     const { entries, loading, error, page, totalPages, availableNumbers, filterNumber } = this.state;
 
     if (loading && entries.length === 0) {
       return (
         <div class="call-history-container" role="main">
-          <h1 class="call-history-page-title">Call History</h1>
+          {this.renderHeader()}
           <p class="loading-text" aria-live="polite">
-            Loading call history...
+            Loading calls...
           </p>
         </div>
       );
@@ -453,7 +486,7 @@ export class CallHistory extends Component<
 
     return (
       <div class="call-history-container" role="main">
-        <h1 class="call-history-page-title">Call History</h1>
+        {this.renderHeader()}
 
         {availableNumbers.length > 0 && (
           <div class="call-history-filter">
@@ -497,7 +530,7 @@ export class CallHistory extends Component<
         )}
 
         {entries.length > 0 && (
-          <ul class="call-history-list" aria-label="Call history entries">
+          <ul class="call-history-list" aria-label="Calls">
             {entries.map((entry) => {
               const badge = this.getCallTypeBadge(entry.callType);
               const providerDisplay = this.getProviderNumberDisplay(entry.providerNumber);

@@ -859,22 +859,29 @@ class CallControllerImpl implements CallController {
   private onCallEvent(data: CallEventData): void {
     // --- Task 3.4: inbound presentation -----------------------------------
     //
-    // A `call_event` with status `connected` whose `callId` matches neither the
-    // active call nor a currently-displayed inbound call is an inbound call
-    // being offered to this Web_Device: present the Incoming_Call_Surface
-    // within 500ms with the caller number (or "Unknown caller" when absent),
-    // Requirement 3.1. A repeat `connected` for an ALREADY-displayed inbound
+    // An inbound-offer `call_event` whose `callId` matches neither the active
+    // call nor a currently-displayed inbound call is an inbound call being
+    // offered to this Web_Device: present the Incoming_Call_Surface within
+    // 500ms with the caller number (or "Unknown caller" when absent),
+    // Requirement 3.1. An inbound offer is signaled with status `ringing` (the
+    // canonical unanswered-inbound status shared with the Android client and
+    // the `GET /api/calls/active` reconcile contract). `connected` is still
+    // accepted here for backward compatibility, but only when it does not match
+    // the active call (a `connected` for the active call is the outbound/active
+    // answer path handled further below). A repeat inbound event for an ALREADY-displayed inbound
     // `callId` updates that surface in place rather than opening a second one
     // (Requirement 3.3). This slice deliberately handles ONLY presentation of a
     // not-yet-displayed / already-displayed inbound offer while Idle — the
     // single-call guard for a DIFFERENT inbound `callId` while a call is active,
     // and the general terminal teardown, are Task 3.5.
-    if (data.status === "connected" && data.callId) {
+    if ((data.status === "ringing" || data.status === "connected") && data.callId) {
       const s = this.store.getState();
       const active = s.call;
 
-      // If this connected event belongs to the active call, it is not a new
-      // inbound offer — leave it to the outbound/active handling below.
+      // If this event belongs to the active call, it is not a new inbound
+      // offer — leave it to the outbound/active handling below. (A `ringing`
+      // status never applies to the active call in this client; only inbound
+      // offers use it, so this guard only ever fires for a stray `connected`.)
       const isActiveCall = active?.callId === data.callId;
       if (!isActiveCall) {
         const displayed = s.incoming;
@@ -1018,29 +1025,36 @@ class CallControllerImpl implements CallController {
     const callId = data.callId;
     if (!callId) return;
 
-    // Only the `answered_elsewhere` reason is meaningful to the controller:
-    // another endpoint on the same account answered this call, so any surface
-    // we are showing for it must be dismissed and the identifier must not be
-    // re-presented while it remains held there (Requirements 3.9, 10.1, 10.2).
-    if (data.reason !== "answered_elsewhere") return;
+    // `answered_elsewhere` means another endpoint on the same account answered
+    // this call; the identifier is HELD there and must not be re-presented
+    // while held (Requirements 3.9, 10.1, 10.2). Any other cancellation reason
+    // (`declined`, `caller_disconnect`, timeout, etc.) is a genuine end of the
+    // call — the inbound offer is no longer valid, so dismiss the surface but
+    // do NOT hold the identifier (a fresh call could legitimately reuse it).
+    const isHeldElsewhere = data.reason === "answered_elsewhere";
 
-    // Remember the call is held elsewhere so a late/duplicate `call_event:
-    // connected` for the same identifier does not re-open the surface
+    // Remember the call is held elsewhere so a late/duplicate inbound
+    // `call_event` for the same identifier does not re-open the surface
     // (Requirement 10.2). Cleared on a subsequent terminal `call_event`.
-    this.heldElsewhere.add(callId);
+    if (isHeldElsewhere) {
+      this.heldElsewhere.add(callId);
+    }
 
     const s = this.store.getState();
 
     // Dismiss a displayed inbound surface for this call within 1s (Requirement
-    // 10.1). Presentation/dismissal is synchronous, so this is immediate.
+    // 10.1). Presentation/dismissal is synchronous, so this is immediate. This
+    // is what tears the ringing Incoming_Call_Surface down when the call ends
+    // or is declined elsewhere (e.g. this same call was declined on another
+    // device, or the caller hung up before anyone answered).
     if (s.incoming && s.incoming.callId === callId) {
       this.stopRingtone();
       this.store.setState({ incoming: null });
     }
 
     // If the cancelled call is somehow the ACTIVE call (e.g. an in-flight
-    // answer that lost the race to another endpoint), end the attempt and
-    // return to idle — the call is being handled elsewhere, not here.
+    // answer that lost the race to another endpoint, or a remote hang-up), end
+    // the attempt and return to idle — the call is no longer ours to run.
     if (s.call && s.call.callId === callId) {
       this.resetToIdle(null);
     }
