@@ -1,6 +1,8 @@
 import { h } from "preact";
+import type { VNode } from "preact";
 import { useState, useEffect } from "preact/hooks";
 import { navigate } from "../router";
+import { homeIcon, chatIcon, callIcon, settingsIcon } from "./icons";
 import {
   getResolvedTheme,
   toggleTheme,
@@ -11,14 +13,14 @@ import {
 interface NavItem {
   label: string;
   path: string;
-  icon: string;
+  icon: VNode;
 }
 
 const navItems: NavItem[] = [
-  { label: "Dashboard", path: "/", icon: "⌂" },
-  { label: "Conversations", path: "/conversations", icon: "◬" },
-  { label: "Call History", path: "/call-history", icon: "↗" },
-  { label: "Settings", path: "/settings", icon: "⚙" },
+  { label: "Dashboard", path: "/", icon: homeIcon() },
+  { label: "Conversations", path: "/conversations", icon: chatIcon() },
+  { label: "Call History", path: "/call-history", icon: callIcon() },
+  { label: "Settings", path: "/settings", icon: settingsIcon() },
 ];
 
 function getCurrentPath(): string {
