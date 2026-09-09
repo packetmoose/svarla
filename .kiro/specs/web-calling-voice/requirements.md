@@ -12,7 +12,7 @@ The web UI now has a documented design system with light/dark theming (`web/DESI
 
 **In scope:** outbound calling, inbound call receipt and answering, inbound call alerting (audible ringtone and attention signals), the WebRTC audio session lifecycle, remote audio playback (including autoplay handling and volume control), in-call controls (mute, DTMF, duration, hang up), browser capability and secure-context precondition handling, concurrency handling (a single active call per tab), accessibility of the call surfaces, call-history integration, browser device registration as a call target, multi-device "answered elsewhere" behavior, failure/edge-case handling, and visual consistency (the call surfaces adopt the existing web design system and support light and dark themes).
 
-**Out of scope (non-goals):** SMS and Conversations (already implemented and working), call waiting / holding a second concurrent call in the browser (a possible future enhancement), speaker/output-device selection via `setSinkId` (a possible future enhancement), any change to the MediaBridge media format or the ControlAPI, and any change to the Android application.
+**Out of scope (non-goals):** SMS and Conversations (already implemented and working), call waiting / holding a second concurrent call in the browser (a possible future enhancement), speaker/output-device selection via `setSinkId` (a possible future enhancement), reacting to `blocked_call` events in the web UI to surface blocked-call notifications (out of scope for v1 and a possible future enhancement; the Web_Client ignores `blocked_call` events without error), any change to the MediaBridge media format or the ControlAPI, and any change to the Android application.
 
 ## Glossary
 
@@ -34,7 +34,7 @@ The web UI now has a documented design system with light/dark theming (`web/DESI
 - **RTCDTMFSender**: The browser WebRTC API for sending in-band DTMF tones (RFC 4733/2833) on an audio track.
 - **SDP_Offer**: The Session Description Protocol offer string the Web_Call_Client generates for the MediaBridge.
 - **SDP_Answer**: The Session Description Protocol answer string returned by the Calling_API from the MediaBridge, with bundled ICE candidates.
-- **ICE_Server**: A STUN or TURN server used by the browser for NAT traversal during WebRTC connection establishment.
+- **ICE_Server**: A STUN or TURN server, when configured, that the browser uses for NAT traversal during WebRTC connection establishment. The set MAY be empty when the ICE Lite MediaBridge is directly reachable and advertises its own candidates in the SDP_Answer.
 - **Web_Browser_Device_Name**: The literal device name string `Web Browser` used when registering a Web_Device, which the Server (`auth-routes.ts`) recognizes to trigger the `skipDeviceLimit` branch.
 - **PCM_Audio**: Pulse-code-modulated audio (16-bit little-endian, 16kHz mono) negotiated via SDP between the Web_Call_Client and the MediaBridge for the two-way audio session.
 - **Unload_Beacon**: A fire-and-forget request (e.g., issued on the browser `pagehide`/`unload` event) that the Web_Client attempts to send to the Web_Device deregister endpoint when the tab or browser is closing. Delivery is best-effort and is not guaranteed to complete.
@@ -42,6 +42,7 @@ The web UI now has a documented design system with light/dark theming (`web/DESI
 - **Secure_Context**: A browsing context the browser considers sufficiently secure to expose powerful WebRTC and media-capture APIs, namely a page served over HTTPS or loaded from `localhost`/`127.0.0.1`, as reflected by `window.isSecureContext`.
 - **Ringtone**: The audible tone the Web_Client plays to alert the user of an inbound call while the Incoming_Call_Surface is presented and the call has not yet been answered or declined.
 - **Ringback**: The audible progress tone the far party's network or the MediaBridge provides for an outbound call while the far party has not yet answered, delivered to the Web_Client during the ringing state.
+- **Outbound_No_Answer_Timeout**: The configurable maximum duration an outbound call may remain in the Ringing progress state without receiving a terminal `call_event` before the Web_Client ends the call attempt as a client-side safety cap (suggested default: 60 seconds).
 - **Provider_Number_List**: The set of originating provider numbers configured on the Server and retrieved by the Web_Client via the existing number management API, used to populate the originating-number selection control in the Dialer.
 - **Attention_Signal**: A non-audio alert the Web_Client raises when the browser tab is not focused or visible, such as a document title change or a browser notification, to draw the user's attention to an inbound call.
 - **Call_History_API**: The existing endpoint `GET /api/calls/history` from which the Web_Client retrieves the record of completed calls across devices.
@@ -138,6 +139,8 @@ The web UI now has a documented design system with light/dark theming (`web/DESI
 8. THE two-way audio session SHALL carry PCM_Audio negotiated via SDP.
 9. WHILE an outbound call has been placed and the far party has not yet answered, THE In_Call_Surface SHALL display a "Ringing" progress state that is distinct from both the "Connecting" media-negotiation state and the "Connected" state.
 10. WHERE the MediaBridge provides Ringback audio for the outbound call, THE Web_Client SHALL play the received Ringback audio to the user during the Ringing progress state.
+11. WHILE an outbound call is in the Ringing progress state, IF the Server_WebSocket delivers a terminal `call_event` with status `failed` or `busy` for that call identifier, THEN THE Web_Client SHALL end the call attempt, display the corresponding outcome (no-answer, busy, or failed), and return to idle, relying on the Server or provider to emit the terminal event for an unanswered outbound call rather than deciding "no answer" locally.
+12. IF an outbound call remains in the Ringing progress state longer than the Outbound_No_Answer_Timeout without a terminal `call_event`, THEN THE Web_Client SHALL end the call attempt by sending `POST /api/calls/decline/:callId`, tear down any two-way WebRTC PCM_Audio session, and return to idle.
 
 ### Requirement 6: In-Call Mute Control
 
@@ -192,6 +195,7 @@ The web UI now has a documented design system with light/dark theming (`web/DESI
 6. WHILE Connected, THE Media_Inactivity_Watchdog SHALL evaluate inbound media reception at intervals not exceeding 1 second, treating reception as inactive when no inbound audio media packets arrive for a continuous 5 seconds.
 7. IF the Media_Inactivity_Watchdog reports inactive for a continuous 5 seconds while Connected and no termination signal has been received, THEN THE Web_Client SHALL tear down the session, release the microphone, return to idle within 2 seconds, and display a call-ended indication citing loss of media.
 8. WHEN a Web_Client browser closes abruptly during an active call such that the WebRTC peer connection drops and the MediaBridge emits a `client_disconnected` event, THE Server SHALL end the call and release the provider or far-party leg so that the far party is not left in a dead call.
+9. IF the Server_WebSocket delivers a `blocked_call` event, THEN THE Web_Client SHALL ignore it without changing call state or raising an error (v1 non-goal).
 
 ### Requirement 10: Multi-Device and Multi-Tab Behavior
 
@@ -225,10 +229,11 @@ The web UI now has a documented design system with light/dark theming (`web/DESI
 
 #### Acceptance Criteria
 
-1. WHEN initializing the `RTCPeerConnection`, THE Web_Call_Client SHALL configure an ICE_Server set including at least one STUN server plus any configured TURN server.
-2. WHERE direct connectivity cannot be established (no host/server-reflexive/peer-reflexive candidate pair reaches the connected ICE state), THE Web_Call_Client SHALL use the configured TURN relay candidate pair.
-3. WHEN `iceConnectionState` reaches `connected` or `completed` against the ICE Lite MediaBridge, THE Web_Call_Client SHALL set Call_Connection_State to Connected.
-4. IF ICE connectivity is not established within 20 seconds of the start of ICE gathering, THEN THE Web_Call_Client SHALL set Call_Connection_State to Failed with a machine-readable reason (ICE negotiation timeout), display an error, release resources, and end the call attempt.
+1. WHEN initializing the `RTCPeerConnection`, THE Web_Call_Client SHALL apply the configured ICE_Server set, which MAY be empty when the MediaBridge is directly reachable (the ICE Lite MediaBridge advertises its own reachable candidates in the SDP_Answer).
+2. WHERE STUN or TURN servers are configured for NAT-restricted deployments, THE Web_Call_Client SHALL include them in the `RTCPeerConnection` ICE_Server set.
+3. WHERE a TURN relay is configured AND direct connectivity cannot be established (no host/server-reflexive/peer-reflexive candidate pair reaches the connected ICE state), THE Web_Call_Client SHALL use the configured TURN relay candidate pair.
+4. WHEN `iceConnectionState` reaches `connected` or `completed` against the ICE Lite MediaBridge, THE Web_Call_Client SHALL set Call_Connection_State to Connected.
+5. IF ICE connectivity is not established within 20 seconds of the start of ICE gathering, THEN THE Web_Call_Client SHALL set Call_Connection_State to Failed with a machine-readable reason (ICE negotiation timeout), display an error, release resources, and end the call attempt.
 
 ### Requirement 13: Server-Side Stale Web Device Reaping
 

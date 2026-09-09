@@ -38,7 +38,7 @@ The feature adds **no new runtime dependencies**. It uses browser-native WebRTC 
 | Media/WebRTC | Browser `RTCPeerConnection`, `getUserMedia`, `RTCDTMFSender`, `HTMLAudioElement` | platform | Browser-native; no SDK, mirrors Android client lifecycle |
 | Build | esbuild via `web/build.ts` | existing | No change |
 | Unit/property tests | Vitest + fast-check | `vitest@^1.6`, `fast-check@^3.19` (both already `devDependencies`) | Repo already uses both for server tests; reused for the browser client and reaper |
-| Server (reaper) | TypeScript / Fastify / `ws` | existing | Reaper composes existing `DeviceRegistryManager` methods and the broadcaster |
+| Server (reaper) | TypeScript / Fastify / `ws` | existing | Reaper composes existing `DeviceRegistryManager` methods plus two small new read accessors on the broadcaster and orchestrator (see Server-Side Changes) |
 
 ## Architecture
 
@@ -145,6 +145,19 @@ sequenceDiagram
     Note over W: On answer elsewhere, broadcastExcept delivers call_cancelled/answered_elsewhere
 ```
 
+Note on mic ordering (see [Microphone-permission ordering on the answer path](#microphone-permission-ordering-on-the-answer-path)): although the diagram shows `answer(callId)` → `POST /api/calls/answer/:callId` → `getUserMedia`, microphone acquisition is treated as a **precondition** of a successful answer. In implementation the client acquires the mic via `getUserMedia` **before (or immediately as part of) committing the answer**, so a mic denial never leaves a call answered-on-server but silent.
+
+### Microphone-permission ordering on the answer path
+
+The naive ordering — answer the call on the server (`POST /api/calls/answer/:callId` → 200), *then* call `getUserMedia`, *then* offer — has a hazard: if the user denies or lacks microphone access, the call is already answered on the server but the browser has no audio to send, leaving a call that is **answered-but-silent**.
+
+**Decision:** `getUserMedia` (microphone acquisition) is a **precondition** of a successful answer. When the user taps **Answer**, the client requests microphone access **before (or immediately as part of) the answer action**:
+
+- If the mic is granted, the client proceeds with `POST /api/calls/answer/:callId`, then the WebRTC offer using the already-acquired local track (Requirements 4.1, 4.2, 3.4/3.5 — the answer succeeds only with a live local track).
+- If the mic is **denied or unavailable** after the user taps Answer, the client does **not** leave the call answered-but-silent: it sends `POST /api/calls/decline/:callId` (declining the incoming call) and shows the microphone-permission message (`Failed{mic-denied}` / `no-microphone`, per Requirements 4.2, 15.4, 15.5). This reconciles Requirement 3.4/3.5 (answer establishes the two-way session) with 4.1/4.2 (a two-way PCM_Audio session requires a live captured mic track): mic acquisition gating the answer means the surfaced state is either a genuinely connected call or a clean decline, never a silent connected call.
+
+**The same mic-first ordering applies to outbound calls:** the microphone is acquired as part of establishing the WebRTC session after `POST /api/calls/make` (before/at `createOffer`), so an outbound attempt with a denied mic fails cleanly rather than establishing a silent session.
+
 ### Call connection state (state diagram)
 
 ```mermaid
@@ -164,6 +177,8 @@ stateDiagram-v2
 ```
 
 `Idle` is the resting UI state; internally the `WebRtcCallClient` reports `Disconnected` when no peer connection exists. `Ringing` is an outbound-only progress state distinct from `Connecting` (media negotiation) and `Connected` (Requirement 5.9).
+
+The `Ringing --> Idle` edge covers outbound no-answer/busy/failed termination as well as decline/cancel: while in `Ringing`, a terminal `call_event` with status `failed` or `busy` ends the attempt, surfaces the outcome (no-answer, busy, or failed), and returns to `Idle` (Requirement 5.11); and if the call stays in `Ringing` longer than the **Outbound_No_Answer_Timeout** (configurable, default **60s**) with no terminal `call_event`, the client sends `POST /api/calls/decline/:callId`, tears down any two-way WebRTC PCM_Audio session, and returns to `Idle` (Requirement 5.12). The `CallController` owns the **Outbound_No_Answer_Timeout** timer: it starts the timer on entering `Ringing`, clears it on any terminal `call_event`/`call_cancelled` or state exit, and on expiry drives the decline-and-teardown path above. The client never decides "no answer" purely locally on the terminal-event path (5.11) — it relies on the Server/provider terminal event — while 5.12 is an explicit client-side safety cap layered on top.
 
 ## Components and Interfaces
 
@@ -296,6 +311,7 @@ export interface CallController {
 - `hangup()` and `decline()` both call `POST /api/calls/decline/:callId` — the backend uses `decline` for both decline and hang up.
 - Terminal `call_event` (`completed`/`failed`/`busy`) and `call_cancelled` (`answered_elsewhere`) handling is keyed by `callId` and idempotent (see [Correctness Properties](#correctness-properties)).
 - The single-call guard lives here: while `phase ∈ {Connecting, Ringing, Connected}`, an inbound `call_event` for a different `callId` triggers `decline(newCallId)` and never opens a second surface (Requirement 14.1).
+- Outbound `Ringing` termination is owned here: a terminal `call_event` `failed`/`busy` while `Ringing` ends the attempt and surfaces the outcome (Requirement 5.11); and the `CallController` owns the **Outbound_No_Answer_Timeout** timer (configurable, default 60s) started on entering `Ringing` — on expiry with no terminal `call_event`, it sends `POST /api/calls/decline/:callId`, tears down the session, and returns to idle (Requirement 5.12). The timer is cleared on any terminal event or state exit.
 
 ### Call state model
 
@@ -555,8 +571,11 @@ Each failure maps to a concrete `CallControllerState` outcome (a `phase` transit
 | Apply-answer fails | `setRemoteDescription` throws | `Failed{answer-failed}`, error, end call | 4.7 |
 | ICE fails / not connected within 20s | `iceConnectionState` failed or timeout | `Failed{ice-failed}` / `Failed{ice-timeout}` (machine-readable), release, end | 4.10, 5.5, 12.4 |
 | Connecting > 30s | overall connecting cap | `Failed{connecting-timeout}`, end call | 5.4 |
+| Mic denied/unavailable after tapping Answer | `getUserMedia` rejects on the answer path (mic is a precondition) | Send `POST /api/calls/decline/:callId`, `Failed{mic-denied}`/`no-microphone`, show mic-permission message, idle (never answered-but-silent) | 4.2, 15.4, 15.5, 3.4/3.5 |
 | Answer 409 | `POST /api/calls/answer/:callId` | Dismiss Incoming_Call_Surface, "call no longer available" | 3.8 |
 | WebRTC session not established within 15s after answer | inbound establishment cap | End attempt, error, return to idle | 3.6 |
+| Outbound terminal event while Ringing | `call_event` status `failed`/`busy` during `Ringing` | End attempt, show outcome (no-answer/busy/failed), return to idle | 5.11 |
+| Outbound Ringing exceeds no-answer timeout | `Ringing` longer than Outbound_No_Answer_Timeout (default 60s) with no terminal `call_event` | `CallController` timer fires → `POST /api/calls/decline/:callId`, tear down session, return to idle | 5.12 |
 | Connection lost while Connected | `iceConnectionState` disconnected/failed after Connected | `Failed{connection-lost}`, end call | 5.7 |
 | Media inactive 5s while Connected | watchdog: no inbound-rtp delta for 5s | Teardown, release mic, idle within 2s, "call ended — media lost" | 9.6, 9.7 |
 | WS lost while Connected | `ws.ts` close during Connected | Keep playing established audio, show "signaling disconnected" | 11.5 |
@@ -567,6 +586,7 @@ Each failure maps to a concrete `CallControllerState` outcome (a `phase` transit
 | DTMF fallback fails / >5s | `POST /api/calls/:callId/dtmf` | Preserve Connected, show "DTMF not delivered" | 7.5 |
 | Registration timeout (>10s) / error | device provisioning | "inbound calling unavailable", retain session, manual retry control | 1.6, 1.7, 1.8 |
 | Event for unknown callId | `call_event`/`call_cancelled` mismatch | Ignore, leave state unchanged | 9.3 |
+| `blocked_call` event received | Server_WebSocket delivers a `blocked_call` event | Ignore — no state change, no error (v1 non-goal) | 9.9 |
 
 ## Testing Strategy
 
@@ -599,22 +619,25 @@ Each failure maps to a concrete `CallControllerState` outcome (a `phase` transit
 
 A periodic sweep that deactivates orphaned browser devices. It composes existing building blocks and adds no new persistence.
 
-- **Placement.** A `setInterval` task, or piggy-backed on the broadcaster's existing 30s ping cycle (`WebSocketBroadcaster.PING_INTERVAL_MS = 30_000`). The broadcaster already knows which `deviceId`s have live sockets (`isDeviceConnected`, `getConnectedDeviceIds`).
+- **Placement.** A `setInterval` task, or piggy-backed on the broadcaster's existing 30s ping cycle (`WebSocketBroadcaster.PING_INTERVAL_MS = 30_000`).
+- **New broadcaster accessors (small required change).** The reaper needs to know which `deviceId`s currently have a live socket, but `WebSocketBroadcaster` keeps its socket map private (`private connections: Map<string, Set<WebSocket>>`) and does **not** expose that today. This design therefore adds two small public accessors to `WebSocketBroadcaster` that read over the existing private `connections` map — `isDeviceConnected(deviceId: string): boolean` and `getConnectedDeviceIds(): Set<string>` (a `string[]` return is equally acceptable). This is the only change to the broadcaster; it adds no new state, just read accessors over data it already tracks.
 - **Last-seen tracking.** While a Web_Device has a live socket, refresh its last-seen via `DeviceRegistryManager.updateLastSeen(deviceId)` (Requirement 13.1); the `device_registry.last_seen_at` column and the method already exist.
-- **Staleness test.** A device is stale when it has **no** live socket AND `now - lastSeenAt > Web_Device_Staleness_Interval` (default **90s** — a small multiple of the 30s ping) (Requirement 13.2).
+- **Staleness test.** A device is stale when it has **no** live socket (via the new `isDeviceConnected` / `getConnectedDeviceIds` accessors above) AND `now - lastSeenAt > Web_Device_Staleness_Interval` (default **90s** — a small multiple of the 30s ping) (Requirement 13.2).
 - **Scope.** Reap **only** web-registered devices — those with `deviceName === 'Web Browser'` / the `skipDeviceLimit` flag. Never touch Android/push devices (Requirement 13.4).
-- **In-call guard.** Skip any device currently associated with an active call, queried via `CallOrchestrator.getAllActiveCalls()` (Requirement 13.7); this preserves the Reaper-safety invariant.
+- **In-call guard (requires a new orchestrator accessor).** Skip any device currently associated with an active call (Requirement 13.7); this preserves the Reaper-safety invariant. Mapping an active call to the device holding it requires a **new** accessor: `CallOrchestrator.getAllActiveCalls()` returns `Array<{ callId; from; to; direction; status; providerNumber; startedAt }>` and `getActiveCall(id)` returns `{ callId; from; to; direction; answered }` — **neither** exposes the `answeredByDevice` value, even though the internal `ActiveCall` record does carry `answeredByDevice: string | null` (set on outbound create and on answer). This design therefore adds a small new accessor, `CallOrchestrator.getActiveDeviceIds(): Set<string>`, returning the set of non-null `answeredByDevice` values across all active calls (alternatively, extend `getAllActiveCalls()` to include `answeredByDevice`). The in-call guard uses `getActiveDeviceIds()` — **not** `getAllActiveCalls()` — to decide whether a candidate device is currently on a call.
 - **Action.** For each device that passes all checks, call `DeviceRegistryManager.deactivateDevice(deviceId)` (Requirement 13.3). A deactivated device is no longer returned by `listActiveDevices()` and therefore is not notified of inbound calls (Requirement 13.5). Other devices and in-progress calls are untouched (Requirement 13.6).
+
+**Reaping / live-socket race.** The staleness check and `deactivateDevice` are not atomic, so a client socket could reconnect in the window between them. This is safe by construction. Reaping only ever targets a web device that has **no** live socket at check time; a device that reconnects becomes ineligible on the next sweep because `isDeviceConnected` reports true and last-seen is refreshed. If a socket reconnects *after* the check but *before* `deactivateDevice`, the device may still be deactivated — but `deactivateDevice` does **not** forcibly close any socket. The reconnecting (or late) client simply finds, on its next reconciliation (`ws_connected` → `reconcileOnReconnect`, per Requirement 1.14), that its persisted `device_id` is no longer active, and re-provisions a new Web_Device rather than continuing on a reaped id. Either outcome converges on a single active device per session, keeping the Reaper-safety invariant intact.
 
 ```typescript
 // src/services/web-device-reaper.ts (sketch)
 interface WebDeviceReaperDeps {
   registry: DeviceRegistryManager;          // deactivateDevice, updateLastSeen, listActiveDevices
-  broadcaster: WebSocketBroadcaster;        // isDeviceConnected, getConnectedDeviceIds
-  orchestrator: CallOrchestrator;           // getAllActiveCalls
+  broadcaster: WebSocketBroadcaster;        // NEW accessors: isDeviceConnected, getConnectedDeviceIds (over private `connections` map)
+  orchestrator: CallOrchestrator;           // NEW accessor: getActiveDeviceIds() for the in-call guard (getAllActiveCalls does NOT expose answeredByDevice)
   stalenessMs?: number;                     // default 90_000
 }
-// sweep(): for each active web device with no live socket, stale, and not in an active call -> deactivate.
+// sweep(): for each active web device with no live socket, stale, and whose id is NOT in orchestrator.getActiveDeviceIds() -> deactivate.
 ```
 
 ### Already handled — verify, no new work
@@ -634,6 +657,8 @@ interface WebDeviceReaperDeps {
 6. **Ringtone/ringback autoplay limitations.** Browser autoplay policy may suppress the ringtone until a user gesture. **Decision:** the visible Incoming_Call_Surface is the primary guaranteed alert; ringtone is best-effort, and remote-audio playback is backed by a gesture-tied resume control (Requirement 4.12). Trade-off: audio may be delayed until the Answer gesture, accepted per the Requirement 16 note.
 7. **Adopt the existing `web/DESIGN.md` design system and theming vs. bespoke call styling.** The web UI already ships a documented token-first design system and light/dark theming (`web/DESIGN.md`, `web/src/styles/main.css`, `web/src/theme.ts`). **Decision:** style the call surfaces entirely with those tokens rather than inventing call-specific colors/shapes. Rationale/trade-off: it keeps the calling UI part of **one product** (consistent with the rest of the web app and the Android client) and gives **automatic light/dark** support with no theme-specific code — at the cost of staying within the token vocabulary (adding a new token in `main.css` when a genuinely new role is needed, rather than hardcoding a color).
 8. **Add call icons to `icons.tsx` following the inline-SVG convention vs. unicode/emoji.** The current banner uses a `📞` emoji glyph. **Decision:** add `phoneIcon`/`phoneOffIcon`/`micIcon`/`micOffIcon`/`dialpadIcon`/`volumeIcon` to `web/src/components/icons.tsx` via the established `iconSvg` helper (24px viewBox, `currentColor`, 1.75 stroke, `aria-hidden`). Rationale/trade-off: the SVG icons inherit theme text color, stay pixel-consistent with the rest of the UI, and render uniformly across platforms/fonts — unlike emoji, whose appearance varies by OS and does not follow the color tokens; the minor cost is authoring the SVG paths once.
+9. **Two small new server accessors for the reaper vs. new state.** The reaper needs "which devices have a live socket" and "which devices are on an active call," but `WebSocketBroadcaster` keeps its socket map private (`private connections`) and `CallOrchestrator.getAllActiveCalls()` / `getActiveCall()` do not surface the internal `answeredByDevice`. **Decision:** add read-only accessors over data these components already track — `WebSocketBroadcaster.isDeviceConnected` / `getConnectedDeviceIds` (Requirement 13.2) and `CallOrchestrator.getActiveDeviceIds()` returning the set of active `answeredByDevice` values (Requirement 13.7) — rather than duplicating socket/call bookkeeping inside the reaper. Trade-off: two tiny public methods versus the reaper re-deriving state it cannot see; the accessors add no new persistence and keep the reaper composed of existing building blocks. Without the orchestrator accessor the in-call guard (13.7) is unimplementable as originally sketched.
+10. **Microphone acquisition is a precondition of answering (mic-first ordering).** The naive answer sequence (server-answer → `getUserMedia` → offer) risks an answered-but-silent call if the mic is denied. **Decision:** acquire the mic via `getUserMedia` before/at the answer action; on denial after the user taps Answer, send `POST /api/calls/decline/:callId` and show the mic-permission message instead of leaving the call answered-but-silent (Requirements 3.4/3.5, 4.1, 4.2, 15.4, 15.5). The same ordering applies to outbound (mic acquired as part of establishing the session after `POST /api/calls/make`). Trade-off: a mic prompt appears at the moment of answering rather than after, accepted because it guarantees the surfaced state is either a genuinely connected call or a clean decline.
 
 ## Requirements Traceability
 
@@ -645,12 +670,15 @@ interface WebDeviceReaperDeps {
 | Incoming / answer flow | 3.1–3.9, 16.1–16.3, 18.1 |
 | UI Design System Integration (tokens, icons, theming) | 18 (accessibility: focus ring, icon-only aria-labels, reduced-motion, touch targets); general UI 2, 3, 6, 7, 8; light/dark theming is a cross-cutting UI constraint across all UI surfaces |
 | `WebRtcCallClient` + establishment | 4.1–4.13, 12.1–12.4 |
-| `CallController` state machine | 5.1–5.10, 14.1–14.3 |
+| Microphone-permission ordering (answer path) | 3.4/3.5, 4.1, 4.2, 15.4, 15.5 |
+| `CallController` state machine | 5.1–5.12, 14.1–14.3 (incl. 5.11/5.12 outbound Ringing termination + Outbound_No_Answer_Timeout timer) |
 | In-call controls | 6.1–6.7 (mute), 7.1–7.6 (DTMF), 8.1–8.5 (duration/hang up) |
 | Termination signaling | 9.1–9.8, 10.1–10.5 |
-| Error Handling | 2.7, 2.8, 3.6, 3.8, 4.2, 4.5, 4.7, 4.10, 4.12, 5.4, 5.5, 5.7, 7.5, 8.4, 9.6, 9.7, 11.1–11.7, 15.2–15.5 |
+| Error Handling | 2.7, 2.8, 3.6, 3.8, 4.2, 4.5, 4.7, 4.10, 4.12, 5.4, 5.5, 5.7, 5.11, 5.12, 7.5, 8.4, 9.3, 9.6, 9.7, 9.9, 11.1–11.7, 15.2–15.5 |
 | `capabilityGuard` | 15.1–15.3 |
 | Correctness Properties | 14 (P1), 4/5 (P2), 4/5/8/9 (P3), 3/9/10 (P4), 1 (P5), 13 (P6), 2 (P7), 8 (P8), 7 (P9) |
 | Server-Side Changes (reaper) | 13.1–13.7 |
+| Server-Side Changes — new `WebSocketBroadcaster` accessors (`isDeviceConnected`, `getConnectedDeviceIds`) over private `connections` map | 13.2 (staleness / live-socket check) |
+| Server-Side Changes — new `CallOrchestrator.getActiveDeviceIds()` accessor (in-call guard; `getAllActiveCalls()`/`getActiveCall()` do not expose `answeredByDevice`) | 13.7 (in-call guard) |
 | Testing Strategy | 17.1, 9.8 (integration), all properties |
-| Design Decisions | 1.5 (deviation), 12 (refinement), 14 (auto-decline), design-system adoption + icon convention (cross-cutting UI, Req 18) |
+| Design Decisions | 1.5 (deviation), 12 (refinement), 14 (auto-decline), design-system adoption + icon convention (cross-cutting UI, Req 18), 13.2/13.7 (new reaper server accessors), 3.4/3.5, 4.1, 4.2, 15.4, 15.5 (mic-first answer ordering) |
