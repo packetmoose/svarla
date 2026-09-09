@@ -2072,45 +2072,26 @@ textarea {
   max-width: 800px;
 }
 
-.call-history-container h1 {
-  margin-bottom: var(--md-space-xl);
+.call-history-page-title {
+  margin-bottom: var(--md-space-lg);
 }
 
+/* Lighter, inline filter — no boxed surface, aligned to the muted-label
+   convention rather than its own card. */
 .call-history-filter {
   display: flex;
   align-items: center;
   gap: var(--md-space-sm);
   margin-bottom: var(--md-space-lg);
-  padding: var(--md-space-sm) var(--md-space-md);
-  background: var(--md-surface);
-  border: 1px solid var(--md-outline-variant);
-  border-radius: var(--md-radius-md);
 }
 
 .call-history-filter label {
-  font-size: 0.8125rem;
-  font-weight: 500;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
   color: var(--md-on-surface-variant);
   white-space: nowrap;
-}
-
-.call-history-filter .filter-select {
-  flex: 1;
-  max-width: 300px;
-  padding: 8px 12px;
-  min-height: 36px;
-  border: 1px solid var(--md-outline);
-  border-radius: var(--md-radius-sm);
-  font-size: 0.8125rem;
-  background: var(--md-surface);
-  color: var(--md-on-surface);
-  transition: border-color var(--md-motion-duration-short) var(--md-motion-ease);
-}
-
-.call-history-filter .filter-select:focus {
-  outline: none;
-  border-color: var(--md-primary);
-  box-shadow: 0 0 0 2px var(--md-primary-container);
 }
 
 .call-history-error {
@@ -2124,9 +2105,42 @@ textarea {
 }
 
 .call-history-empty {
-  color: var(--md-on-surface-variant);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
   text-align: center;
-  padding: var(--md-space-2xl);
+  padding: var(--md-space-2xl) var(--md-space-lg);
+  color: var(--md-on-surface-variant);
+}
+
+.call-history-empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  margin-bottom: var(--md-space-md);
+  border-radius: var(--md-radius-full);
+  background: var(--md-surface-container);
+  color: var(--md-on-surface-variant);
+}
+
+.call-history-empty-icon .icon {
+  width: 24px;
+  height: 24px;
+}
+
+.call-history-empty-title {
+  margin: 0;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--md-on-surface);
+}
+
+.call-history-empty-subtitle {
+  margin: var(--md-space-xs) 0 0;
+  font-size: 0.8125rem;
+  color: var(--md-on-surface-variant);
 }
 
 .call-history-list {
@@ -2138,31 +2152,68 @@ textarea {
 }
 
 .call-history-entry {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-md);
   padding: var(--md-space-md) var(--md-space-lg);
   background: var(--md-surface);
   border: 1px solid var(--md-outline-variant);
   border-radius: var(--md-radius-md);
-  transition: box-shadow var(--md-motion-duration-short) var(--md-motion-ease);
+  transition: box-shadow var(--md-motion-duration-short) var(--md-motion-ease),
+              border-color var(--md-motion-duration-short) var(--md-motion-ease);
 }
 
 .call-history-entry:hover {
   box-shadow: var(--md-elevation-1);
+  border-color: var(--md-outline);
 }
 
-.call-entry-header {
-  display: flex;
+/* Leading direction glyph. The tint comes from the same badge-* classes used
+   on the text badge, so the icon and label stay color-consistent. */
+.call-direction-icon {
+  display: inline-flex;
   align-items: center;
-  gap: var(--md-space-sm);
-  margin-bottom: var(--md-space-xs);
+  justify-content: center;
+  flex-shrink: 0;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--md-radius-full);
+}
+
+.call-direction-icon .icon {
+  width: 20px;
+  height: 20px;
+}
+
+/* Middle column: caller identity and secondary detail. Grows to fill the row
+   so the trailing badge/duration column can sit flush right. */
+.call-entry-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+/* Trailing column: call-type badge over the duration, right-aligned so the
+   metadata is spread across the card rather than crammed left. */
+.call-entry-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: var(--md-space-xs);
+  flex-shrink: 0;
+  text-align: right;
 }
 
 .call-type-badge {
   font-size: 0.6875rem;
   font-weight: 600;
-  padding: 3px 10px;
-  border-radius: var(--md-radius-full);
+  padding: 2px 8px;
+  border-radius: var(--md-radius-xs);
   text-transform: uppercase;
   letter-spacing: 0.03em;
+  white-space: nowrap;
 }
 
 .badge-incoming {
@@ -2202,18 +2253,24 @@ textarea {
 
 .call-phone-number {
   font-weight: 600;
-  font-size: 0.9375rem;
+  font-size: 1rem;
+  color: var(--md-on-surface);
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.call-entry-details {
+.call-entry-meta {
   display: flex;
   align-items: center;
-  gap: var(--md-space-md);
+  flex-wrap: wrap;
+  gap: var(--md-space-sm);
+  font-size: 0.8125rem;
+  color: var(--md-on-surface-variant);
 }
 
 .call-timestamp {
-  font-size: 0.8125rem;
   color: var(--md-on-surface-variant);
 }
 
@@ -2223,13 +2280,174 @@ textarea {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
 }
 
-.call-entry-provider {
-  margin-top: var(--md-space-xs);
+/* Provider number indicator, matching the Android conversation list's
+   NumberLabelWithDot: the label is neutral plain text (never the per-number
+   color) followed by a small solid dot filled with the number's assigned color.
+   The color lives in the dot, keeping the label readable regardless of palette. */
+.call-provider-number {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 220px;
+  overflow: hidden;
 }
 
-.call-provider-number {
-  font-size: 0.75rem;
+.call-provider-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.8125rem;
   color: var(--md-on-surface-variant);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+.call-provider-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--md-radius-full);
+}
+
+/* Trailing action slot. Sized as a flex row so additional per-row actions
+   (e.g. a call button once web calling lands) sit alongside the message
+   button without further layout changes. */
+.call-entry-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-xs);
+  flex-shrink: 0;
+}
+
+.call-action-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  color: var(--md-on-surface-variant);
+  background: transparent;
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-radius-button);
+  transition: color var(--md-motion-duration-short) var(--md-motion-ease),
+              background var(--md-motion-duration-short) var(--md-motion-ease),
+              border-color var(--md-motion-duration-short) var(--md-motion-ease);
+}
+
+.call-action-btn:hover {
+  color: var(--md-primary);
+  background: var(--md-primary-container);
+  border-color: var(--md-primary);
+  box-shadow: none;
+}
+
+/* Non-messageable senders (anonymous / alphanumeric IDs): the button stays
+   visible for layout consistency but reads as unavailable and doesn't react. */
+.call-action-btn:disabled,
+.call-action-btn-disabled {
+  color: var(--md-outline);
+  border-color: var(--md-outline-variant);
+  background: transparent;
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.call-action-btn:disabled:hover,
+.call-action-btn-disabled:hover {
+  color: var(--md-outline);
+  border-color: var(--md-outline-variant);
+  background: transparent;
+}
+
+.call-action-btn .icon {
+  width: 18px;
+  height: 18px;
+}
+
+/* Keep the action button square when the global touch rule bumps its height. */
+@media (max-width: 640px), (pointer: coarse) {
+  .call-action-btn {
+    min-width: var(--min-touch-target);
+  }
+}
+
+/* ---- Mobile card layout ----
+   On narrow screens the four-across flex row squeezes the (monospace,
+   non-shrinking) phone number to a few clipped characters. Re-lay the card as a
+   grid beside an icon rail with the action pinned right, and stack the content
+   into three rows:
+     Row 1: phone number (spans the content width)
+     Row 2: date/time            | call type (incoming/outgoing/…)
+     Row 3: duration             | provider number
+   Left column is left-aligned metadata, right column is right-aligned.
+   .call-entry-main/.call-entry-side/.call-entry-meta all use display:contents so
+   their children become direct grid items — desktop markup is untouched. */
+@media (max-width: 640px) {
+  .call-history-entry {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "icon number   number   action"
+      "icon time     badge    action"
+      "icon duration provider action";
+    align-items: center;
+    /* Tighter side padding pulls both icons toward the card edges; the wider
+       column gaps below then give them more breathing room from the content. */
+    padding: var(--md-space-md) var(--md-space-sm);
+    column-gap: var(--md-space-md);
+    row-gap: 2px;
+  }
+
+  .call-direction-icon {
+    grid-area: icon;
+    /* Extra separation from the middle content, on top of the column gap. */
+    margin-right: var(--md-space-xs);
+    align-self: center;
+  }
+
+  /* Flatten every wrapper so timestamp, duration, badge and provider are all
+     direct grid items that can be placed on their own row/column. */
+  .call-entry-main,
+  .call-entry-side,
+  .call-entry-meta {
+    display: contents;
+  }
+
+  .call-phone-number {
+    grid-area: number;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    line-height: 1.3;
+  }
+
+  .call-timestamp {
+    grid-area: time;
+    justify-self: start;
+  }
+
+  .call-entry-side .call-type-badge {
+    grid-area: badge;
+    justify-self: end;
+    align-self: center;
+  }
+
+  .call-entry-meta .call-duration {
+    grid-area: duration;
+    justify-self: start;
+  }
+
+  .call-entry-side .call-provider-number {
+    grid-area: provider;
+    justify-self: end;
+    align-self: center;
+    max-width: 100%;
+  }
+
+  .call-entry-actions {
+    grid-area: action;
+    /* Push the action button toward the right edge and away from the content. */
+    margin-left: var(--md-space-xs);
+  }
 }
 
 .call-history-pagination {
@@ -2269,6 +2487,26 @@ textarea {
   font-weight: 500;
 }
 
+/* Shared filter dropdown, used by Call History and Conversations. */
+.filter-select {
+  flex: 1;
+  max-width: 300px;
+  padding: 8px 12px;
+  min-height: 36px;
+  border: 1px solid var(--md-outline);
+  border-radius: var(--md-radius-sm);
+  font-size: 0.8125rem;
+  background: var(--md-surface);
+  color: var(--md-on-surface);
+  transition: border-color var(--md-motion-duration-short) var(--md-motion-ease);
+}
+
+.filter-select:focus {
+  outline: none;
+  border-color: var(--md-primary);
+  box-shadow: 0 0 0 2px var(--md-primary-container);
+}
+
 /* ===== Conversations Page ===== */
 
 .conversations-container {
@@ -2302,32 +2540,6 @@ textarea {
   font-size: 0.8125rem;
   font-weight: 500;
   color: var(--md-on-surface-variant);
-  white-space: nowrap;
-}
-
-.conversations-filter .filter-select {
-  flex: 1;
-  max-width: 300px;
-  padding: 8px 12px;
-  min-height: 36px;
-  border: 1px solid var(--md-outline);
-  border-radius: var(--md-radius-sm);
-  font-size: 0.8125rem;
-  background: var(--md-surface);
-  color: var(--md-on-surface);
-  transition: border-color var(--md-motion-duration-short) var(--md-motion-ease);
-}
-
-.conversations-filter .filter-select:focus {
-  outline: none;
-  border-color: var(--md-primary);
-  box-shadow: 0 0 0 2px var(--md-primary-container);
-}
-
-.conversation-provider-number {
-  font-size: 0.75rem;
-  color: var(--md-tertiary);
-  font-weight: 500;
   white-space: nowrap;
 }
 
@@ -2385,6 +2597,8 @@ textarea {
   border-bottom: none;
 }
 
+/* Conversation rows mirror the Android list: a leading circular avatar and a
+   three-line content column (name + provider dot, preview, timestamp). */
 .conversation-button {
   all: unset;
   display: flex;
@@ -2397,7 +2611,7 @@ textarea {
   cursor: pointer;
   text-align: left;
   transition: background var(--md-motion-duration-short) var(--md-motion-ease);
-  min-height: 64px;
+  min-height: 72px;
   box-sizing: border-box;
 }
 
@@ -2405,22 +2619,84 @@ textarea {
   background: var(--md-surface-container);
 }
 
-.conversation-number {
-  font-weight: 600;
-  font-size: 0.875rem;
-  white-space: nowrap;
-  color: var(--md-on-surface);
+/* Circular contact avatar: initials on a deterministic color, or a neutral
+   grey person glyph when the display name is just a phone number. */
+.conversation-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--md-radius-full);
+  color: #fff;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  line-height: 1;
+  user-select: none;
 }
 
-.conversation-number-group {
+.conversation-avatar-unknown {
+  background: #9e9e9e;
+}
+
+.avatar-person-icon {
+  display: block;
+}
+
+/* Content column beside the avatar. */
+.conversation-content {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  min-width: 120px;
+  flex: 1;
+  min-width: 0;
 }
 
-.conversation-preview {
+/* Row 1: name (grows, truncates) + provider label with colored dot. */
+.conversation-row-top {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-sm);
+  min-width: 0;
+}
+
+.conversation-name {
   flex: 1;
+  min-width: 0;
+  font-weight: 600;
+  font-size: 0.9375rem;
+  color: var(--md-on-surface);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conversation-provider-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--md-space-xs);
+  flex-shrink: 0;
+}
+
+.conversation-provider-text {
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--md-on-surface-variant);
+  white-space: nowrap;
+}
+
+.conversation-provider-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: var(--md-radius-full);
+  flex-shrink: 0;
+}
+
+/* Row 2: last message preview. */
+.conversation-preview {
   font-size: 0.8125rem;
   color: var(--md-on-surface-variant);
   overflow: hidden;
@@ -2428,10 +2704,42 @@ textarea {
   white-space: nowrap;
 }
 
+/* Row 3: timestamp. */
+.conversation-row-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .conversation-time {
   font-size: 0.75rem;
   color: var(--md-on-surface-variant);
   white-space: nowrap;
+  flex-shrink: 0;
+}
+
+/* Unread thread: bolder name + preview, primary-colored timestamp, and a small
+   primary dot on the timestamp row — mirrors the Android list. */
+.conversation-unread .conversation-name {
+  font-weight: 700;
+}
+
+.conversation-unread .conversation-preview {
+  color: var(--md-on-surface);
+  font-weight: 500;
+}
+
+.conversation-unread .conversation-time {
+  color: var(--md-primary);
+  font-weight: 600;
+}
+
+.conversation-unread-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: var(--md-radius-full);
+  background: var(--md-primary);
   flex-shrink: 0;
 }
 

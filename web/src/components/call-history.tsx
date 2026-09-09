@@ -1,6 +1,113 @@
-import { h, Component } from "preact";
+import { h, Component, Fragment } from "preact";
+import type { ComponentChildren } from "preact";
 import { api } from "../api";
+import { navigate } from "../router";
 import { initWebSocket, getWebSocket } from "../ws";
+
+/* ---------- Direction icons ---------- */
+
+/**
+ * Material-style outline icons rendered as inline SVG so they inherit the
+ * current text color and stay pixel-consistent. Matches the convention used on
+ * the Settings page: a 24px viewBox with 1.75 stroke weight.
+ */
+function iconSvg(children: ComponentChildren) {
+  return (
+    <svg
+      class="icon"
+      width="20"
+      height="20"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      stroke-width="1.75"
+      stroke-linecap="round"
+      stroke-linejoin="round"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {children}
+    </svg>
+  );
+}
+
+/**
+ * Per-call-type direction glyph. Inbound calls point down-left into the device,
+ * outbound point up-right away from it, and the unanswered/missed family use a
+ * variation that reads as "did not connect".
+ */
+function callTypeIcon(callType: CallHistoryEntry["callType"]) {
+  switch (callType) {
+    case "INCOMING":
+      // Arrow pointing into the corner (received)
+      return iconSvg(
+        <Fragment>
+          <path d="M7 17 17 7" />
+          <path d="M8 7H7v10h10" />
+        </Fragment>
+      );
+    case "OUTGOING":
+      // Arrow pointing out to the corner (placed)
+      return iconSvg(
+        <Fragment>
+          <path d="M7 17 17 7" />
+          <path d="M9 7h8v8" />
+        </Fragment>
+      );
+    case "MISSED":
+      // Inbound arrow with the "missed" slash feel — down-left
+      return iconSvg(
+        <Fragment>
+          <path d="M17 7 7 17" />
+          <path d="M8 11v6h6" />
+        </Fragment>
+      );
+    case "DECLINED":
+      // Circle with a slash
+      return iconSvg(
+        <Fragment>
+          <circle cx="12" cy="12" r="8" />
+          <path d="M6.5 6.5 17.5 17.5" />
+        </Fragment>
+      );
+    case "UNANSWERED":
+      // Clock — rang out
+      return iconSvg(
+        <Fragment>
+          <circle cx="12" cy="12" r="8" />
+          <path d="M12 8v4l3 2" />
+        </Fragment>
+      );
+    case "BLOCKED":
+      // Minus in a circle
+      return iconSvg(
+        <Fragment>
+          <circle cx="12" cy="12" r="8" />
+          <path d="M8 12h8" />
+        </Fragment>
+      );
+    default:
+      return iconSvg(<circle cx="12" cy="12" r="8" />);
+  }
+}
+
+/* ---------- Row action icons ---------- */
+
+function messageIcon() {
+  // Speech bubble — start / open an SMS conversation
+  return iconSvg(
+    <path d="M21 11.5a8.5 8.5 0 0 1-11.9 7.8L3 21l1.7-6.1A8.5 8.5 0 1 1 21 11.5z" />
+  );
+}
+
+/**
+ * A phone number is messageable only if it is a real dialable number. Non-numeric
+ * sender IDs (alphanumeric brand names, "Anonymous", etc.) can't be replied to —
+ * mirrors the isNumericNumber gate used by the conversations composer.
+ */
+function isMessageable(number: string): boolean {
+  return /^\+?\d+$/.test(number);
+}
 
 interface CallHistoryEntry {
   id: string;
@@ -24,7 +131,12 @@ interface CallHistoryResponse {
 interface NumberInfo {
   number: string;
   label: string | null;
+  color: string | null;
+  isActive: boolean;
 }
+
+/** Fallback provider color, matching the Android app and the numbers page. */
+const DEFAULT_NUMBER_COLOR = "#6750A4";
 
 interface NumbersResponse {
   numbers: NumberInfo[];
@@ -40,6 +152,7 @@ interface CallHistoryState {
   total: number;
   totalPages: number;
   numberLabels: Record<string, string>;
+  numberColors: Record<string, string>;
   availableNumbers: NumberInfo[];
   filterNumber: string;
 }
@@ -64,6 +177,7 @@ export class CallHistory extends Component<
     total: 0,
     totalPages: 0,
     numberLabels: {},
+    numberColors: {},
     availableNumbers: [],
     filterNumber: "",
   };
@@ -119,17 +233,13 @@ export class CallHistory extends Component<
     );
     this.unsubscribeNumbers = ws.subscribe(
       "numbers_changed",
-      (data: unknown) => {
-        const event = data as { numbers: NumberInfo[] };
-        if (event && event.numbers) {
-          const labels: Record<string, string> = {};
-          for (const n of event.numbers) {
-            if (n.label) {
-              labels[n.number] = n.label;
-            }
-          }
-          this.setState({ numberLabels: labels });
-        }
+      () => {
+        // The broadcast payload carries only *active* numbers, but the filter
+        // must keep offering deactivated numbers that still have call-history
+        // entries. Re-fetch the full list (GET /api/numbers → getAllNumbers,
+        // which includes inactive numbers) so a live deactivate/activate toggle
+        // doesn't drop the number from the dropdown.
+        this.fetchNumberLabels();
       }
     );
     this.unsubscribeNumberLabel = ws.subscribe(
@@ -212,15 +322,20 @@ export class CallHistory extends Component<
   }
 
   private async fetchNumberLabels() {
-    const result = await api.get<NumbersResponse>("/api/numbers");
+    // includeOrphaned=true so the filter also lists numbers whose provider was
+    // removed but which still have call-history entries. Other consumers of
+    // /api/numbers keep the default (live-provider) behavior.
+    const result = await api.get<NumbersResponse>("/api/numbers?includeOrphaned=true");
     if (result.ok) {
       const labels: Record<string, string> = {};
+      const colors: Record<string, string> = {};
       for (const n of result.data.numbers) {
         if (n.label) {
           labels[n.number] = n.label;
         }
+        colors[n.number] = n.color || DEFAULT_NUMBER_COLOR;
       }
-      this.setState({ numberLabels: labels, availableNumbers: result.data.numbers });
+      this.setState({ numberLabels: labels, numberColors: colors, availableNumbers: result.data.numbers });
     }
   }
 
@@ -245,12 +360,16 @@ export class CallHistory extends Component<
 
   private formatTimestamp(isoString: string): string {
     const date = new Date(isoString);
-    return date.toLocaleDateString(undefined, {
+    // EU-style date (day-month-year) with a 24-hour clock. en-GB gives the
+    // day-first ordering; hour12: false forces 24-hour time regardless of the
+    // browser's locale defaults.
+    return date.toLocaleString("en-GB", {
       year: "numeric",
       month: "short",
       day: "numeric",
       hour: "2-digit",
       minute: "2-digit",
+      hour12: false,
     });
   }
 
@@ -290,13 +409,30 @@ export class CallHistory extends Component<
     return label || providerNumber;
   }
 
+  private getProviderNumberColor(providerNumber: string | null): string | null {
+    if (!providerNumber) return null;
+    return this.state.numberColors[providerNumber] || DEFAULT_NUMBER_COLOR;
+  }
+
+  // Deep-link into the conversation with this caller. A thread is keyed by the
+  // (provider number, caller number) pair, so we pass both: `to` is the other
+  // party and `from` is our own provider number. Conversations reads these on
+  // mount and opens exactly that thread.
+  private handleMessageClick = (phoneNumber: string, providerNumber: string | null) => {
+    let path = `/conversations?to=${encodeURIComponent(phoneNumber)}`;
+    if (providerNumber) {
+      path += `&from=${encodeURIComponent(providerNumber)}`;
+    }
+    navigate(path);
+  };
+
   render() {
     const { entries, loading, error, page, totalPages, availableNumbers, filterNumber } = this.state;
 
     if (loading && entries.length === 0) {
       return (
         <div class="call-history-container" role="main">
-          <h1>Call History</h1>
+          <h1 class="call-history-page-title">Call History</h1>
           <p class="loading-text" aria-live="polite">
             Loading call history...
           </p>
@@ -306,11 +442,11 @@ export class CallHistory extends Component<
 
     return (
       <div class="call-history-container" role="main">
-        <h1>Call History</h1>
+        <h1 class="call-history-page-title">Call History</h1>
 
         {availableNumbers.length > 0 && (
           <div class="call-history-filter">
-            <label htmlFor="filter-provider-number">Filter by number:</label>
+            <label htmlFor="filter-provider-number">Filter by number</label>
             <select
               id="filter-provider-number"
               value={filterNumber}
@@ -319,11 +455,14 @@ export class CallHistory extends Component<
               aria-label="Filter by provider number"
             >
               <option value="">All numbers</option>
-              {availableNumbers.map((n) => (
-                <option key={n.number} value={n.number}>
-                  {n.label ? `${n.label} (${n.number})` : n.number}
-                </option>
-              ))}
+              {availableNumbers.map((n) => {
+                const base = n.label ? `${n.label} (${n.number})` : n.number;
+                return (
+                  <option key={n.number} value={n.number}>
+                    {n.isActive ? base : `${base} — disabled`}
+                  </option>
+                );
+              })}
             </select>
           </div>
         )}
@@ -335,9 +474,15 @@ export class CallHistory extends Component<
         )}
 
         {entries.length === 0 && !error && (
-          <p class="call-history-empty" aria-live="polite">
-            No calls recorded
-          </p>
+          <div class="call-history-empty" aria-live="polite">
+            <span class="call-history-empty-icon" aria-hidden="true">
+              {callTypeIcon("MISSED")}
+            </span>
+            <p class="call-history-empty-title">No calls yet</p>
+            <p class="call-history-empty-subtitle">
+              Call activity will appear here as it happens.
+            </p>
+          </div>
         )}
 
         {entries.length > 0 && (
@@ -345,29 +490,75 @@ export class CallHistory extends Component<
             {entries.map((entry) => {
               const badge = this.getCallTypeBadge(entry.callType);
               const providerDisplay = this.getProviderNumberDisplay(entry.providerNumber);
+              const providerColor = this.getProviderNumberColor(entry.providerNumber);
+              const hasDuration = entry.durationSeconds != null && entry.durationSeconds > 0;
               return (
                 <li key={entry.id} class="call-history-entry">
-                  <div class="call-entry-header">
+                  <span
+                    class={`call-direction-icon ${badge.className}`}
+                    aria-hidden="true"
+                  >
+                    {callTypeIcon(entry.callType)}
+                  </span>
+                  <div class="call-entry-main">
+                    <span class="call-phone-number">{entry.phoneNumber}</span>
+                    <div class="call-entry-meta">
+                      <span class="call-timestamp">
+                        {this.formatTimestamp(entry.timestamp)}
+                      </span>
+                      {hasDuration && (
+                        <span class="call-duration">
+                          {this.formatDuration(entry.durationSeconds)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div class="call-entry-side">
                     <span class={`call-type-badge ${badge.className}`}>
                       {badge.label}
                     </span>
-                    <span class="call-phone-number">{entry.phoneNumber}</span>
-                  </div>
-                  <div class="call-entry-details">
-                    <span class="call-timestamp">
-                      {this.formatTimestamp(entry.timestamp)}
-                    </span>
-                    <span class="call-duration">
-                      {this.formatDuration(entry.durationSeconds)}
-                    </span>
-                  </div>
-                  {providerDisplay && (
-                    <div class="call-entry-provider">
-                      <span class="call-provider-number">
-                        via {providerDisplay}
+                    {providerDisplay && (
+                      <span class="call-provider-number" title={`via ${providerDisplay}`}>
+                        <span class="call-provider-label">{providerDisplay}</span>
+                        <span
+                          class="call-provider-dot"
+                          style={{ backgroundColor: providerColor || "#6750A4" }}
+                          aria-hidden="true"
+                        />
                       </span>
-                    </div>
-                  )}
+                    )}
+                  </div>
+                  <div class="call-entry-actions">
+                    {/* A call action button will slot in here once web calling
+                        lands; the container is sized for multiple buttons. */}
+                    {(() => {
+                      const messageable = isMessageable(entry.phoneNumber);
+                      return (
+                        <button
+                          type="button"
+                          class={`call-action-btn${messageable ? "" : " call-action-btn-disabled"}`}
+                          onClick={
+                            messageable
+                              ? () => this.handleMessageClick(entry.phoneNumber, entry.providerNumber)
+                              : undefined
+                          }
+                          disabled={!messageable}
+                          aria-label={
+                            messageable
+                              ? `Message ${entry.phoneNumber}`
+                              : `${entry.phoneNumber} can't be messaged`
+                          }
+                          title={
+                            messageable
+                              ? `Message ${entry.phoneNumber}`
+                              : "This sender can't be messaged"
+                          }
+                        >
+                          {messageIcon()}
+                        </button>
+                      );
+                    })()}
+                  </div>
                 </li>
               );
             })}

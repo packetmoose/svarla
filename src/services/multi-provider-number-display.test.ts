@@ -50,7 +50,8 @@ function createMockRegistry(entries: Map<string, ProviderRegistryEntry>): Provid
 
 interface MockNumberRow {
   number: string;
-  provider_id: string;
+  // Orphaned numbers (provider removed) carry a null provider_id.
+  provider_id: string | null;
   label: string | null;
   color: string;
   added_at: Date;
@@ -111,90 +112,71 @@ function createMockDb(initialNumbers: MockNumberRow[] = [], providers: MockProvi
               },
             }),
           }),
-          innerJoin: (_joinTable: string, _col1: string, _col2: string) => ({
-            select: (_cols: string[]) => {
-              const mapWithProvider = (arr: MockNumberRow[]) =>
-                arr.map((n) => {
-                  const prov = providers.find((p) => p.id === n.provider_id);
-                  return { ...n, provider_display_name: prov?.display_name ?? 'Unknown' };
-                });
-
-              const buildOrderByChain = (filterFn: (n: MockNumberRow) => boolean) => {
-                const getFiltered = () => numbers.filter(filterFn);
-
-                const result: any = {
-                  orderBy: (_sortCol: string, _dir: string) => {
-                    const innerResult: any = {
-                      orderBy: (_sortCol2: string, _dir2: string) => ({
-                        execute: async () => {
-                          const filtered = getFiltered();
-                          filtered.sort((a, b) => {
-                            const provA = providers.find((p) => p.id === a.provider_id);
-                            const provB = providers.find((p) => p.id === b.provider_id);
-                            const nameA = provA?.display_name ?? '';
-                            const nameB = provB?.display_name ?? '';
-                            if (nameA !== nameB) return nameA.localeCompare(nameB);
-                            return a.number.localeCompare(b.number);
-                          });
-                          return mapWithProvider(filtered);
-                        },
-                      }),
-                      execute: async () => {
-                        const filtered = getFiltered();
-                        filtered.sort((a, b) => {
-                          if (a.last_used_at === null && b.last_used_at === null) return 0;
-                          if (a.last_used_at === null) return 1;
-                          if (b.last_used_at === null) return -1;
-                          return new Date(b.last_used_at).getTime() - new Date(a.last_used_at).getTime();
-                        });
-                        return mapWithProvider(filtered);
-                      },
-                    };
-                    return innerResult;
-                  },
-                  execute: async () => {
-                    return mapWithProvider(getFiltered());
-                  },
+          // Both innerJoin and leftJoin share one builder. The difference
+          // mirrors the real queries: an INNER JOIN drops orphaned numbers
+          // (provider_id with no matching provider row), while a LEFT JOIN keeps
+          // them with a null provider_display_name.
+          ...(() => {
+            const makeJoin = (includeOrphaned: boolean) => () => ({
+              select: (_cols: string[]) => {
+                const providerFor = (n: MockNumberRow) =>
+                  providers.find((p) => p.id === n.provider_id);
+                // INNER JOIN semantics: only rows whose provider_id resolves to
+                // an actual provider survive. LEFT JOIN keeps everything.
+                const visible = () =>
+                  includeOrphaned ? [...numbers] : numbers.filter((n) => providerFor(n));
+                const mapWithProvider = (arr: MockNumberRow[]) =>
+                  arr.map((n) => ({
+                    ...n,
+                    provider_display_name: providerFor(n)?.display_name ?? undefined,
+                  }));
+                const byProviderThenNumber = (a: MockNumberRow, b: MockNumberRow) => {
+                  const nameA = providerFor(a)?.display_name ?? '';
+                  const nameB = providerFor(b)?.display_name ?? '';
+                  if (nameA !== nameB) return nameA.localeCompare(nameB);
+                  return a.number.localeCompare(b.number);
                 };
-                return result;
-              };
+                const byLastUsedDesc = (a: MockNumberRow, b: MockNumberRow) => {
+                  if (a.last_used_at === null && b.last_used_at === null) return 0;
+                  if (a.last_used_at === null) return 1;
+                  if (b.last_used_at === null) return -1;
+                  return new Date(b.last_used_at).getTime() - new Date(a.last_used_at).getTime();
+                };
 
-              const selectResult: any = {
-                where: (col: string, _op: string, val: unknown) => {
-                  const filterFn = (n: MockNumberRow) => {
-                    if (col === 'numbers.is_active') return n.is_active === val;
-                    return true;
-                  };
-                  return buildOrderByChain(filterFn);
-                },
-                // getAllNumbers() calls .orderBy() directly without .where()
-                orderBy: (_sortCol: string, _dir: string) => {
-                  const innerResult: any = {
-                    orderBy: (_sortCol2: string, _dir2: string) => ({
-                      execute: async () => {
-                        const filtered = [...numbers];
-                        filtered.sort((a, b) => {
-                          const provA = providers.find((p) => p.id === a.provider_id);
-                          const provB = providers.find((p) => p.id === b.provider_id);
-                          const nameA = provA?.display_name ?? '';
-                          const nameB = provB?.display_name ?? '';
-                          if (nameA !== nameB) return nameA.localeCompare(nameB);
-                          return a.number.localeCompare(b.number);
-                        });
-                        return mapWithProvider(filtered);
-                      },
+                const buildOrderByChain = (filterFn: (n: MockNumberRow) => boolean) => {
+                  const getFiltered = () => visible().filter(filterFn);
+                  return {
+                    orderBy: (_sortCol: string, _dir: string) => ({
+                      orderBy: (_sortCol2: string, _dir2: string) => ({
+                        execute: async () => mapWithProvider(getFiltered().sort(byProviderThenNumber)),
+                      }),
+                      execute: async () => mapWithProvider(getFiltered().sort(byLastUsedDesc)),
                     }),
-                    execute: async () => {
-                      return mapWithProvider([...numbers]);
-                    },
+                    execute: async () => mapWithProvider(getFiltered()),
                   };
-                  return innerResult;
-                },
-              };
+                };
 
-              return selectResult;
-            },
-          }),
+                return {
+                  where: (col: string, _op: string, val: unknown) =>
+                    buildOrderByChain((n: MockNumberRow) => {
+                      if (col === 'numbers.is_active') return n.is_active === val;
+                      return true;
+                    }),
+                  // getAllNumbers() calls .orderBy() directly without .where()
+                  orderBy: (_sortCol: string, _dir: string) => ({
+                    orderBy: (_sortCol2: string, _dir2: string) => ({
+                      execute: async () => mapWithProvider(visible().sort(byProviderThenNumber)),
+                    }),
+                    execute: async () => mapWithProvider(visible()),
+                  }),
+                };
+              },
+            });
+            return {
+              innerJoin: makeJoin(false),
+              leftJoin: makeJoin(true),
+            };
+          })(),
           select: (col: string | string[]) => {
             const makeWhere = (preds: Array<(n: MockNumberRow) => boolean>) => ({
               where: (fc: string, op: string, fv: unknown) =>
@@ -516,6 +498,38 @@ describe('Multi-Provider Number Display Verification', () => {
       expect(providerIds.size).toBe(2);
       expect(providerIds.has(VONAGE_PROVIDER_ID)).toBe(true);
       expect(providerIds.has(ELKS_PROVIDER_ID)).toBe(true);
+    });
+
+    it('should exclude orphaned numbers by default but include them with includeOrphaned', async () => {
+      // A number whose provider was removed: provider_id is null and it is
+      // inactive, but it is retained for historical reference (e.g. call
+      // history entries still point at it).
+      const orphaned: MockNumberRow = {
+        number: '+14155559999',
+        provider_id: null,
+        label: null,
+        color: '#6750A4',
+        added_at: new Date('2024-01-01'),
+        is_active: false,
+        last_used_at: new Date('2024-03-01'),
+        block_inbound_calls: false,
+      };
+      const localDb = createMockDb([...vonageNumbers, orphaned], allProviders);
+      const localService = new NumberManagementService(localDb.mockDb, mockRegistry, broadcast);
+
+      // Default: INNER JOIN drops the orphaned number.
+      const defaultNumbers = await localService.getAllNumbers();
+      expect(defaultNumbers.map((n) => n.number)).not.toContain('+14155559999');
+      expect(defaultNumbers).toHaveLength(2);
+
+      // Opt-in: LEFT JOIN keeps it, with no provider display name.
+      const withOrphans = await localService.getAllNumbers({ includeOrphaned: true });
+      const orphanRecord = withOrphans.find((n) => n.number === '+14155559999');
+      expect(orphanRecord).toBeDefined();
+      expect(orphanRecord!.provider_id).toBeNull();
+      expect(orphanRecord!.provider_display_name).toBeUndefined();
+      expect(orphanRecord!.is_active).toBe(false);
+      expect(withOrphans).toHaveLength(3);
     });
 
     it('should preserve labels for numbers from all providers uniformly', async () => {

@@ -23,7 +23,12 @@ const navItems: NavItem[] = [
 
 function getCurrentPath(): string {
   const hash = window.location.hash;
-  return hash ? hash.slice(1) : "/";
+  if (!hash) return "/";
+  const path = hash.slice(1);
+  // Strip any query string (e.g. /conversations?to=...) so the path still
+  // matches a nav item and stays highlighted.
+  const queryIndex = path.indexOf("?");
+  return queryIndex !== -1 ? path.slice(0, queryIndex) : path;
 }
 
 function ThemeToggle() {
