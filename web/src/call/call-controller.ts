@@ -178,6 +178,15 @@ export interface CallController {
    */
   sendDtmf(digit: string): Promise<void>;
 
+  /**
+   * Whether a live WebRTC session (peer connection + mic track) currently
+   * exists — i.e. audio may be flowing. The UI uses this as a hard safety net:
+   * a live session MUST always surface a visible in-call indicator, so audio
+   * can never flow with no on-screen indication. Independent of `phase` so an
+   * unexpected state gap cannot hide the fact that a call is live.
+   */
+  hasActiveSession(): boolean;
+
   /** Set mute on the active call, delegating to the `WebRtcCallClient`. */
   setMuted(muted: boolean): void;
   /** Set remote playback volume `[0,1]`, delegating to the `WebRtcCallClient`. */
@@ -692,7 +701,15 @@ class CallControllerImpl implements CallController {
    */
   async hangup(): Promise<void> {
     const call = this.store.getState().call;
-    if (!call) return;
+    if (!call) {
+      // No active call metadata. Normally a no-op, but if a WebRTC session is
+      // somehow still alive (the safety-net path), force a local teardown so
+      // the hang-up control can never leave audio flowing.
+      if (this.client) {
+        this.resetToIdle(CallErrorKey.EndedLocally);
+      }
+      return;
+    }
 
     const callId = call.callId;
 
@@ -1454,6 +1471,13 @@ class CallControllerImpl implements CallController {
         state.phase !== CallPhase.Connected &&
         state.phase !== CallPhase.Idle
       ) {
+        // The call never reached Connected within the cap. End it EVERYWHERE,
+        // not just locally: `resetToIdle` tears down our WebRTC client (stops
+        // the mic + closes the peer connection), but the server may consider
+        // the call answered and keep its media leg alive — leaving the far end
+        // able to hear us. Decline the server leg too so no audio can outlive
+        // the UI. (Best-effort; local teardown happens regardless.)
+        void this.postDecline(callId);
         this.resetToIdle(CallErrorKey.ConnectionFailed);
       }
     }, INBOUND_ESTABLISH_CAP_MS);
@@ -1493,6 +1517,9 @@ class CallControllerImpl implements CallController {
   private setPhase(phase: CallPhase): void {
     if (this.store.getState().phase === phase) return;
     this.store.setState({ phase });
+    // Guard the no-silent-audio invariant on every phase change: if this left a
+    // live client with no visible surface, tear the session down.
+    this.enforceSessionVisibility();
   }
 
   /**
@@ -1511,6 +1538,47 @@ class CallControllerImpl implements CallController {
     if (this.establishCap !== null) {
       clearTimeout(this.establishCap);
       this.establishCap = null;
+    }
+  }
+
+  /**
+   * Whether a live WebRTC session currently exists (see the interface doc).
+   * True from the moment the client is created (mic capture / peer connection)
+   * until {@link teardownClient} closes it.
+   */
+  hasActiveSession(): boolean {
+    return this.client !== null;
+  }
+
+  /**
+   * SAFETY INVARIANT: a live WebRTC client must always be reflected by a
+   * visible, active call state — audio must NEVER flow with no on-screen
+   * indication. This enforces the invariant after a state write: if a client is
+   * alive but the state would render no in-call surface (Idle/Failed phase or a
+   * null `call`), that is a violation. We recover on the side of safety by
+   * tearing the session down (stopping the mic + closing the peer connection),
+   * so the failure mode is "call unexpectedly ends" — never "audio with no UI".
+   *
+   * This is a backstop, not the primary path: legitimate teardowns go through
+   * {@link resetToIdle} (which closes the client and clears the state together).
+   * The guard only fires if some other path desynchronizes the two.
+   */
+  private enforceSessionVisibility(): void {
+    if (!this.client) return;
+    const { phase, call } = this.store.getState();
+    const visibleActive =
+      call !== null &&
+      (phase === CallPhase.Connecting ||
+        phase === CallPhase.Ringing ||
+        phase === CallPhase.Connected);
+    if (!visibleActive) {
+      // A client is alive with no visible call surface — close the session so
+      // no audio can outlive the UI.
+      this.teardownClient();
+      // Normalize the store to a clean Idle so the UI is coherent.
+      if (this.store.getState().phase !== CallPhase.Idle) {
+        this.store.setState({ phase: CallPhase.Idle, call: null });
+      }
     }
   }
 

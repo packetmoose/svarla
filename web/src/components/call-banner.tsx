@@ -119,11 +119,19 @@ export function CallBanner({ controller, remoteAudio }: CallBannerProps) {
   const [audioBlocked, setAudioBlocked] = useState(false);
 
   const connected = phase === CallPhase.Connected;
+  // A live WebRTC session means audio may be flowing RIGHT NOW. This is the
+  // hard safety net: if a session is live the surface MUST render, regardless
+  // of the exact phase, so audio can never flow with nothing on screen. The
+  // normal `active` condition (a visible active call) is the common case; the
+  // `sessionLive` fallback covers any unexpected state gap between the audio
+  // lifecycle and the UI phase.
+  const sessionLive = controller.hasActiveSession();
   const active =
-    call !== null &&
-    (phase === CallPhase.Connecting ||
-      phase === CallPhase.Ringing ||
-      phase === CallPhase.Connected);
+    sessionLive ||
+    (call !== null &&
+      (phase === CallPhase.Connecting ||
+        phase === CallPhase.Ringing ||
+        phase === CallPhase.Connected));
 
   // --- running duration timer (Requirements 8.1, 8.2) ---------------------
   //
@@ -183,8 +191,47 @@ export function CallBanner({ controller, remoteAudio }: CallBannerProps) {
   const callRef = useRef(call);
   callRef.current = call;
 
-  if (!active || !call) {
+  if (!active) {
     return null;
+  }
+
+  // SAFETY NET: a session is live (audio may be flowing) but we have no call
+  // metadata to render the full surface. Rather than render nothing — which
+  // would put us back in the "audio with no UI" hazard — show a minimal but
+  // unmistakable in-call indicator with a hang-up. This should not happen in
+  // normal operation (the controller keeps `call` in sync with the session and
+  // enforces the same invariant), but the UI refuses to be silent regardless.
+  if (!call) {
+    return (
+      <section
+        class="in-call-surface"
+        role="region"
+        aria-label="Call in progress"
+      >
+        <div class="in-call-info">
+          <span class="call-number">Call in progress</span>
+          <span class="in-call-status connected">
+            <span class="in-call-status-dot" aria-hidden="true" />
+            <span role="status" aria-live="assertive">
+              Connected
+            </span>
+          </span>
+        </div>
+        <div class="in-call-controls">
+          <span class="in-call-spacer" aria-hidden="true" />
+          <button
+            type="button"
+            class="btn-icon in-call-hangup"
+            aria-label="Hang up"
+            onClick={() => {
+              void controller.hangup();
+            }}
+          >
+            {phoneOffIcon()}
+          </button>
+        </div>
+      </section>
+    );
   }
 
   const numberLabel = call.peerNumber?.trim() || "Unknown";

@@ -321,6 +321,22 @@ class WebRtcCallClientImpl implements WebRtcCallClient {
         this.onIceConnectionStateChange(pc.iceConnectionState);
       };
 
+      // Also drive Connected off the aggregate `connectionState`
+      // (`onconnectionstatechange`). This is the reliable, standard signal that
+      // the media path (ICE + DTLS) is actually up, and it is REQUIRED as a
+      // backstop for the `oniceconnectionstatechange` path: with some peers /
+      // network paths (observed with the 46elks + MediaBridge ICE-Lite setup)
+      // `iceConnectionState` does not fire a `connected`/`completed` transition
+      // that we catch, yet media flows and `connectionState` reaches
+      // `connected`. Without this handler the client stays `connecting`, the
+      // controller's establishment cap eventually fires, and the UI is torn
+      // down WHILE AUDIO IS FLOWING — the exact "audio with no call UI" hazard.
+      // Whichever of the two signals reaches a usable state first wins; the
+      // `connecting`-guarded `setState` makes the second one a no-op.
+      pc.onconnectionstatechange = () => {
+        this.onConnectionStateChange(pc.connectionState);
+      };
+
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
@@ -581,6 +597,39 @@ class WebRtcCallClientImpl implements WebRtcCallClient {
       // the loss (Requirement 5.5). `disconnected` can be transient, but v1
       // (matching the Android reference) does not attempt an ICE restart.
       if (current === "connected") {
+        this.setState({ kind: "failed", reason: "connection-lost" });
+      }
+    }
+  }
+
+  /**
+   * Drive the Connected/failed transition off the aggregate
+   * `RTCPeerConnection.connectionState`. This complements
+   * {@link onIceConnectionStateChange}: `connectionState === "connected"` means
+   * the full transport (ICE + DTLS) is up and media can flow, and it is the
+   * signal that fires reliably across the peers/paths where the raw
+   * `iceConnectionState` transition is missed. Reporting Connected here is what
+   * guarantees the in-call UI appears whenever audio can flow.
+   *
+   * The transition is guarded on `current === "connecting"`, so it is a no-op
+   * if the ICE handler already reported Connected (whichever signal arrives
+   * first wins). A `failed` aggregate state ends the attempt (while connecting)
+   * or the established call (while connected), mirroring the ICE handler.
+   */
+  private onConnectionStateChange(connState: RTCPeerConnectionState): void {
+    const current = this.state.getState().kind;
+
+    if (connState === "connected") {
+      if (current === "connecting") {
+        this.setState({ kind: "connected" });
+      }
+      return;
+    }
+
+    if (connState === "failed") {
+      if (current === "connecting") {
+        this.setState({ kind: "failed", reason: "ice-failed" });
+      } else if (current === "connected") {
         this.setState({ kind: "failed", reason: "connection-lost" });
       }
     }
