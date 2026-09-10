@@ -30,6 +30,28 @@ export function iconSvg(children: ComponentChildren, size = 20) {
   );
 }
 
+/**
+ * Solid-fill variant for glyphs that only read correctly as a filled shape
+ * (e.g. Material's `call_end`, which the Android app uses for decline/hang-up).
+ * Fills with `currentColor` so it still inherits the button's text color.
+ */
+export function iconSvgFilled(children: ComponentChildren, size = 20) {
+  return (
+    <svg
+      class="icon"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      stroke="none"
+      aria-hidden="true"
+      focusable="false"
+    >
+      {children}
+    </svg>
+  );
+}
+
 /** Home — the Dashboard. */
 export function homeIcon(size?: number) {
   return iconSvg(
@@ -86,18 +108,21 @@ export function downloadIcon(size?: number) {
 /** Handset — place/answer a call. Replaces the old 📞 glyph on call surfaces. */
 export function phoneIcon(size?: number) {
   return iconSvg(
-    <path d="M6.5 3.5 9 3l1.5 4-2 1.5a12 12 0 0 0 5 5l1.5-2 4 1.5-.5 2.5A2 2 0 0 1 21 17a17 17 0 0 1-15-15 2 2 0 0 1 .5-1.5z" />,
+    <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.9.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z" />,
     size
   );
 }
 
-/** Handset with a strike-through — hang up / decline a call. */
+/**
+ * Hang up / decline a call. This is Material's `call_end` glyph — the tilted
+ * handset with signal arcs — matching the Android app, which uses
+ * `Icons.Default.CallEnd` for both Decline and End-call. Rendered filled (like
+ * Material's baseline icon) since the shape only reads as a hang-up button when
+ * solid.
+ */
 export function phoneOffIcon(size?: number) {
-  return iconSvg(
-    <Fragment>
-      <path d="M6.5 3.5 9 3l1.5 4-2 1.5a12 12 0 0 0 5 5l1.5-2 4 1.5-.5 2.5A2 2 0 0 1 21 17a17 17 0 0 1-15-15 2 2 0 0 1 .5-1.5z" />
-      <path d="M3 3l18 18" />
-    </Fragment>,
+  return iconSvgFilled(
+    <path d="M12 9c-1.6 0-3.15.25-4.6.72v3.1c0 .39-.23.74-.56.9-.98.49-1.87 1.12-2.66 1.85-.18.18-.43.28-.7.28-.28 0-.53-.11-.71-.29L.29 13.08a.956.956 0 0 1-.29-.7c0-.28.11-.53.29-.71C3.34 8.78 7.46 7 12 7s8.66 1.78 11.71 4.67c.18.18.29.43.29.71 0 .28-.11.53-.29.71l-2.48 2.48c-.18.18-.43.29-.71.29-.27 0-.52-.11-.7-.28-.79-.74-1.69-1.36-2.67-1.85-.33-.16-.56-.5-.56-.9v-3.1C15.15 9.25 13.6 9 12 9z" />,
     size
   );
 }
@@ -157,6 +182,43 @@ export function volumeIcon(size?: number) {
       <path d="M4 9v6h4l5 4V5L8 9H4z" />
       <path d="M16 8.5a5 5 0 0 1 0 7" />
       <path d="M18.5 6a8 8 0 0 1 0 12" />
+    </Fragment>,
+    size
+  );
+}
+
+/** Left arrow — back navigation. Matches the app's outline icon style. */
+export function backIcon(size?: number) {
+  return iconSvg(
+    <Fragment>
+      <path d="M19 12H5" />
+      <path d="M12 19l-7-7 7-7" />
+    </Fragment>,
+    size
+  );
+}
+
+/** Backspace — delete the last dialed digit. Matches the Android dial pad's backspace key. */
+export function backspaceIcon(size?: number) {
+  return iconSvg(
+    <Fragment>
+      <path d="M21 5H8L2 12l6 7h13a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z" />
+      <path d="M15 9l-5 6" />
+      <path d="M10 9l5 6" />
+    </Fragment>,
+    size
+  );
+}
+
+/** Trash can — delete/remove. Matches the app's outline icon style. */
+export function trashIcon(size?: number) {
+  return iconSvg(
+    <Fragment>
+      <path d="M3 6h18" />
+      <path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2" />
+      <path d="M6 6l1 14a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-14" />
+      <path d="M10 11v6" />
+      <path d="M14 11v6" />
     </Fragment>,
     size
   );

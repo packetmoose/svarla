@@ -1,5 +1,5 @@
-import { h, Component, Fragment } from "preact";
-import type { ComponentChildren } from "preact";
+import { h, Component, Fragment, createRef } from "preact";
+import type { ComponentChildren, RefObject } from "preact";
 import { api } from "../api";
 import { navigate } from "../router";
 import { initWebSocket, getWebSocket } from "../ws";
@@ -148,17 +148,33 @@ interface NumbersResponse {
 
 interface CallHistoryState {
   entries: CallHistoryEntry[];
+  /** Initial load (or filter switch): shows the full-page loading text. */
   loading: boolean;
+  /** Appending the next page while scrolling: shows the inline footer spinner. */
+  loadingMore: boolean;
   error: string;
   page: number;
   pageSize: number;
   total: number;
   totalPages: number;
+  /** Whether more pages remain to be loaded (page < totalPages). */
+  hasMore: boolean;
   numberLabels: Record<string, string>;
   numberColors: Record<string, string>;
   availableNumbers: NumberInfo[];
   filterNumber: string;
+  /** Whether the viewport is the narrow/touch "mobile" layout. */
+  isMobile: boolean;
+  /**
+   * The entry whose action sheet is open (mobile only), or `null` when closed.
+   * Tapping a card on mobile opens a small overlay offering Call / Message
+   * instead of crowding the card with per-row buttons.
+   */
+  actionEntry: CallHistoryEntry | null;
 }
+
+/** The media query that drives the mobile card layout (mirrors the CSS). */
+const MOBILE_QUERY = "(max-width: 640px)";
 
 const PAGE_SIZE = 20;
 
@@ -170,28 +186,57 @@ export class CallHistory extends Component<
   private unsubscribeNumbers: (() => void) | null = null;
   private unsubscribeNumberLabel: (() => void) | null = null;
   private unsubscribeConnected: (() => void) | null = null;
+  private mediaQuery: MediaQueryList | null = null;
+
+  /** The bottom-of-list sentinel; when it scrolls into view the next page loads. */
+  private sentinelRef: RefObject<HTMLLIElement> = createRef();
+  /** Observes {@link sentinelRef} to drive infinite scroll. */
+  private scrollObserver: IntersectionObserver | null = null;
 
   state: CallHistoryState = {
     entries: [],
     loading: true,
+    loadingMore: false,
     error: "",
     page: 1,
     pageSize: PAGE_SIZE,
     total: 0,
     totalPages: 0,
+    hasMore: false,
     numberLabels: {},
     numberColors: {},
     availableNumbers: [],
     filterNumber: "",
+    isMobile:
+      typeof window !== "undefined" && typeof window.matchMedia === "function"
+        ? window.matchMedia(MOBILE_QUERY).matches
+        : false,
+    actionEntry: null,
   };
 
   componentDidMount() {
     this.fetchHistory(1);
     this.fetchNumberLabels();
     this.subscribeToUpdates();
+    this.watchViewport();
+    this.setupScrollObserver();
+  }
+
+  componentDidUpdate() {
+    // The sentinel is only rendered while more pages remain; (re)observe it
+    // whenever it appears so a fresh element is always watched.
+    this.observeSentinel();
   }
 
   componentWillUnmount() {
+    if (this.scrollObserver) {
+      this.scrollObserver.disconnect();
+      this.scrollObserver = null;
+    }
+    if (this.mediaQuery) {
+      this.mediaQuery.removeEventListener("change", this.handleViewportChange);
+      this.mediaQuery = null;
+    }
     if (this.unsubscribe) {
       this.unsubscribe();
       this.unsubscribe = null;
@@ -209,6 +254,69 @@ export class CallHistory extends Component<
       this.unsubscribeConnected = null;
     }
   }
+
+  // Track the mobile/desktop breakpoint so the card can drop its inline action
+  // buttons on mobile and open a tap-to-act overlay instead.
+  private watchViewport() {
+    if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+      return;
+    }
+    this.mediaQuery = window.matchMedia(MOBILE_QUERY);
+    this.mediaQuery.addEventListener("change", this.handleViewportChange);
+  }
+
+  private handleViewportChange = (e: MediaQueryListEvent) => {
+    // Leaving mobile also closes any open action sheet so it can't linger on
+    // the (button-bearing) desktop layout.
+    this.setState({ isMobile: e.matches, actionEntry: e.matches ? this.state.actionEntry : null });
+  };
+
+  // Infinite scroll: an IntersectionObserver watches a sentinel <li> at the
+  // bottom of the list. When it enters the viewport (with a generous rootMargin
+  // so loading starts before the user hits the very end) the next page is
+  // appended. Falls back to a "Load more" button when IntersectionObserver is
+  // unavailable (see render).
+  private setupScrollObserver() {
+    if (
+      typeof window === "undefined" ||
+      typeof window.IntersectionObserver !== "function"
+    ) {
+      return;
+    }
+    this.scrollObserver = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting)) {
+          this.loadMore();
+        }
+      },
+      { rootMargin: "400px 0px" }
+    );
+    this.observeSentinel();
+  }
+
+  private observeSentinel() {
+    if (!this.scrollObserver) return;
+    // Re-point the observer at the current sentinel element. Disconnecting first
+    // avoids stacking observations on stale nodes across re-renders.
+    this.scrollObserver.disconnect();
+    if (this.sentinelRef.current) {
+      this.scrollObserver.observe(this.sentinelRef.current);
+    }
+  }
+
+  private loadMore = () => {
+    const { loading, loadingMore, hasMore, page } = this.state;
+    if (loading || loadingMore || !hasMore) return;
+    this.fetchHistory(page + 1, { append: true });
+  };
+
+  private openActionSheet = (entry: CallHistoryEntry) => {
+    this.setState({ actionEntry: entry });
+  };
+
+  private closeActionSheet = () => {
+    this.setState({ actionEntry: null });
+  };
 
   private subscribeToUpdates() {
     let ws = getWebSocket();
@@ -259,8 +367,10 @@ export class CallHistory extends Component<
     this.unsubscribeConnected = ws.subscribe(
       "ws_connected",
       () => {
-        // Re-fetch data on WebSocket reconnect to pick up anything missed
-        this.fetchHistory(this.state.page);
+        // Re-fetch from the top on reconnect to pick up anything missed. This
+        // resets the infinite-scroll list to the freshest first page; scrolling
+        // then loads older pages again as needed.
+        this.fetchHistory(1);
         this.fetchNumberLabels();
       }
     );
@@ -273,30 +383,31 @@ export class CallHistory extends Component<
       let updatedEntries: CallHistoryEntry[];
 
       if (existingIndex >= 0) {
-        // Update existing entry
+        // Update existing entry in place.
         updatedEntries = [...prev.entries];
         updatedEntries[existingIndex] = entry;
       } else {
-        // Insert new entry at the top (most recent first) if on page 1
-        if (prev.page === 1) {
-          updatedEntries = [entry, ...prev.entries].slice(0, prev.pageSize);
-        } else {
-          updatedEntries = prev.entries;
-        }
+        // Insert a brand-new call at the top (most recent first). With infinite
+        // scroll the loaded list is the accumulated head of the history, so we
+        // prepend without truncating — appended pages continue below it.
+        updatedEntries = [entry, ...prev.entries];
       }
 
+      const newTotal = existingIndex >= 0 ? prev.total : prev.total + 1;
       return {
         entries: updatedEntries,
-        total: existingIndex >= 0 ? prev.total : prev.total + 1,
-        totalPages: Math.ceil(
-          (existingIndex >= 0 ? prev.total : prev.total + 1) / prev.pageSize
-        ),
+        total: newTotal,
+        totalPages: Math.ceil(newTotal / prev.pageSize),
       };
     });
   }
 
-  private async fetchHistory(page: number) {
-    this.setState({ loading: true, error: "" });
+  private async fetchHistory(page: number, options?: { append?: boolean }) {
+    const append = options?.append ?? false;
+    // A first page load (or filter switch) shows the full-page loading state;
+    // appending a subsequent page shows the inline footer spinner instead so
+    // the already-loaded list stays visible and in place.
+    this.setState(append ? { loadingMore: true, error: "" } : { loading: true, error: "" });
 
     const { filterNumber } = this.state;
     let url = `/api/calls/history?page=${page}&pageSize=${PAGE_SIZE}`;
@@ -309,18 +420,34 @@ export class CallHistory extends Component<
     if (!result.ok) {
       this.setState({
         loading: false,
+        loadingMore: false,
         error: "Failed to load calls",
       });
       return;
     }
 
-    this.setState({
-      entries: result.data.entries,
-      page: result.data.page,
-      pageSize: result.data.pageSize,
-      total: result.data.total,
-      totalPages: result.data.totalPages,
-      loading: false,
+    this.setState((prev) => {
+      // When appending, concatenate onto the existing list and drop any entry
+      // whose id we already hold (a realtime insert or an overlapping page can
+      // otherwise duplicate a row).
+      let entries: CallHistoryEntry[];
+      if (append) {
+        const seen = new Set(prev.entries.map((e) => e.id));
+        entries = [...prev.entries, ...result.data.entries.filter((e) => !seen.has(e.id))];
+      } else {
+        entries = result.data.entries;
+      }
+
+      return {
+        entries,
+        page: result.data.page,
+        pageSize: result.data.pageSize,
+        total: result.data.total,
+        totalPages: result.data.totalPages,
+        hasMore: result.data.page < result.data.totalPages,
+        loading: false,
+        loadingMore: false,
+      };
     });
   }
 
@@ -341,18 +468,6 @@ export class CallHistory extends Component<
       this.setState({ numberLabels: labels, numberColors: colors, availableNumbers: result.data.numbers });
     }
   }
-
-  private handlePreviousPage = () => {
-    if (this.state.page > 1) {
-      this.fetchHistory(this.state.page - 1);
-    }
-  };
-
-  private handleNextPage = () => {
-    if (this.state.page < this.state.totalPages) {
-      this.fetchHistory(this.state.page + 1);
-    }
-  };
 
   private handleFilterChange = (e: Event) => {
     const target = e.target as HTMLSelectElement;
@@ -426,6 +541,7 @@ export class CallHistory extends Component<
     if (providerNumber) {
       path += `&from=${encodeURIComponent(providerNumber)}`;
     }
+    this.closeActionSheet();
     navigate(path);
   };
 
@@ -435,8 +551,90 @@ export class CallHistory extends Component<
   // main.tsx registers the App's opener into — the same open path as the nav
   // "dial" affordance.
   private handleCallBackClick = (phoneNumber: string) => {
+    this.closeActionSheet();
     openDialer(phoneNumber);
   };
+
+  // The mobile action sheet: a bottom-sheet overlay opened by tapping a call
+  // entry. It offers exactly the two per-entry actions the desktop card exposes
+  // inline — Call and Send message — each disabled when unavailable for the
+  // selected number (non-dialable/non-messageable senders, or when web calling
+  // isn't supported in this browser).
+  private renderActionSheet() {
+    const entry = this.state.actionEntry;
+    if (!entry) return null;
+
+    const providerDisplay = this.getProviderNumberDisplay(entry.providerNumber);
+    const callable = isDialerAvailable() && isMessageable(entry.phoneNumber);
+    const messageable = isMessageable(entry.phoneNumber);
+
+    return (
+      <div
+        class="call-action-sheet-overlay"
+        role="presentation"
+        onClick={this.closeActionSheet}
+      >
+        <div
+          class="call-action-sheet"
+          role="dialog"
+          aria-modal="true"
+          aria-label={`Actions for ${entry.phoneNumber}`}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div class="call-action-sheet-header">
+            <span class="call-action-sheet-number">{entry.phoneNumber}</span>
+            {providerDisplay && (
+              <span class="call-action-sheet-provider">via {providerDisplay}</span>
+            )}
+          </div>
+
+          <button
+            type="button"
+            class="call-action-sheet-btn"
+            disabled={!callable}
+            onClick={() => this.handleCallBackClick(entry.phoneNumber)}
+          >
+            <span class="call-action-sheet-icon" aria-hidden="true">
+              {phoneIcon(22)}
+            </span>
+            <span class="call-action-sheet-label">
+              Call
+              {!callable && (
+                <span class="call-action-sheet-hint">Not available</span>
+              )}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            class="call-action-sheet-btn"
+            disabled={!messageable}
+            onClick={() =>
+              this.handleMessageClick(entry.phoneNumber, entry.providerNumber)
+            }
+          >
+            <span class="call-action-sheet-icon" aria-hidden="true">
+              {messageIcon()}
+            </span>
+            <span class="call-action-sheet-label">
+              Send message
+              {!messageable && (
+                <span class="call-action-sheet-hint">Not available</span>
+              )}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            class="btn-secondary call-action-sheet-cancel"
+            onClick={this.closeActionSheet}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // The page header: the title on the left and a "Dial" action on the right.
   // Placing Dial here (rather than in the nav) matches the mental model of
@@ -471,7 +669,19 @@ export class CallHistory extends Component<
   }
 
   render() {
-    const { entries, loading, error, page, totalPages, availableNumbers, filterNumber } = this.state;
+    const {
+      entries,
+      loading,
+      loadingMore,
+      hasMore,
+      error,
+      total,
+      availableNumbers,
+      filterNumber,
+    } = this.state;
+    const hasIntersectionObserver =
+      typeof window !== "undefined" &&
+      typeof window.IntersectionObserver === "function";
 
     if (loading && entries.length === 0) {
       return (
@@ -536,8 +746,26 @@ export class CallHistory extends Component<
               const providerDisplay = this.getProviderNumberDisplay(entry.providerNumber);
               const providerColor = this.getProviderNumberColor(entry.providerNumber);
               const hasDuration = entry.durationSeconds != null && entry.durationSeconds > 0;
+              const isMobile = this.state.isMobile;
               return (
-                <li key={entry.id} class="call-history-entry">
+                <li
+                  key={entry.id}
+                  class={`call-history-entry${isMobile ? " call-history-entry-tappable" : ""}`}
+                  {...(isMobile
+                    ? {
+                        role: "button",
+                        tabIndex: 0,
+                        "aria-label": `${badge.label} call ${entry.phoneNumber}. Open call actions.`,
+                        onClick: () => this.openActionSheet(entry),
+                        onKeyDown: (e: KeyboardEvent) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            this.openActionSheet(entry);
+                          }
+                        },
+                      }
+                    : {})}
+                >
                   <span
                     class={`call-direction-icon ${badge.className}`}
                     aria-hidden="true"
@@ -557,36 +785,44 @@ export class CallHistory extends Component<
                       )}
                     </div>
                   </div>
-                  <div class="call-entry-side">
-                    <span class={`call-type-badge ${badge.className}`}>
-                      {badge.label}
-                    </span>
-                    {providerDisplay && (
-                      <span class="call-provider-number" title={`via ${providerDisplay}`}>
-                        <span class="call-provider-label">{providerDisplay}</span>
-                        <span
-                          class="call-provider-dot"
-                          style={{ backgroundColor: providerColor || "#6750A4" }}
-                          aria-hidden="true"
-                        />
-                      </span>
-                    )}
-                  </div>
+                  {/* On mobile the inline action buttons are dropped in favor
+                      of a tap-to-open action sheet (see renderActionSheet), so
+                      the card stays uncluttered. Desktop keeps the buttons. */}
+                  {!isMobile && (
                   <div class="call-entry-actions">
-                    {/* "Call back" pre-fills the Dialer with this number. Only
-                        shown when the browser supports calling (the bridge has
-                        a registered opener) and the number is dialable. */}
-                    {isDialerAvailable() && isMessageable(entry.phoneNumber) && (
-                      <button
-                        type="button"
-                        class="call-action-btn"
-                        onClick={() => this.handleCallBackClick(entry.phoneNumber)}
-                        aria-label={`Call back ${entry.phoneNumber}`}
-                        title={`Call back ${entry.phoneNumber}`}
-                      >
-                        {phoneIcon()}
-                      </button>
-                    )}
+                    {/* "Call back" pre-fills the Dialer with this number. The
+                        button is ALWAYS rendered so the row layout stays
+                        consistent — mirroring the message button — but is
+                        DISABLED when calling is unavailable in this browser or
+                        the number isn't dialable (e.g. anonymous callers). */}
+                    {(() => {
+                      const callable =
+                        isDialerAvailable() && isMessageable(entry.phoneNumber);
+                      return (
+                        <button
+                          type="button"
+                          class={`call-action-btn${callable ? "" : " call-action-btn-disabled"}`}
+                          onClick={
+                            callable
+                              ? () => this.handleCallBackClick(entry.phoneNumber)
+                              : undefined
+                          }
+                          disabled={!callable}
+                          aria-label={
+                            callable
+                              ? `Call back ${entry.phoneNumber}`
+                              : `${entry.phoneNumber} can't be called back`
+                          }
+                          title={
+                            callable
+                              ? `Call back ${entry.phoneNumber}`
+                              : "This caller can't be called back"
+                          }
+                        >
+                          {phoneIcon()}
+                        </button>
+                      );
+                    })()}
                     {(() => {
                       const messageable = isMessageable(entry.phoneNumber);
                       return (
@@ -615,35 +851,67 @@ export class CallHistory extends Component<
                       );
                     })()}
                   </div>
+                  )}
+                  <div class="call-entry-side">
+                    <span class={`call-type-badge ${badge.className}`}>
+                      {badge.label}
+                    </span>
+                    {providerDisplay && (
+                      <span class="call-provider-number" title={`via ${providerDisplay}`}>
+                        <span class="call-provider-label">{providerDisplay}</span>
+                        <span
+                          class="call-provider-dot"
+                          style={{ backgroundColor: providerColor || "#6750A4" }}
+                          aria-hidden="true"
+                        />
+                      </span>
+                    )}
+                  </div>
                 </li>
               );
             })}
+
+            {/* Bottom sentinel: while more pages remain, its entering the
+                viewport triggers loading the next page (infinite scroll). It
+                lives inside the list so it sits directly below the last row. */}
+            {hasMore && (
+              <li
+                ref={this.sentinelRef}
+                class="call-history-sentinel"
+                aria-hidden="true"
+              />
+            )}
           </ul>
         )}
 
-        {totalPages > 1 && (
-          <div class="call-history-pagination" aria-label="Pagination controls">
-            <button
-              class="btn-pagination"
-              onClick={this.handlePreviousPage}
-              disabled={page <= 1}
-              aria-label="Previous page"
-            >
-              Previous
-            </button>
-            <span class="pagination-info">
-              Page {page} of {totalPages}
-            </span>
-            <button
-              class="btn-pagination"
-              onClick={this.handleNextPage}
-              disabled={page >= totalPages}
-              aria-label="Next page"
-            >
-              Next
-            </button>
+        {/* Infinite-scroll footer: a spinner while a page is loading, a manual
+            "Load more" fallback when IntersectionObserver isn't available, and
+            an end-of-list marker once everything is loaded. */}
+        {entries.length > 0 && (
+          <div class="call-history-footer" aria-live="polite">
+            {loadingMore ? (
+              <span class="call-history-loading-more">Loading more…</span>
+            ) : hasMore ? (
+              !hasIntersectionObserver && (
+                <button
+                  type="button"
+                  class="btn-pagination"
+                  onClick={this.loadMore}
+                >
+                  Load more
+                </button>
+              )
+            ) : (
+              total > PAGE_SIZE && (
+                <span class="call-history-end">
+                  {total} call{total === 1 ? "" : "s"}
+                </span>
+              )
+            )}
           </div>
         )}
+
+        {this.renderActionSheet()}
       </div>
     );
   }

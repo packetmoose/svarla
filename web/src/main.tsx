@@ -1,7 +1,11 @@
 import { h, render, Component, Fragment } from "preact";
 import { Router, registerRoutes, navigate } from "./router";
 import { Nav } from "./components/nav";
-import { NewDeviceBanner } from "./components/new-device-banner";
+import { NotificationOverlay } from "./components/notification-overlay";
+import {
+  startNotificationSource,
+  stopNotificationSource,
+} from "./notification-source";
 import { AndroidBanner } from "./components/android-banner";
 import { Login } from "./components/login";
 import { CallHistory } from "./components/call-history";
@@ -11,6 +15,7 @@ import { Dashboard } from "./components/dashboard";
 import { Download } from "./components/download";
 import { initWebSocket, getWebSocket } from "./ws";
 import { initTheme } from "./theme";
+import { initScrollActivity } from "./scroll-activity";
 
 // Calling stack (Task 9.1 wiring).
 import { detectCapabilities } from "./call/capability-guard";
@@ -193,6 +198,9 @@ class App extends Component<Record<string, never>, AppState> {
     // with the "Dial" affordance and the call surfaces mounted.
     if (this.state.authenticated) {
       this.bringCallingOnline();
+      // Notifications are independent of the calling stack (they work even
+      // where calling is unsupported), so start the source directly.
+      startNotificationSource();
     }
   }
 
@@ -224,6 +232,7 @@ class App extends Component<Record<string, never>, AppState> {
     // lifecycle so the browser device is deregistered and any active call is
     // torn down (Requirement 1.9).
     teardownCallingStack();
+    stopNotificationSource();
     setDialerOpener(null);
     this.setState({ authenticated: false, callingReady: false, dialerOpen: false });
   };
@@ -233,6 +242,7 @@ class App extends Component<Record<string, never>, AppState> {
     initWebSocket();
     // Bring the calling stack online now that the session exists.
     this.bringCallingOnline();
+    startNotificationSource();
     // Ensure we navigate to dashboard after login
     navigate("/");
   };
@@ -272,7 +282,7 @@ class App extends Component<Record<string, never>, AppState> {
         <main class="main-content">
           <Router />
         </main>
-        <NewDeviceBanner />
+        <NotificationOverlay />
         <AndroidBanner />
         {stack ? (
           <Fragment>
@@ -296,6 +306,9 @@ class App extends Component<Record<string, never>, AppState> {
 
 // Initialize theme (applies stored preference, syncs with OS changes)
 initTheme();
+
+// Reveal custom scrollbars only while actively scrolling / hovering.
+initScrollActivity();
 
 // Initialize WebSocket connection if already authenticated
 if (isAuthenticated()) {

@@ -3,6 +3,12 @@ import type { VNode } from "preact";
 import { useState, useEffect } from "preact/hooks";
 import { navigate } from "../router";
 import { homeIcon, chatIcon, callIcon, settingsIcon } from "./icons";
+import { api } from "../api";
+import { getWebSocket, initWebSocket } from "../ws";
+import {
+  isConversationUnread,
+  type Conversation,
+} from "./conversations";
 import {
   getResolvedTheme,
   toggleTheme,
@@ -57,9 +63,52 @@ function ThemeToggle() {
   );
 }
 
+interface ConversationsResponse {
+  conversations: Conversation[];
+}
+
+/**
+ * Track whether any conversation has unread inbound messages, kept live via the
+ * same websocket signals the Conversations view uses. `new_message` may flip a
+ * thread to unread, `read_state_updated` (another device read a thread) may
+ * clear it, and `ws_connected` resyncs after a reconnect. Unread is derived with
+ * the shared {@link isConversationUnread} so the nav dot and the per-thread dot
+ * never disagree.
+ */
+function useUnreadConversations(): boolean {
+  const [hasUnread, setHasUnread] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    const refresh = async () => {
+      const result = await api.get<ConversationsResponse>("/api/conversations");
+      if (cancelled || !result.ok) return;
+      setHasUnread(result.data.conversations.some(isConversationUnread));
+    };
+
+    void refresh();
+
+    const ws = getWebSocket() ?? initWebSocket();
+    const unsubscribers = [
+      ws.subscribe("new_message", () => void refresh()),
+      ws.subscribe("read_state_updated", () => void refresh()),
+      ws.subscribe("ws_connected", () => void refresh()),
+    ];
+
+    return () => {
+      cancelled = true;
+      for (const unsub of unsubscribers) unsub();
+    };
+  }, []);
+
+  return hasUnread;
+}
+
 export function Nav() {
   const [isOpen, setIsOpen] = useState(false);
   const [activePath, setActivePath] = useState(getCurrentPath());
+  const hasUnreadConversations = useUnreadConversations();
 
   useEffect(() => {
     const handleHashChange = () => {
@@ -104,22 +153,32 @@ export function Nav() {
         class={`nav-links${isOpen ? " open" : ""}`}
         role="menubar"
       >
-        {navItems.map((item) => (
-          <li key={item.path} role="none">
-            <a
-              href={`#${item.path}`}
-              role="menuitem"
-              class={activePath === item.path ? "active" : ""}
-              onClick={(e) => {
-                e.preventDefault();
-                handleNavClick(item.path);
-              }}
-            >
-  <span class="nav-icon">{item.icon}</span>
-              {item.label}
-            </a>
-          </li>
-        ))}
+        {navItems.map((item) => {
+          const showUnread =
+            item.path === "/conversations" && hasUnreadConversations;
+          return (
+            <li key={item.path} role="none">
+              <a
+                href={`#${item.path}`}
+                role="menuitem"
+                class={activePath === item.path ? "active" : ""}
+                aria-label={
+                  showUnread ? `${item.label} (unread messages)` : undefined
+                }
+                onClick={(e) => {
+                  e.preventDefault();
+                  handleNavClick(item.path);
+                }}
+              >
+                <span class="nav-icon">{item.icon}</span>
+                {item.label}
+                {showUnread && (
+                  <span class="nav-unread-dot conversation-unread-dot" aria-hidden="true" />
+                )}
+              </a>
+            </li>
+          );
+        })}
       </ul>
     </nav>
   );

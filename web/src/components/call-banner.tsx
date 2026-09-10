@@ -3,6 +3,7 @@ import { useState, useEffect, useRef } from "preact/hooks";
 import {
   CallPhase,
   CallErrorKey,
+  CallWarningKey,
   type CallController,
   type CallControllerState,
 } from "../call/call-controller";
@@ -76,6 +77,16 @@ const ERROR_COPY: Partial<Record<string, string>> = {
   [CallErrorKey.CallEnded]: "Call ended",
 };
 
+/**
+ * Human-readable copy for non-fatal diagnostic warnings surfaced on
+ * `CallControllerState.warning`. Kept separate from {@link ERROR_COPY} because a
+ * warning is advisory and persists across a call teardown.
+ */
+const WARNING_COPY: Partial<Record<string, string>> = {
+  [CallWarningKey.LoopbackIceCandidate]:
+    "The media server returned a loopback (127.0.0.1) address, which the browser can't connect to — the call will likely fail. Set the MediaBridge PUBLIC_IP to a reachable address (this host's LAN IP).",
+};
+
 /** Subscribe a component to the controller store and re-render on change. */
 function useControllerState(
   controller: CallController,
@@ -109,7 +120,7 @@ function phaseLabel(phase: CallPhase): string {
 
 export function CallBanner({ controller, remoteAudio }: CallBannerProps) {
   const state = useControllerState(controller);
-  const { phase, call, error } = state;
+  const { phase, call, error, warning } = state;
 
   const [keypadOpen, setKeypadOpen] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -191,8 +202,20 @@ export function CallBanner({ controller, remoteAudio }: CallBannerProps) {
   const callRef = useRef(call);
   callRef.current = call;
 
+  // A non-fatal diagnostic warning (e.g. a loopback ICE candidate) is rendered
+  // independently of the in-call surface: it stays visible during the
+  // connecting window AND after the ensuing failure tears the call down, so the
+  // user can see WHY the call dropped. It clears on the next call attempt.
+  const warningBanner =
+    warning && WARNING_COPY[warning] ? (
+      <div class="call-warning" role="alert" aria-live="assertive">
+        {WARNING_COPY[warning]}
+      </div>
+    ) : null;
+
   if (!active) {
-    return null;
+    // Nothing live to show, but keep a standing warning visible if present.
+    return warningBanner;
   }
 
   // SAFETY NET: a session is live (audio may be flowing) but we have no call
@@ -203,11 +226,13 @@ export function CallBanner({ controller, remoteAudio }: CallBannerProps) {
   // enforces the same invariant), but the UI refuses to be silent regardless.
   if (!call) {
     return (
-      <section
-        class="in-call-surface"
-        role="region"
-        aria-label="Call in progress"
-      >
+      <Fragment>
+        {warningBanner}
+        <section
+          class="in-call-surface"
+          role="region"
+          aria-label="Call in progress"
+        >
         <div class="in-call-info">
           <span class="call-number">Call in progress</span>
           <span class="in-call-status connected">
@@ -217,20 +242,21 @@ export function CallBanner({ controller, remoteAudio }: CallBannerProps) {
             </span>
           </span>
         </div>
-        <div class="in-call-controls">
-          <span class="in-call-spacer" aria-hidden="true" />
-          <button
-            type="button"
-            class="btn-icon in-call-hangup"
-            aria-label="Hang up"
-            onClick={() => {
-              void controller.hangup();
-            }}
-          >
-            {phoneOffIcon()}
-          </button>
-        </div>
-      </section>
+          <div class="in-call-controls">
+            <span class="in-call-spacer" aria-hidden="true" />
+            <button
+              type="button"
+              class="btn-icon in-call-hangup"
+              aria-label="Hang up"
+              onClick={() => {
+                void controller.hangup();
+              }}
+            >
+              {phoneOffIcon()}
+            </button>
+          </div>
+        </section>
+      </Fragment>
     );
   }
 
@@ -283,11 +309,13 @@ export function CallBanner({ controller, remoteAudio }: CallBannerProps) {
   const durationText = formatDuration(elapsedSeconds);
 
   return (
-    <section
-      class="in-call-surface"
-      role="region"
-      aria-label="Call in progress"
-    >
+    <Fragment>
+      {warningBanner}
+      <section
+        class="in-call-surface"
+        role="region"
+        aria-label="Call in progress"
+      >
       <div class="in-call-info">
         <span class="call-number" title={numberLabel}>
           {numberLabel}
@@ -404,6 +432,7 @@ export function CallBanner({ controller, remoteAudio }: CallBannerProps) {
           </div>
         </Fragment>
       ) : null}
-    </section>
+      </section>
+    </Fragment>
   );
 }

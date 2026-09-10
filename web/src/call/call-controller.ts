@@ -147,6 +147,14 @@ export interface CallControllerState {
   incoming: CallMetadata | null;
   /** User-facing message key, or `null` when there is nothing to surface. */
   error: string | null;
+  /**
+   * A non-fatal diagnostic warning key, or `null`. Distinct from {@link error}
+   * because a warning is advisory (the call still proceeds) and must SURVIVE the
+   * teardown that a subsequent failure triggers — `error` is overwritten/cleared
+   * by `resetToIdle`, but the warning explains WHY that failure happened, so it
+   * needs to persist until the next call attempt. See {@link CallWarningKey}.
+   */
+  warning: string | null;
 }
 
 export interface CallController {
@@ -284,6 +292,37 @@ export function failureReasonToErrorKey(
 }
 
 /**
+ * Non-fatal diagnostic warning keys surfaced on {@link CallControllerState.warning}.
+ * Advisory only — the call still proceeds — so they live in their own vocabulary
+ * separate from {@link CallErrorKey} and persist across the teardown that a
+ * later failure triggers.
+ */
+export const CallWarningKey = {
+  /**
+   * The SDP answer from the server advertised a loopback (127.0.0.1) ICE
+   * candidate. Browsers will not pair against a loopback remote candidate, so
+   * the call will almost certainly fail to connect. This is a dev
+   * misconfiguration hint: the MediaBridge `PUBLIC_IP` must be an address the
+   * browser can reach (the host's LAN IP), not `127.0.0.1`, when the MediaBridge
+   * runs in a container / on another host.
+   */
+  LoopbackIceCandidate: "loopback-ice-candidate",
+} as const;
+
+export type CallWarningKey = (typeof CallWarningKey)[keyof typeof CallWarningKey];
+
+/**
+ * True when an SDP answer advertises a loopback (127.0.0.1) ICE candidate.
+ * Matches the address on an `a=candidate` line or the media/session connection
+ * line (`c=IN IP4 127.0.0.1`), rather than a bare substring, to avoid false
+ * positives from unrelated fields.
+ */
+export function sdpHasLoopbackCandidate(sdp: string): boolean {
+  return /^a=candidate:\S+ \S+ \S+ \S+ 127\.0\.0\.1 /im.test(sdp) ||
+    /^c=IN IP4 127\.0\.0\.1\b/im.test(sdp);
+}
+
+/**
  * The `call_event` payload as broadcast by the server over `ws.ts`
  * (`{ callId, status, from?, digit? }`). Terminal statuses are
  * `completed`/`failed`/`busy`; `connected` marks the two-way session live for
@@ -342,6 +381,7 @@ const INITIAL_STATE: CallControllerState = {
   call: null,
   incoming: null,
   error: null,
+  warning: null,
 };
 
 class CallControllerImpl implements CallController {
@@ -521,8 +561,8 @@ class CallControllerImpl implements CallController {
       return;
     }
 
-    // Clear any stale error from a prior attempt as we begin a new one.
-    this.store.setState({ error: null });
+    // Clear any stale error/warning from a prior attempt as we begin a new one.
+    this.store.setState({ error: null, warning: null });
 
     // 1) Place the call on the server, capped at the client-side make timeout.
     let makeResult: Awaited<ReturnType<typeof api.post<MakeCallResponse>>>;
@@ -614,6 +654,7 @@ class CallControllerImpl implements CallController {
       },
       incoming: null,
       error: null,
+      warning: null,
     });
 
     // 1) Mic-first: create the client and acquire the mic via createOffer
@@ -1453,6 +1494,17 @@ class CallControllerImpl implements CallController {
       this.resetToIdle(CallErrorKey.ConnectionFailed);
       return false;
     }
+
+    // Diagnostic: a loopback (127.0.0.1) ICE candidate in the answer means the
+    // browser has no reachable remote candidate to pair against, so the call
+    // will almost certainly fail to connect (ICE never completes). Surface a
+    // non-fatal warning explaining the likely dev misconfiguration (MediaBridge
+    // PUBLIC_IP), but let the call proceed — the warning persists past the
+    // teardown that the ensuing ICE failure triggers, so the user sees why the
+    // call dropped.
+    if (sdpHasLoopbackCandidate(sdpAnswer)) {
+      this.store.setState({ warning: CallWarningKey.LoopbackIceCandidate });
+    }
     return true;
   }
 
@@ -1508,6 +1560,10 @@ class CallControllerImpl implements CallController {
       call: null,
       incoming: null,
       error,
+      // NOTE: `warning` is intentionally NOT cleared here. A diagnostic warning
+      // (e.g. a loopback ICE candidate) explains WHY this teardown is happening,
+      // so it must outlive the reset and stay visible until the next call
+      // attempt clears it (see `placeCall`/`answer`).
     });
   }
 

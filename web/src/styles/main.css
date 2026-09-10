@@ -477,6 +477,15 @@ textarea {
   flex-shrink: 0;
 }
 
+/* Unread indicator on the Conversations nav item. Reuses the primary-colored
+   dot from the conversation list (.conversation-unread-dot) and pushes it to
+   the trailing edge of the nav link. */
+.nav-unread-dot {
+  margin-left: auto;
+  width: 8px;
+  height: 8px;
+}
+
 /* Theme toggle */
 .nav-header-actions {
   display: flex;
@@ -538,6 +547,7 @@ textarea {
     min-height: 100vh;
     max-height: 100vh;
     overflow-y: auto;
+    scrollbar-gutter: stable;
     padding: var(--md-space-md);
     background: var(--md-surface);
   }
@@ -584,6 +594,10 @@ textarea {
     max-width: calc(100% - var(--nav-width));
     overflow-y: auto;
     max-height: 100vh;
+    /* Reserve a real gutter for the scrollbar so the custom bar occupies layout
+       space and is hit-testable/draggable, rather than drawing as a
+       pass-through overlay on top of the content. */
+    scrollbar-gutter: stable;
   }
 }
 
@@ -2088,7 +2102,7 @@ textarea {
 /* ===== Call History Page ===== */
 
 .call-history-container {
-  max-width: 800px;
+  max-width: 900px;
 }
 
 /* Header row: page title on the left, the "Dial" action pinned to the right. */
@@ -2249,6 +2263,10 @@ textarea {
   gap: var(--md-space-xs);
   flex-shrink: 0;
   text-align: right;
+  /* Reserve enough room for the longest status label ("Unanswered") so the
+     column width is constant across rows and the trailing action buttons line
+     up vertically regardless of which status a given call has. */
+  min-width: 96px;
 }
 
 .call-type-badge {
@@ -2430,17 +2448,34 @@ textarea {
 @media (max-width: 640px) {
   .call-history-entry {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    /* The inline action buttons are dropped on mobile (a tap opens an action
+       sheet instead), so the row is just icon + content + trailing metadata. */
+    grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas:
-      "icon number   number   action"
-      "icon time     badge    action"
-      "icon duration provider action";
+      "icon number   number"
+      "icon time     badge"
+      "icon duration provider";
     align-items: center;
     /* Tighter side padding pulls both icons toward the card edges; the wider
        column gaps below then give them more breathing room from the content. */
     padding: var(--md-space-md) var(--md-space-sm);
     column-gap: var(--md-space-md);
     row-gap: 2px;
+  }
+
+  /* The whole card is the tap target on mobile. */
+  .call-history-entry-tappable {
+    cursor: pointer;
+  }
+
+  .call-history-entry-tappable:active {
+    background: var(--md-surface-container-high);
+  }
+
+  /* The per-row action buttons are not rendered on mobile; hide defensively in
+     case any variant still emits them. */
+  .call-history-entry .call-entry-actions {
+    display: none;
   }
 
   .call-direction-icon {
@@ -2487,12 +2522,133 @@ textarea {
     align-self: center;
     max-width: 100%;
   }
+}
 
-  .call-entry-actions {
-    grid-area: action;
-    /* Push the action button toward the right edge and away from the content. */
-    margin-left: var(--md-space-xs);
-  }
+/* ---------------------------------------------------------------------
+   Call-entry action sheet — a bottom-sheet overlay opened by tapping a call
+   card on mobile. Offers Call / Send message for that entry, replacing the
+   inline per-row buttons the desktop layout keeps.
+   --------------------------------------------------------------------- */
+
+.call-action-sheet-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1060;
+  background: var(--md-scrim);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  animation: overlay-in var(--md-motion-duration-medium) var(--md-motion-ease);
+}
+
+.call-action-sheet {
+  width: 100%;
+  max-width: 480px;
+  background: var(--md-surface);
+  border: 1px solid var(--md-outline-variant);
+  border-bottom: none;
+  border-radius: var(--md-radius-lg) var(--md-radius-lg) 0 0;
+  box-shadow: var(--md-elevation-4);
+  padding: var(--md-space-md) var(--md-space-md)
+    calc(var(--md-space-md) + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: var(--md-space-xs);
+  animation: modal-in var(--md-motion-duration-medium) var(--md-motion-ease);
+}
+
+.call-action-sheet-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--md-space-sm) var(--md-space-sm) var(--md-space-md);
+  border-bottom: 1px solid var(--md-outline-variant);
+  margin-bottom: var(--md-space-xs);
+}
+
+.call-action-sheet-number {
+  font-weight: 600;
+  font-size: 1.0625rem;
+  color: var(--md-on-surface);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  overflow-wrap: anywhere;
+}
+
+.call-action-sheet-provider {
+  font-size: 0.8125rem;
+  color: var(--md-on-surface-variant);
+}
+
+.call-action-sheet-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-md);
+  width: 100%;
+  padding: var(--md-space-md);
+  background: transparent;
+  border: none;
+  border-radius: var(--md-radius-md);
+  color: var(--md-on-surface);
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background var(--md-motion-duration-short) var(--md-motion-ease);
+  /* Center the icon+label pair as a group so both rows share one baseline: the
+     icon badges line up vertically and the labels start at the same x. */
+  justify-content: center;
+  text-align: center;
+}
+
+.call-action-sheet-btn:active {
+  background: var(--md-surface-container-high);
+}
+
+.call-action-sheet-btn:disabled {
+  color: var(--md-outline);
+  cursor: not-allowed;
+}
+
+.call-action-sheet-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: var(--md-radius-full);
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+}
+
+.call-action-sheet-btn:disabled .call-action-sheet-icon {
+  background: var(--md-surface-container-high);
+  color: var(--md-outline);
+}
+
+.call-action-sheet-icon .icon {
+  width: 22px;
+  height: 22px;
+}
+
+.call-action-sheet-label {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  text-align: left;
+  /* A shared label width keeps the leading icon badges vertically aligned
+     across both rows even though "Call" and "Send message" differ in length,
+     while the icon+label group as a whole stays centered in the sheet. */
+  min-width: 8.5rem;
+}
+
+.call-action-sheet-hint {
+  font-size: 0.75rem;
+  color: var(--md-on-surface-variant);
+}
+
+.call-action-sheet-cancel {
+  margin-top: var(--md-space-sm);
+  width: 100%;
+  justify-content: center;
 }
 
 .call-history-pagination {
@@ -2532,6 +2688,61 @@ textarea {
   font-weight: 500;
 }
 
+/* ---- Infinite scroll ---- */
+
+/* Zero-height marker at the bottom of the list; the IntersectionObserver
+   watches it to prefetch the next page before the user reaches the end. */
+.call-history-sentinel {
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  list-style: none;
+}
+
+/* Footer status row: spinner text, "Load more" fallback, or end-of-list count. */
+.call-history-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  margin-top: var(--md-space-md);
+  padding: var(--md-space-sm) 0;
+}
+
+.call-history-loading-more,
+.call-history-end {
+  font-size: 0.8125rem;
+  color: var(--md-on-surface-variant);
+}
+
+.call-history-loading-more {
+  position: relative;
+  padding-left: 22px;
+}
+
+/* A small spinning ring before the "Loading more…" text. */
+.call-history-loading-more::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin-top: -7px;
+  border: 2px solid var(--md-outline-variant);
+  border-top-color: var(--md-primary);
+  border-radius: var(--md-radius-full);
+  animation: call-history-spin 0.7s linear infinite;
+}
+
+@keyframes call-history-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Shared filter dropdown, used by Call History and Conversations. */
 .filter-select {
   flex: 1;
@@ -2555,7 +2766,7 @@ textarea {
 /* ===== Conversations Page ===== */
 
 .conversations-container {
-  max-width: 700px;
+  max-width: 900px;
 }
 
 .conversations-header {
@@ -2843,7 +3054,7 @@ textarea {
 .message-thread-container {
   display: flex;
   flex-direction: column;
-  max-width: 800px;
+  max-width: 900px;
   height: calc(100vh - 80px);
 }
 
@@ -2880,11 +3091,22 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
+}
+
+/* Trailing action cluster in the thread header (call + delete). */
+.thread-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-xs);
+  flex-shrink: 0;
 }
 
 .messages-list {
   flex: 1;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: var(--md-space-md) 0;
   display: flex;
   flex-direction: column;
@@ -3282,10 +3504,22 @@ textarea {
   text-align: center;
 }
 
-/* ===== Scrollbar ===== */
+/* ===== Scrollbar =====
+   Overlay-style, auto-hiding scrollbars: the thumb is transparent at rest and
+   only appears while the scroll container is hovered or actively scrolling
+   (the `data-scrolling` attribute is toggled by scroll-activity.ts). The thumb
+   insets with a padding-box border so there's a real grab area, and it widens
+   on hover for easier dragging. */
 
+/* WebKit / Blink (Chrome, Safari, Edge). A 14px track gives the pointer a
+   generous target to grab and drag. The scroll containers reserve a stable
+   gutter (`scrollbar-gutter: stable` on .main-content / .nav / .messages-list)
+   so this bar occupies real layout instead of drawing as a non-interactive
+   overlay — that reserved gutter is what makes the thumb hit-testable and
+   draggable. */
 ::-webkit-scrollbar {
-  width: 8px;
+  width: 14px;
+  height: 14px;
 }
 
 ::-webkit-scrollbar-track {
@@ -3293,12 +3527,43 @@ textarea {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--md-outline);
+  /* Transparent by default = hidden. A 4px transparent border with a
+     padding-box clip insets the visible thumb to ~6px at rest; the whole 14px
+     track still belongs to the thumb for hit-testing, so it's easy to grab. */
+  background-color: transparent;
+  border: 4px solid transparent;
+  background-clip: padding-box;
   border-radius: var(--md-radius-full);
+  min-height: 40px;
+  transition: background-color var(--md-motion-duration-short) var(--md-motion-ease),
+              border-width var(--md-motion-duration-short) var(--md-motion-ease);
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: var(--md-on-surface-variant);
+/* Reveal the thumb while hovering the scroll area or actively scrolling. */
+:hover::-webkit-scrollbar-thumb,
+[data-scrolling="true"]::-webkit-scrollbar-thumb {
+  background-color: var(--md-outline);
+}
+
+/* Hovering (or grabbing) the thumb itself widens it — the border shrinks so the
+   visible thumb grows toward the full track width — and darkens it, making it
+   easier to grab and drag. */
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
+  background-color: var(--md-on-surface-variant);
+  border-width: 2px;
+}
+
+/* Firefox: thin overlay bar. Firefox has no "actively scrolling" hook, so the
+   thumb shows on hover; the color still fades to the subtle outline tone. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+*:hover,
+[data-scrolling="true"] {
+  scrollbar-color: var(--md-outline) transparent;
 }
 
 /* ===== Focus visible ===== */
@@ -3387,9 +3652,12 @@ textarea {
   }
 }
 
-/* ===== New Device Login Banner ===== */
+/* ===== Notification Overlay =====
+   App-wide toast stack: up to 3 visible notifications, each auto-dismissing on
+   a timeout, driving all types (device login, incoming SMS, missed/blocked
+   call). Anchored top-right, stacking downward. */
 
-.new-device-banner-container {
+.notification-overlay {
   position: fixed;
   top: var(--md-space-md);
   right: var(--md-space-md);
@@ -3401,44 +3669,81 @@ textarea {
   width: calc(100% - 2 * var(--md-space-md));
 }
 
-.new-device-banner {
+.app-notification {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--md-space-sm);
   padding: var(--md-space-md) var(--md-space-lg);
-  background: var(--md-warning-container);
-  border: 1px solid var(--md-warning);
+  background: var(--md-surface-container-high);
+  border: 1px solid var(--md-outline-variant);
   border-radius: var(--md-radius-md);
   box-shadow: var(--md-elevation-3);
-  cursor: pointer;
   transition: box-shadow var(--md-motion-duration-short) var(--md-motion-ease),
               transform var(--md-motion-duration-short) var(--md-motion-ease);
   animation: banner-slide-in var(--md-motion-duration-medium) var(--md-motion-ease);
 }
 
-.new-device-banner:hover {
+/* Only clickable (deep-linking) notifications get the interactive affordance. */
+.app-notification[role="button"] {
+  cursor: pointer;
+}
+
+.app-notification[role="button"]:hover {
   box-shadow: var(--md-elevation-4);
   transform: translateY(-1px);
 }
 
-.new-device-banner:focus-visible {
+.app-notification:focus-visible {
   outline: 2px solid var(--md-primary);
   outline-offset: 2px;
 }
 
-.new-device-banner-icon {
+/* Per-kind accent on the leading edge. */
+.app-notification-message {
+  border-left: 3px solid var(--md-primary);
+}
+
+.app-notification-device {
+  border-left: 3px solid var(--md-warning, var(--md-primary));
+}
+
+.app-notification-call {
+  border-left: 3px solid var(--md-primary);
+}
+
+.app-notification-icon {
   font-size: 1.25rem;
+  line-height: 1.4;
   flex-shrink: 0;
 }
 
-.new-device-banner-text {
+.app-notification-text {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.app-notification-title {
   font-size: 0.875rem;
+  font-weight: 600;
   color: var(--md-on-surface);
   line-height: 1.4;
 }
 
-.new-device-banner-dismiss {
+.app-notification-body {
+  font-size: 0.8125rem;
+  font-weight: 400;
+  color: var(--md-on-surface-variant);
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.app-notification-dismiss {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3457,8 +3762,8 @@ textarea {
   transition: background var(--md-motion-duration-short) var(--md-motion-ease);
 }
 
-.new-device-banner-dismiss:hover {
-  background: var(--md-surface-container-high);
+.app-notification-dismiss:hover {
+  background: var(--md-surface-container-highest, var(--md-surface-container-high));
   box-shadow: none;
 }
 
@@ -3474,7 +3779,7 @@ textarea {
 }
 
 @media (min-width: 768px) {
-  .new-device-banner-container {
+  .notification-overlay {
     top: var(--md-space-lg);
     right: var(--md-space-lg);
   }
@@ -3737,6 +4042,15 @@ textarea {
   margin: 0;
 }
 
+/* The compose form owns its own vertical rhythm so the To field, From
+   selector, and the Call action are evenly spaced — without this the actions
+   row collapsed right up against the From field. */
+.dialer-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--md-space-md);
+}
+
 .dialer-header {
   display: flex;
   align-items: center;
@@ -3786,6 +4100,161 @@ textarea {
 .dialer-call-btn {
   background: var(--md-primary);
   color: var(--md-on-primary);
+}
+
+/* ---------------------------------------------------------------------
+   Mobile keypad dial pad — the web counterpart of the Android DialPadScreen.
+   Rendered instead of the compose form on phones / touch devices.
+   --------------------------------------------------------------------- */
+
+.dialpad {
+  display: flex;
+  flex-direction: column;
+  gap: var(--md-space-md);
+}
+
+/* "From" number chooser sits at the top, like the Android provider chip. */
+.dialpad-from {
+  display: flex;
+  flex-direction: column;
+  gap: var(--md-space-xs);
+}
+
+/* Large, centered read-only number readout driven by the keypad. */
+.dialpad-display {
+  min-height: 3.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--md-space-sm) var(--md-space-md);
+  text-align: center;
+}
+
+.dialpad-number {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 1.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--md-on-surface);
+  word-break: break-all;
+}
+
+.dialpad-placeholder {
+  font-size: 1.5rem;
+  color: var(--md-on-surface-variant);
+  opacity: 0.6;
+}
+
+/* 3x4 telephone grid. */
+.dialpad-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--md-space-sm) var(--md-space-md);
+  justify-items: center;
+  max-width: 320px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.dialpad-key {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  width: 68px;
+  height: 68px;
+  border: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--md-surface-variant) 40%, transparent);
+  color: var(--md-on-surface);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  transition: background var(--md-motion-duration-short) var(--md-motion-ease);
+}
+
+.dialpad-key:active {
+  background: var(--md-surface-variant);
+}
+
+.dialpad-key:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.dialpad-key-digit {
+  font-size: 1.6rem;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.dialpad-key-letters {
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--md-on-surface-variant);
+}
+
+/* Backspace flanks the call button; a spacer balances the row so the green
+   call button stays centered like the Android layout. */
+.dialpad-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--md-space-md);
+  max-width: 320px;
+  width: 100%;
+  margin: var(--md-space-xs) auto 0;
+}
+
+.dialpad-actions-spacer,
+.dialpad-backspace {
+  width: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dialpad-call {
+  width: 64px;
+  height: 64px;
+  border: none;
+  border-radius: 50%;
+  background: var(--md-success, #2e7d32);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: var(--md-elevation-2);
+  transition: transform var(--md-motion-duration-short) var(--md-motion-ease);
+}
+
+.dialpad-call:active {
+  transform: scale(0.94);
+}
+
+.dialpad-call:disabled {
+  opacity: 0.4;
+  cursor: default;
+  box-shadow: none;
+}
+
+.dialpad-backspace {
+  height: 56px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--md-on-surface-variant);
+  cursor: pointer;
+}
+
+.dialpad-backspace:disabled {
+  opacity: 0.35;
+  cursor: default;
 }
 
 /* Mobile: the Dialer becomes a full-width bottom sheet. */
@@ -3902,6 +4371,39 @@ textarea {
    InCallSurface — compact anchored overlay, expandable DTMF keypad
    (upgrades the passive .call-banner into the active in-call surface)
    --------------------------------------------------------------------- */
+
+/* Non-fatal diagnostic warning (e.g. loopback ICE candidate). Anchored above
+   the in-call surface so it is visible while connecting and remains after the
+   call tears down, until the next call attempt clears it. */
+.call-warning {
+  position: fixed;
+  right: var(--md-space-lg);
+  bottom: calc(var(--md-space-lg) + 340px);
+  z-index: 1001;
+  width: 320px;
+  max-width: calc(100vw - 2 * var(--md-space-md));
+  background: var(--md-error-container, #ffdad6);
+  color: var(--md-on-error-container, #410002);
+  border: 1px solid var(--md-error, #ba1a1a);
+  border-radius: var(--md-radius-md);
+  box-shadow: var(--md-elevation-3);
+  padding: var(--md-space-md);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  animation: modal-in var(--md-motion-duration-medium) var(--md-motion-ease);
+}
+
+@media (max-width: 640px), (pointer: coarse) {
+  .call-warning {
+    left: 0;
+    right: 0;
+    bottom: auto;
+    top: 0;
+    width: auto;
+    max-width: none;
+    border-radius: 0;
+  }
+}
 
 .in-call-surface {
   position: fixed;
