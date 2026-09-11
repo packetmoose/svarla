@@ -58,8 +58,22 @@ interface Notification {
 interface ConfigFieldDef {
   name: string;
   label: string;
-  type: "text" | "password" | "textarea";
+  type: "text" | "password" | "textarea" | "checkbox";
   required: boolean;
+  /** For checkbox fields: value used when the provider has no stored value yet. */
+  defaultChecked?: boolean;
+  /** Optional hint rendered below the field. */
+  hint?: string;
+  /** For checkbox fields: hint shown only when the box is unchecked. */
+  offHint?: string;
+  /**
+   * Name of another (checkbox) field this field depends on. When set, this
+   * field is only rendered while that checkbox is checked. Used to reveal the
+   * webhook IP override list only when the operator opts in.
+   */
+  showWhen?: string;
+  /** Placeholder text for text/textarea inputs. */
+  placeholder?: string;
 }
 
 const CONFIG_FIELDS: Record<string, ConfigFieldDef[]> = {
@@ -68,15 +82,72 @@ const CONFIG_FIELDS: Record<string, ConfigFieldDef[]> = {
     { name: "api_secret", label: "API Secret", type: "password", required: true },
     { name: "application_id", label: "Application ID", type: "text", required: true },
     { name: "private_key", label: "Private Key (PEM)", type: "textarea", required: true },
+    {
+      name: "webhook_validation",
+      label: "Webhook validation",
+      type: "checkbox",
+      required: false,
+      defaultChecked: true,
+      offHint:
+        "Incoming webhooks are not signature-verified. Anyone who knows the webhook URL can post events to this provider.",
+    },
   ],
   "46elks": [
     { name: "api_username", label: "API Username", type: "text", required: true },
     { name: "api_password", label: "API Password", type: "password", required: true },
     { name: "websocket_number", label: "WebSocket Number", type: "text", required: false },
+    {
+      name: "webhook_validation",
+      label: "Webhook validation",
+      type: "checkbox",
+      required: false,
+      defaultChecked: true,
+      hint: "Verifies that incoming webhooks originate from a 46elks IP address. 46elks does not sign webhooks, so this IP allowlist is the only available origin check.",
+      offHint:
+        "Incoming webhooks are not origin-verified. Anyone who knows the webhook URL can post events to this provider.",
+    },
+    {
+      name: "override_webhook_whitelist",
+      label: "Override webhook whitelist",
+      type: "checkbox",
+      required: false,
+      defaultChecked: false,
+      showWhen: "webhook_validation",
+      hint: "Replace the built-in 46elks IP allowlist with your own. Only change this if 46elks has notified you of new callback IPs.",
+    },
+    {
+      name: "webhook_ip_allowlist",
+      label: "Allowed webhook IPs",
+      type: "textarea",
+      required: false,
+      showWhen: "override_webhook_whitelist",
+      placeholder: "176.10.154.199\n85.24.146.132\n185.39.146.243\n2001:9b0:2:902::199",
+      hint: "One IP per line (or comma-separated). Leave empty to use the built-in 46elks defaults.",
+    },
   ],
   dummy: [],
   "modem-gateway": [],
 };
+
+/**
+ * Config field names that exist only to drive the form UI (e.g. reveal a
+ * dependent field) and must never be sent to / persisted by the backend.
+ */
+const UI_ONLY_CONFIG_FIELDS: readonly string[] = ["override_webhook_whitelist"];
+
+/**
+ * Build the initial form config for a provider type, seeding checkbox fields
+ * with their default value so toggles start in the correct state.
+ */
+function buildDefaultConfig(type: string): Record<string, string | boolean> {
+  const config: Record<string, string | boolean> = {};
+  for (const field of CONFIG_FIELDS[type] || []) {
+    if (field.type === "checkbox") {
+      config[field.name] = field.defaultChecked ?? false;
+    }
+  }
+  return config;
+}
 
 /* ---------- Webhook endpoint labels ---------- */
 
@@ -102,6 +173,54 @@ const WEBHOOK_ENDPOINT_LABELS: Record<string, string> = {
 function webhookEndpointLabel(url: string): string {
   const suffix = url.split("?")[0].replace(/\/+$/, "").split("/").pop() ?? "";
   return WEBHOOK_ENDPOINT_LABELS[suffix] ?? suffix ?? "Webhook";
+}
+
+/* ---------- Provider config detail formatting ---------- */
+
+/**
+ * Friendly labels for provider config keys shown in the detail view. Covers
+ * every provider type's config keys, including ones that aren't editable form
+ * fields (e.g. pairing_secret, webhook_base_url).
+ */
+const CONFIG_KEY_LABELS: Record<string, string> = {
+  api_key: "API Key",
+  api_secret: "API Secret",
+  application_id: "Application ID",
+  private_key: "Private Key",
+  private_key_path: "Private Key Path",
+  webhook_base_url: "Webhook Base URL",
+  webhook_validation: "Webhook validation",
+  webhook_ip_allowlist: "Allowed webhook IPs",
+  api_username: "API Username",
+  api_password: "API Password",
+  websocket_number: "WebSocket Number",
+  pairing_secret: "Pairing Secret",
+  name: "Name",
+  supports_sips: "SIP support",
+};
+
+/**
+ * Turn a raw config key into a friendly label. Falls back to Title Case of the
+ * key (underscores to spaces) for any key not in the map.
+ */
+function configKeyLabel(key: string): string {
+  if (CONFIG_KEY_LABELS[key]) return CONFIG_KEY_LABELS[key];
+  return key
+    .split("_")
+    .map((word) => (word ? word[0].toUpperCase() + word.slice(1) : word))
+    .join(" ");
+}
+
+/**
+ * Format a raw config value for display. Booleans render as On/Off, empty
+ * values as an em dash, everything else as its string form (secrets arrive
+ * already masked from the server).
+ */
+function configValueDisplay(value: unknown): string {
+  if (typeof value === "boolean") return value ? "On" : "Off";
+  if (Array.isArray(value)) return value.length > 0 ? value.join(", ") : "—";
+  if (value === null || value === undefined || value === "") return "—";
+  return String(value);
 }
 
 /**
@@ -197,7 +316,7 @@ interface ProvidersState {
   showForm: boolean;
   formType: string;
   formDisplayName: string;
-  formConfig: Record<string, string>;
+  formConfig: Record<string, string | boolean>;
   formErrors: FieldError[];
   formSubmitting: boolean;
 
@@ -213,7 +332,9 @@ interface ProvidersState {
   // Edit form state
   editingProvider: ProviderDetail | null;
   editDisplayName: string;
-  editConfig: Record<string, string>;
+  editConfig: Record<string, string | boolean>;
+  /** Snapshot of editConfig as loaded, used to detect changed fields on submit. */
+  editConfigOriginal: Record<string, string | boolean>;
   editErrors: FieldError[];
   editSubmitting: boolean;
 
@@ -256,7 +377,7 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
     showForm: false,
     formType: "vonage",
     formDisplayName: "",
-    formConfig: {},
+    formConfig: buildDefaultConfig("vonage"),
     formErrors: [],
     formSubmitting: false,
     showPairingSecret: null,
@@ -267,6 +388,7 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
     editingProvider: null,
     editDisplayName: "",
     editConfig: {},
+    editConfigOriginal: {},
     editErrors: [],
     editSubmitting: false,
     deleteTarget: null,
@@ -551,11 +673,40 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
   /* ---------- Edit form handlers ---------- */
 
   private handleEditClick = (provider: ProviderDetail) => {
-    // Convert config values to strings for the form, replacing masked values with empty
-    const editConfig: Record<string, string> = {};
+    // Convert config values to form values, replacing masked secrets with empty.
+    const editConfig: Record<string, string | boolean> = {};
     const fields = CONFIG_FIELDS[provider.type] || [];
     for (const field of fields) {
       const value = provider.config[field.name];
+
+      // UI-only toggles have no stored value; derive their initial state.
+      if (field.name === "override_webhook_whitelist") {
+        // Pre-check the override toggle when a custom allowlist is already saved
+        // so the IP list field is revealed for editing.
+        const stored = provider.config.webhook_ip_allowlist;
+        const hasCustomList = Array.isArray(stored)
+          ? stored.length > 0
+          : typeof stored === "string" && stored.trim().length > 0;
+        editConfig[field.name] = hasCustomList;
+        continue;
+      }
+
+      if (field.type === "checkbox") {
+        // Booleans are never masked; absent means "on by default".
+        editConfig[field.name] =
+          value === undefined ? (field.defaultChecked ?? false) : value !== false;
+        continue;
+      }
+      // The IP allowlist may be stored as an array; present it as one entry per
+      // line for the textarea.
+      if (field.name === "webhook_ip_allowlist") {
+        editConfig[field.name] = Array.isArray(value)
+          ? value.join("\n")
+          : typeof value === "string"
+            ? value
+            : "";
+        continue;
+      }
       // Masked values (e.g. "****abcd") should show as empty — user re-enters if changing
       const strValue = typeof value === "string" ? value : "";
       const isMasked = strValue.startsWith("*");
@@ -566,6 +717,8 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
       editingProvider: provider,
       editDisplayName: provider.displayName,
       editConfig,
+      // Snapshot so submit can send only fields the user actually changed.
+      editConfigOriginal: { ...editConfig },
       editErrors: [],
       selectedProvider: null, // close detail view
     });
@@ -579,7 +732,7 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
     this.setState({ editDisplayName: (e.target as HTMLInputElement).value });
   };
 
-  private handleEditConfigFieldChange = (field: string, value: string) => {
+  private handleEditConfigFieldChange = (field: string, value: string | boolean) => {
     this.setState((prev) => ({
       editConfig: { ...prev.editConfig, [field]: value },
     }));
@@ -587,24 +740,55 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
 
   private handleEditSubmit = async (e: Event) => {
     e.preventDefault();
-    const { editingProvider, editDisplayName, editConfig } = this.state;
+    const { editingProvider, editDisplayName, editConfig, editConfigOriginal } = this.state;
     if (!editingProvider) return;
 
     this.setState({ editSubmitting: true, editErrors: [] });
 
-    // Build the update payload — only include config fields that are non-empty
-    // (empty fields mean "keep existing value" for secrets that were masked)
-    const configUpdate: Record<string, string> = {};
+    // Build the update payload. Only include fields the user actually changed;
+    // omitted keys are left untouched by the server's config merge.
+    const configUpdate: Record<string, string | boolean> = {};
     const fields = CONFIG_FIELDS[editingProvider.type] || [];
+    const overrideOn = editConfig.override_webhook_whitelist === true;
     for (const field of fields) {
-      const value = editConfig[field.name] ?? "";
+      // UI-only toggles are never sent to the backend.
+      if (UI_ONLY_CONFIG_FIELDS.includes(field.name)) {
+        continue;
+      }
+
+      // The IP allowlist is coupled to the override toggle. When the operator
+      // turns the override off, clear any previously stored list so origin
+      // checks fall back to the built-in 46elks defaults. When on, always send
+      // the current textarea value (which may be empty = use defaults).
+      if (field.name === "webhook_ip_allowlist") {
+        const current = typeof editConfig[field.name] === "string" ? (editConfig[field.name] as string) : "";
+        const original = typeof editConfigOriginal[field.name] === "string" ? (editConfigOriginal[field.name] as string) : "";
+        if (!overrideOn) {
+          // Only send an explicit clear when something was previously stored.
+          if (original.trim().length > 0) {
+            configUpdate[field.name] = "";
+          }
+        } else if (current !== original) {
+          configUpdate[field.name] = current;
+        }
+        continue;
+      }
+
+      if (field.type === "checkbox") {
+        // Booleans always have a real current value, so we can dirty-check
+        // against the loaded snapshot and only send when it changed.
+        const current = editConfig[field.name] === true;
+        const original = editConfigOriginal[field.name] === true;
+        if (current !== original) {
+          configUpdate[field.name] = current;
+        }
+        continue;
+      }
+      // Text/secret fields: an empty field means "keep existing value" (secrets
+      // come back masked, so we can't echo them). Only send non-empty values.
+      const value = typeof editConfig[field.name] === "string" ? (editConfig[field.name] as string) : "";
       if (value.length > 0) {
         configUpdate[field.name] = value;
-      } else {
-        // Keep the existing value from the server (it's masked, so we can't send it back)
-        // We need to include the masked value to not clear it — but the server should
-        // ignore masked values. For now, omit empty fields entirely so the server
-        // keeps the existing encrypted value.
       }
     }
 
@@ -674,7 +858,7 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
       showForm: true,
       formType: "vonage",
       formDisplayName: "",
-      formConfig: {},
+      formConfig: buildDefaultConfig("vonage"),
       formErrors: [],
     });
   };
@@ -685,7 +869,7 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
 
   private handleTypeChange = (e: Event) => {
     const value = (e.target as HTMLSelectElement).value;
-    this.setState({ formType: value, formConfig: {}, formErrors: [] });
+    this.setState({ formType: value, formConfig: buildDefaultConfig(value), formErrors: [] });
   };
 
   private handleDisplayNameChange = (e: Event) => {
@@ -693,7 +877,7 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
     this.setState({ formDisplayName: value });
   };
 
-  private handleConfigFieldChange = (field: string, value: string) => {
+  private handleConfigFieldChange = (field: string, value: string | boolean) => {
     this.setState((prev) => ({
       formConfig: { ...prev.formConfig, [field]: value },
     }));
@@ -706,7 +890,12 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
     this.setState({ formSubmitting: true, formErrors: [] });
 
     // For modem-gateway, generate a pairing secret client-side
-    const config = { ...formConfig } as Record<string, string>;
+    const config = { ...formConfig } as Record<string, string | boolean>;
+    // UI-only controls (e.g. the "override webhook whitelist" toggle) drive
+    // field visibility but are not backend config; never persist them.
+    for (const key of UI_ONLY_CONFIG_FIELDS) {
+      delete config[key];
+    }
     let generatedSecret: string | undefined;
     if (formType === "modem-gateway") {
       generatedSecret = generatePairingSecret();
@@ -729,7 +918,7 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
         showForm: false,
         formSubmitting: false,
         formDisplayName: "",
-        formConfig: {},
+        formConfig: buildDefaultConfig(formType),
         formErrors: [],
       });
 
@@ -1042,38 +1231,69 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
           )}
         </div>
 
-        {fields.map((field) => (
-          <div class="form-group" key={field.name}>
-            <label htmlFor={`provider-config-${field.name}`}>{field.label}</label>
-            {field.type === "textarea" ? (
-              <textarea
-                id={`provider-config-${field.name}`}
-                value={formConfig[field.name] || ""}
-                onInput={(e: Event) =>
-                  this.handleConfigFieldChange(field.name, (e.target as HTMLTextAreaElement).value)
-                }
-                disabled={formSubmitting}
-                aria-invalid={getFieldError(field.name) ? "true" : undefined}
-                rows={6}
-                placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"
-              />
-            ) : (
-              <input
-                id={`provider-config-${field.name}`}
-                type={field.type}
-                value={formConfig[field.name] || ""}
-                onInput={(e: Event) =>
-                  this.handleConfigFieldChange(field.name, (e.target as HTMLInputElement).value)
-                }
-                disabled={formSubmitting}
-                aria-invalid={getFieldError(field.name) ? "true" : undefined}
-              />
-            )}
-            {getFieldError(field.name) && (
-              <div class="form-error">{getFieldError(field.name)}</div>
-            )}
-          </div>
-        ))}
+        {fields.map((field) => {
+          // Dependent fields (e.g. the IP override list) only render while the
+          // checkbox they depend on is checked.
+          if (field.showWhen && formConfig[field.showWhen] !== true) {
+            return null;
+          }
+          if (field.type === "checkbox") {
+            const checked = formConfig[field.name] === true;
+            return (
+              <div class="form-group" key={field.name}>
+                <label class="checkbox-field" htmlFor={`provider-config-${field.name}`}>
+                  <input
+                    id={`provider-config-${field.name}`}
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e: Event) =>
+                      this.handleConfigFieldChange(field.name, (e.target as HTMLInputElement).checked)
+                    }
+                    disabled={formSubmitting}
+                  />
+                  <span class="toggle-label">{field.label}</span>
+                </label>
+                {field.hint && <p class="form-hint">{field.hint}</p>}
+                {!checked && field.offHint && (
+                  <p class="form-hint form-warning" role="alert">{field.offHint}</p>
+                )}
+              </div>
+            );
+          }
+          return (
+            <div class="form-group" key={field.name}>
+              <label htmlFor={`provider-config-${field.name}`}>{field.label}</label>
+              {field.type === "textarea" ? (
+                <textarea
+                  id={`provider-config-${field.name}`}
+                  value={String(formConfig[field.name] ?? "")}
+                  onInput={(e: Event) =>
+                    this.handleConfigFieldChange(field.name, (e.target as HTMLTextAreaElement).value)
+                  }
+                  disabled={formSubmitting}
+                  aria-invalid={getFieldError(field.name) ? "true" : undefined}
+                  rows={6}
+                  placeholder={field.placeholder ?? "-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"}
+                />
+              ) : (
+                <input
+                  id={`provider-config-${field.name}`}
+                  type={field.type}
+                  value={String(formConfig[field.name] ?? "")}
+                  onInput={(e: Event) =>
+                    this.handleConfigFieldChange(field.name, (e.target as HTMLInputElement).value)
+                  }
+                  disabled={formSubmitting}
+                  aria-invalid={getFieldError(field.name) ? "true" : undefined}
+                />
+              )}
+              {field.hint && <p class="form-hint">{field.hint}</p>}
+              {getFieldError(field.name) && (
+                <div class="form-error">{getFieldError(field.name)}</div>
+              )}
+            </div>
+          );
+        })}
 
         <div class="form-actions">
           <button
@@ -1138,39 +1358,72 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
           )}
         </div>
 
-        {fields.map((field) => (
-          <div class="form-group" key={field.name}>
-            <label htmlFor={`edit-provider-config-${field.name}`}>{field.label}</label>
-            {field.type === "textarea" ? (
-              <textarea
-                id={`edit-provider-config-${field.name}`}
-                value={editConfig[field.name] || ""}
-                onInput={(e: Event) =>
-                  this.handleEditConfigFieldChange(field.name, (e.target as HTMLTextAreaElement).value)
-                }
-                disabled={editSubmitting}
-                aria-invalid={getFieldError(field.name) ? "true" : undefined}
-                rows={6}
-                placeholder={field.type === "textarea" ? "Leave empty to keep current value" : ""}
-              />
-            ) : (
-              <input
-                id={`edit-provider-config-${field.name}`}
-                type={field.type}
-                value={editConfig[field.name] || ""}
-                onInput={(e: Event) =>
-                  this.handleEditConfigFieldChange(field.name, (e.target as HTMLInputElement).value)
-                }
-                disabled={editSubmitting}
-                aria-invalid={getFieldError(field.name) ? "true" : undefined}
-                placeholder={field.type === "password" ? "Leave empty to keep current value" : ""}
-              />
-            )}
-            {getFieldError(field.name) && (
-              <div class="form-error">{getFieldError(field.name)}</div>
-            )}
-          </div>
-        ))}
+        {fields.map((field) => {
+          // Dependent fields (e.g. the IP override list) only render while the
+          // checkbox they depend on is checked.
+          if (field.showWhen && editConfig[field.showWhen] !== true) {
+            return null;
+          }
+          if (field.type === "checkbox") {
+            const checked = editConfig[field.name] === true;
+            return (
+              <div class="form-group" key={field.name}>
+                <label class="checkbox-field" htmlFor={`edit-provider-config-${field.name}`}>
+                  <input
+                    id={`edit-provider-config-${field.name}`}
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e: Event) =>
+                      this.handleEditConfigFieldChange(field.name, (e.target as HTMLInputElement).checked)
+                    }
+                    disabled={editSubmitting}
+                  />
+                  <span class="toggle-label">{field.label}</span>
+                </label>
+                {/* Edit view: keep only a short muted hint. The prominent
+                    off-state warning lives in the provider detail view. */}
+                {field.hint && <p class="form-hint">{field.hint}</p>}
+                {!checked && field.offHint && (
+                  <p class="form-hint">{field.offHint}</p>
+                )}
+              </div>
+            );
+          }
+          return (
+            <div class="form-group" key={field.name}>
+              <label htmlFor={`edit-provider-config-${field.name}`}>{field.label}</label>
+              {field.type === "textarea" ? (
+                <textarea
+                  id={`edit-provider-config-${field.name}`}
+                  value={String(editConfig[field.name] ?? "")}
+                  onInput={(e: Event) =>
+                    this.handleEditConfigFieldChange(field.name, (e.target as HTMLTextAreaElement).value)
+                  }
+                  disabled={editSubmitting}
+                  aria-invalid={getFieldError(field.name) ? "true" : undefined}
+                  rows={6}
+                  placeholder={field.placeholder ?? "Leave empty to keep current value"}
+                />
+              ) : (
+                <input
+                  id={`edit-provider-config-${field.name}`}
+                  type={field.type}
+                  value={String(editConfig[field.name] ?? "")}
+                  onInput={(e: Event) =>
+                    this.handleEditConfigFieldChange(field.name, (e.target as HTMLInputElement).value)
+                  }
+                  disabled={editSubmitting}
+                  aria-invalid={getFieldError(field.name) ? "true" : undefined}
+                  placeholder={field.type === "password" ? "Leave empty to keep current value" : (field.placeholder ?? "")}
+                />
+              )}
+              {field.hint && <p class="form-hint">{field.hint}</p>}
+              {getFieldError(field.name) && (
+                <div class="form-error">{getFieldError(field.name)}</div>
+              )}
+            </div>
+          );
+        })}
 
         <div class="form-actions">
           <button
@@ -1469,6 +1722,22 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
           <dd class="monospace">{selectedProvider.id}</dd>
         </dl>
 
+        {selectedProvider.type === "vonage" &&
+          selectedProvider.config.webhook_validation === false && (
+            <p class="form-hint form-warning" role="alert">
+              Webhook validation is off. Incoming webhooks are not signature-verified,
+              so anyone who knows the webhook URL can post events to this provider.
+            </p>
+          )}
+
+        {selectedProvider.type === "46elks" &&
+          selectedProvider.config.webhook_validation === false && (
+            <p class="form-hint form-warning" role="alert">
+              Webhook validation is off. Incoming webhooks are not origin-verified,
+              so anyone who knows the webhook URL can post events to this provider.
+            </p>
+          )}
+
         {selectedProvider.type === "modem-gateway" && this.renderModemStatus()}
 
         {Object.keys(selectedProvider.config).length > 0 && (
@@ -1477,8 +1746,12 @@ export class Providers extends Component<Record<string, never>, ProvidersState> 
             <dl class="detail-list">
               {Object.entries(selectedProvider.config).map(([key, value]) => (
                 <Fragment key={key}>
-                  <dt>{key}</dt>
-                  <dd class="monospace">{String(value)}</dd>
+                  <dt>{configKeyLabel(key)}</dt>
+                  {/* Booleans render as plain On/Off text; raw string values
+                      (IDs, masked secrets, URLs) stay monospace. */}
+                  <dd class={typeof value === "boolean" ? undefined : "monospace"}>
+                    {configValueDisplay(value)}
+                  </dd>
                 </Fragment>
               ))}
             </dl>

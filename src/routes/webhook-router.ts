@@ -10,7 +10,11 @@ import type { NumberManagementService } from '../services/number-management-serv
 import type { WebSocketBroadcaster } from '../websocket/broadcaster.js';
 import type { CallOrchestrator } from '../services/call-orchestrator.js';
 import type { NotificationService } from '../services/notification-service.js';
-import { verifyVonageWebhookJwt } from '../middleware/webhook-auth-middleware.js';
+import {
+  verifyVonageWebhookJwt,
+  verifyElks46WebhookOrigin,
+  parseElks46IpAllowlist,
+} from '../middleware/webhook-auth-middleware.js';
 import { buildOutboundCallNcco } from '../providers/ncco-builder.js';
 import type { NccoAction } from '../providers/ncco-builder.js';
 
@@ -226,11 +230,15 @@ export function registerWebhookRouter(
     // For Vonage providers, verify the JWT in the Authorization header against
     // the provider's own API secret and application ID from its config.
     if (entry.type === 'vonage') {
-      const providerConfig = entry.config as Record<string, string>;
-      const apiSecret = providerConfig.api_secret ?? '';
-      const applicationId = providerConfig.application_id ?? '';
+      const providerConfig = entry.config as Record<string, unknown>;
+      const apiSecret = (providerConfig.api_secret as string) ?? '';
+      const applicationId = (providerConfig.application_id as string) ?? '';
 
-      if (apiSecret || applicationId) {
+      // Webhook validation is on by default; only skip when explicitly disabled.
+      // Providers without the key set (i.e. all existing ones) keep validating.
+      const validationEnabled = providerConfig.webhook_validation !== false;
+
+      if (validationEnabled && (apiSecret || applicationId)) {
         const verified = verifyVonageWebhookJwt(request, {
           vonageApiSecret: apiSecret,
           vonageApplicationId: applicationId,
@@ -246,6 +254,35 @@ export function registerWebhookRouter(
               statusCode: 401,
             });
           }
+        }
+      }
+    }
+
+    // For 46elks providers, verify the request originates from an allowlisted
+    // 46elks IP address. 46elks does not sign its webhooks, so IP allowlisting
+    // (their documented recommendation) is the only origin check available.
+    // Requires `trustProxy` on the Fastify server so `request.ip` reflects the
+    // real client behind the reverse proxy / tunnel rather than the proxy hop.
+    if (entry.type === '46elks') {
+      const providerConfig = entry.config as Record<string, unknown>;
+
+      // On by default; only skip when explicitly disabled.
+      const validationEnabled = providerConfig.webhook_validation !== false;
+
+      if (validationEnabled) {
+        // An empty override list falls back to the documented 46elks defaults.
+        const allowlist = parseElks46IpAllowlist(providerConfig.webhook_ip_allowlist);
+        const allowed = verifyElks46WebhookOrigin(request.ip, allowlist);
+
+        if (!allowed) {
+          log.warn(
+            `Webhook origin verification failed for 46elks provider ${providerId} ` +
+            `(ip=${request.ip ?? 'unknown'}), endpoint: ${endpoint}`,
+          );
+          return reply.status(403).send({
+            error: 'Webhook origin not allowed',
+            statusCode: 403,
+          });
         }
       }
     }

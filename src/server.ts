@@ -101,6 +101,11 @@ function ackIncomingSmsIfSupported(provider: TelephonyProvider, messageId: strin
  */
 export async function buildServer(config: AppConfig): Promise<FastifyInstance> {
   const server = Fastify({
+    // Trust the reverse proxy (Caddy) / tunnel in front of the server so
+    // `request.ip` reflects the real client via `X-Forwarded-For` rather than
+    // the proxy's own address. This is required for 46elks webhook origin
+    // (IP allowlist) verification to work behind the standard deployment.
+    trustProxy: true,
     logger: {
       level: config.logLevel,
       transport:

@@ -19,6 +19,8 @@ export const vonageConfigSchema = z.object({
   private_key: z.string().min(1, 'private_key is required when private_key_path is not provided').optional(),
   private_key_path: z.string().trim().min(1, 'private_key_path is required when private_key is not provided').optional(),
   webhook_base_url: z.string().trim().url('webhook_base_url must be a valid URL').optional(),
+  // When false, incoming Vonage webhook signatures are not verified. Absent/true = validation on.
+  webhook_validation: z.boolean().optional(),
 }).refine(
   (data) => !!data.private_key || !!data.private_key_path,
   { message: 'Either private_key or private_key_path must be provided', path: ['private_key'] },
@@ -43,6 +45,13 @@ export const elks46ConfigSchema = z.object({
   api_password: z.string().trim().min(1, 'api_password is required'),
   webhook_base_url: z.string().trim().url('webhook_base_url must be a valid URL').optional(),
   websocket_number: z.string().trim().optional(),
+  // When false, incoming 46elks webhooks are not origin-verified against the
+  // IP allowlist. Absent/true = validation on.
+  webhook_validation: z.boolean().optional(),
+  // Optional override for the IP allowlist used to verify webhook origin. When
+  // absent or empty, the documented 46elks default IPs are used. Accepts a
+  // single string (comma/whitespace/newline separated) or an array of strings.
+  webhook_ip_allowlist: z.union([z.string(), z.array(z.string())]).optional(),
 });
 
 /**

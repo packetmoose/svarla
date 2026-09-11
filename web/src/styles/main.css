@@ -486,6 +486,15 @@ textarea {
   height: 8px;
 }
 
+/* Footer nav group (utility links like Download). On mobile it's just the tail
+   of the dropdown, set off from the view links by a thin divider. */
+.nav-divider {
+  display: block;
+  height: 1px;
+  margin: var(--md-space-sm) var(--md-space-md);
+  background: var(--md-outline-variant);
+}
+
 /* Theme toggle */
 .nav-header-actions {
   display: flex;
@@ -550,6 +559,10 @@ textarea {
     scrollbar-gutter: stable;
     padding: var(--md-space-md);
     background: var(--md-surface);
+    /* Column layout so the link list can grow and push the footer group
+       (Download) to the very bottom of the sidebar. */
+    display: flex;
+    flex-direction: column;
   }
 
   .nav-header {
@@ -581,11 +594,24 @@ textarea {
     border-bottom: none;
     box-shadow: none;
     padding: 0;
+    /* Fill the remaining sidebar height so margin-top:auto on the footer
+       divider can push the utility links to the bottom. */
+    flex: 1;
   }
 
   .nav-links a {
     margin: 0;
     padding: 0 var(--md-space-md);
+  }
+
+  /* Pin the utility group (divider + Download) to the bottom of the sidebar. */
+  .nav-footer {
+    margin-top: auto;
+  }
+
+  .nav-divider {
+    margin-left: 0;
+    margin-right: 0;
   }
 
   .main-content {
@@ -1166,6 +1192,41 @@ textarea {
   margin-bottom: var(--md-space-lg);
 }
 
+/* Warning variant of a form hint — used for the "webhook validation off" notice. */
+.form-warning {
+  color: var(--md-on-warning-container);
+  background: var(--md-warning-container);
+  border-radius: var(--md-radius-sm);
+  padding: var(--md-space-sm) var(--md-space-md);
+  font-weight: 500;
+}
+
+/* Inline checkbox + label row for boolean provider settings.
+   Mirrors the .block-inbound-toggle pattern so toggles look consistent.
+   The `.form-group` prefix raises specificity above `.form-group label`
+   (which is display:block) so the box and label share one row. */
+.form-group label.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-sm);
+  margin-bottom: 0;
+  cursor: pointer;
+  font-size: 0.8125rem;
+  color: var(--md-on-surface-variant);
+}
+
+.checkbox-field input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--md-primary);
+}
+
+.checkbox-field .toggle-label {
+  user-select: none;
+}
+
 .monospace {
   font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
   font-size: 0.8125rem;
@@ -1482,79 +1543,298 @@ textarea {
   max-width: 900px;
 }
 
-.dashboard h1 {
-  font-size: 2rem;
-  margin-bottom: var(--md-space-xs);
-}
-
-.dashboard-subtitle {
-  color: var(--md-on-surface-variant);
-  font-size: 0.9375rem;
+/* Lighter header: a modest title alongside the quick-action buttons, rather
+   than a large welcome hero. */
+.dashboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--md-space-md);
   margin-bottom: var(--md-space-xl);
 }
 
-.dashboard-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: var(--md-space-md);
+.dashboard-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 0;
 }
 
-@media (min-width: 480px) {
-  .dashboard-grid {
+.dashboard-quick-actions {
+  display: flex;
+  gap: var(--md-space-sm);
+  flex-wrap: wrap;
+}
+
+.dashboard-action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--md-space-xs);
+}
+
+.dashboard-action-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Two activity columns on wide screens, stacked on narrow ones. */
+.dashboard-sections {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--md-space-xl);
+}
+
+@media (min-width: 900px) {
+  .dashboard-sections {
     grid-template-columns: repeat(2, 1fr);
   }
 }
 
-@media (min-width: 1024px) {
-  .dashboard-grid {
-    grid-template-columns: repeat(3, 1fr);
-  }
+.dashboard-section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: var(--md-space-sm);
 }
 
-.dashboard-card {
+.dashboard-section-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--md-on-surface);
+  margin: 0;
+}
+
+.dashboard-view-all {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--md-primary);
+  text-decoration: none;
+}
+
+.dashboard-view-all:hover {
+  text-decoration: underline;
+}
+
+.dashboard-section-loading,
+.dashboard-section-empty {
+  color: var(--md-on-surface-variant);
+  font-size: 0.875rem;
+  padding: var(--md-space-md) 0;
+  margin: 0;
+}
+
+.dashboard-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--md-space-sm);
-  padding: var(--md-space-lg);
-  background: var(--md-surface);
-  border: 1px solid var(--md-outline-variant);
+  gap: 2px;
+}
+
+.dashboard-list-item {
+  list-style: none;
+}
+
+/* A single activity row — used as both a link (conversations) and a button
+   (calls). Shared shape so both lists read identically. */
+.dashboard-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-md);
+  width: 100%;
+  padding: var(--md-space-sm) var(--md-space-md);
   border-radius: var(--md-radius-md);
   text-decoration: none;
   color: var(--md-on-surface);
-  transition: box-shadow var(--md-motion-duration-short) var(--md-motion-ease),
-              border-color var(--md-motion-duration-short) var(--md-motion-ease),
-              transform var(--md-motion-duration-short) var(--md-motion-ease);
+  background: none;
+  border: none;
+  text-align: left;
   cursor: pointer;
+  transition: background var(--md-motion-duration-short) var(--md-motion-ease);
+}
+
+.dashboard-row:hover {
+  background: var(--md-surface-container);
+}
+
+.dashboard-row-button {
+  font: inherit;
   min-height: auto;
 }
 
-.dashboard-card:hover {
-  box-shadow: var(--md-elevation-2);
-  border-color: var(--md-primary-container);
-  transform: translateY(-2px);
-  background: var(--md-surface);
+.dashboard-row-button:hover {
+  background: var(--md-surface-container);
+  box-shadow: none;
 }
 
-.dashboard-card-icon {
-  font-size: 1.75rem;
-  width: 48px;
-  height: 48px;
-  display: flex;
+.dashboard-row:focus-visible {
+  outline: 2px solid var(--md-primary);
+  outline-offset: -2px;
+}
+
+.dashboard-row-icon {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--md-primary-container);
-  border-radius: var(--md-radius-md);
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--md-surface-variant);
+  color: var(--md-on-surface-variant);
 }
 
-.dashboard-card-title {
-  font-weight: 600;
-  font-size: 0.9375rem;
+.dashboard-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
-.dashboard-card-description {
+.dashboard-row-title {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--md-on-surface);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dashboard-row-subtitle {
   font-size: 0.8125rem;
   color: var(--md-on-surface-variant);
-  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dashboard-row-time {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  color: var(--md-on-surface-variant);
+  /* Right-align the time in a fixed slot so the trailing provider dot lines up
+     vertically across rows regardless of how long each time string is. */
+  min-width: 44px;
+  justify-content: flex-end;
+  text-align: right;
+}
+
+/* The trailing cluster (time, unread flag, provider dot) sits tight together on
+   the right, so pull the flag and dot in from the wider inter-element row gap. */
+.dashboard-row-flag,
+.dashboard-provider-dot {
+  margin-left: calc(-1 * var(--md-space-sm));
+}
+
+.dashboard-row-duration {
+  color: var(--md-on-surface-variant);
+}
+
+/* Fixed-width slot for the unread dot (or empty on calls) so the trailing
+   provider dot stays vertically aligned across every row. */
+.dashboard-row-flag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 10px;
+}
+
+/* Unread thread: bolder title and the shared primary dot. */
+.dashboard-row-unread .dashboard-row-title {
+  font-weight: 700;
+}
+
+.dashboard-row-unread .dashboard-row-subtitle {
+  color: var(--md-on-surface);
+}
+
+.dashboard-unread-dot {
+  width: 8px;
+  height: 8px;
+}
+
+/* Provider-number marker: a small colored dot matching the number's color,
+   pinned to the far-right of the row so the dots line up vertically. The
+   number details are surfaced through the row's own hover tooltip. Mirrors the
+   8px dots used on the Calls and Conversations rows. */
+.dashboard-provider-dot {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+/* No provider number: keep the column's width so rows with and without a dot
+   stay aligned. */
+.dashboard-provider-dot-empty {
+  background: none;
+}
+
+/* Custom hover/focus tooltip. Styled as a small surface panel (matching the
+   page's cards and overlays) rather than the browser's native title bubble, so
+   it carries the app's tokens: surface, outline, elevation, radius. Shown on
+   row hover or keyboard focus; positioned above the row and centered. */
+.dashboard-tooltip {
+  position: absolute;
+  bottom: calc(100% + var(--md-space-xs));
+  left: var(--md-space-md);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 200px;
+  max-width: 320px;
+  padding: var(--md-space-sm) var(--md-space-md);
+  background: var(--md-surface);
+  color: var(--md-on-surface);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-radius-md);
+  box-shadow: var(--md-elevation-3);
+  /* Hidden until the row is hovered/focused. Kept in the DOM (not display:none)
+     so the fade transition can run. */
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px);
+  transition: opacity var(--md-motion-duration-short) var(--md-motion-ease),
+              transform var(--md-motion-duration-short) var(--md-motion-ease),
+              visibility var(--md-motion-duration-short) var(--md-motion-ease);
+  pointer-events: none;
+}
+
+.dashboard-row:hover .dashboard-tooltip,
+.dashboard-row:focus-visible .dashboard-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.dashboard-tooltip-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--md-space-md);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.dashboard-tooltip-label {
+  flex-shrink: 0;
+  min-width: 68px;
+  color: var(--md-on-surface-variant);
+  font-weight: 500;
+}
+
+.dashboard-tooltip-value {
+  flex: 1;
+  min-width: 0;
+  color: var(--md-on-surface);
+  word-break: break-word;
 }
 
 /* ===== Numbers Page ===== */

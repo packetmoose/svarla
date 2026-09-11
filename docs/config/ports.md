@@ -37,6 +37,14 @@ Ports 5060, 5061, and 5062 are only required if you use a SIP-based provider (Vo
 - **9090** — MediaBridge ControlAPI (server ↔ mediabridge communication only)
 - **9091** — Audio WebSocket (proxied through Caddy on port 443)
 
+::: info
+Keep port 3000 behind the reverse proxy rather than exposing it directly. The
+server trusts the proxy's `X-Forwarded-For` header to determine the real client
+IP, which is what 46elks webhook source validation checks against. If the raw
+HTTP port were reachable directly, that source check could be bypassed by a
+forged header.
+:::
+
 ::: tip
 When using Caddy, port 443 handles both the server API and the 46elks audio WebSocket. Port 10443 uses DTLS encryption natively and doesn't need a reverse proxy.
 :::

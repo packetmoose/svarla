@@ -2,7 +2,7 @@ import { h } from "preact";
 import type { VNode } from "preact";
 import { useState, useEffect } from "preact/hooks";
 import { navigate } from "../router";
-import { homeIcon, chatIcon, callIcon, settingsIcon } from "./icons";
+import { homeIcon, chatIcon, callIcon, settingsIcon, downloadIcon } from "./icons";
 import { api } from "../api";
 import { getWebSocket, initWebSocket } from "../ws";
 import {
@@ -27,6 +27,16 @@ const navItems: NavItem[] = [
   { label: "Conversations", path: "/conversations", icon: chatIcon() },
   { label: "Calls", path: "/call-history", icon: callIcon() },
   { label: "Settings", path: "/settings", icon: settingsIcon() },
+];
+
+/**
+ * Utility links that aren't primary views. These sit in a separate group pinned
+ * to the bottom of the nav (on desktop) and after a divider on mobile, so
+ * one-off actions like downloading the Android app don't compete with the main
+ * view links you use every session.
+ */
+const footerNavItems: NavItem[] = [
+  { label: "Download App", path: "/download", icon: downloadIcon() },
 ];
 
 function getCurrentPath(): string {
@@ -179,6 +189,29 @@ export function Nav() {
             </li>
           );
         })}
+
+        {/* Utility links live in their own group, pinned to the bottom on
+            desktop and set off by a divider on mobile, so they don't sit
+            alongside the everyday view links. */}
+        <li role="none" class="nav-footer" aria-hidden="true">
+          <span class="nav-divider" />
+        </li>
+        {footerNavItems.map((item) => (
+          <li key={item.path} role="none" class="nav-footer-link">
+            <a
+              href={`#${item.path}`}
+              role="menuitem"
+              class={activePath === item.path ? "active" : ""}
+              onClick={(e) => {
+                e.preventDefault();
+                handleNavClick(item.path);
+              }}
+            >
+              <span class="nav-icon">{item.icon}</span>
+              {item.label}
+            </a>
+          </li>
+        ))}
       </ul>
     </nav>
   );
