@@ -15,6 +15,12 @@ export type ProviderConfigValidationResult =
 export const vonageConfigSchema = z.object({
   api_key: z.string().trim().min(1, 'api_key is required'),
   api_secret: z.string().trim().min(1, 'api_secret is required'),
+  // Vonage signs inbound webhooks (HS256) with the account "signature secret",
+  // which is a DIFFERENT value from api_secret (the API secret used to
+  // authenticate outbound API calls). Both live in the Vonage dashboard. When
+  // set, this secret is used to verify inbound webhook signatures; when absent,
+  // verification falls back to api_secret for backward compatibility.
+  signature_secret: z.string().trim().min(1).optional(),
   application_id: z.string().trim().uuid('application_id must be a valid UUID'),
   private_key: z.string().min(1, 'private_key is required when private_key_path is not provided').optional(),
   private_key_path: z.string().trim().min(1, 'private_key_path is required when private_key is not provided').optional(),

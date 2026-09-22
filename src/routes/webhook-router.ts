@@ -11,7 +11,7 @@ import type { WebSocketBroadcaster } from '../websocket/broadcaster.js';
 import type { CallOrchestrator } from '../services/call-orchestrator.js';
 import type { NotificationService } from '../services/notification-service.js';
 import {
-  verifyVonageWebhookJwt,
+  verifyVonageWebhookJwtDetailed,
   verifyElks46WebhookOrigin,
   parseElks46IpAllowlist,
 } from '../middleware/webhook-auth-middleware.js';
@@ -231,27 +231,47 @@ export function registerWebhookRouter(
     // the provider's own API secret and application ID from its config.
     if (entry.type === 'vonage') {
       const providerConfig = entry.config as Record<string, unknown>;
-      const apiSecret = (providerConfig.api_secret as string) ?? '';
       const applicationId = (providerConfig.application_id as string) ?? '';
+
+      // Vonage signs inbound webhooks with the account "signature secret",
+      // which is DIFFERENT from api_secret (the API secret used for outbound
+      // API auth). Prefer signature_secret; fall back to api_secret only for
+      // backward compatibility with configs created before signature_secret
+      // existed. Verifying with the wrong secret makes every check fail.
+      const signingSecret =
+        (providerConfig.signature_secret as string) ||
+        (providerConfig.api_secret as string) ||
+        '';
 
       // Webhook validation is on by default; only skip when explicitly disabled.
       const validationEnabled = providerConfig.webhook_validation !== false;
 
-      // Real verification requires the signature secret — it's the only value
+      // Real verification requires the signing secret — it's the only value
       // that lets us cryptographically confirm the request came from Vonage.
       // `application_id` alone is a public identifier and cannot authenticate a
       // request, so it does not enable enforcement on its own.
-      if (validationEnabled && apiSecret) {
-        const verified = verifyVonageWebhookJwt(request, {
-          vonageApiSecret: apiSecret,
+      if (validationEnabled && signingSecret) {
+        const result = verifyVonageWebhookJwtDetailed(request, {
+          vonageApiSecret: signingSecret,
           vonageApplicationId: applicationId,
         });
 
-        if (!verified) {
+        if (!result.ok) {
           // Vonage GET requests (answer webhook) often don't carry a JWT,
           // so only enforce on POST/PUT requests that should be signed.
           if (request.method !== 'GET') {
-            log.warn(`Webhook signature verification failed for provider ${providerId}, endpoint: ${endpoint}`);
+            log.warn(
+              {
+                providerId,
+                endpoint,
+                reason: result.reason,
+                tokenAlg: result.alg,
+                tokenApiKey: result.tokenApiKey,
+                hasAppIdClaim: result.hasAppIdClaim,
+                usingSecret: providerConfig.signature_secret ? 'signature_secret' : 'api_secret',
+              },
+              'Vonage webhook signature verification failed',
+            );
             return reply.status(401).send({
               error: 'Webhook signature verification failed',
               statusCode: 401,
@@ -259,14 +279,14 @@ export function registerWebhookRouter(
           }
         }
       } else if (validationEnabled && applicationId) {
-        // Validation is requested but no signature secret is configured, so
+        // Validation is requested but no signing secret is configured, so
         // webhooks cannot be cryptographically verified. Warn loudly rather
-        // than silently accepting unverifiable traffic — the operator should
-        // set a signature secret to enable enforcement.
+        // than silently accepting unverifiable traffic.
         log.warn(
           `Vonage provider ${providerId} has webhook validation enabled but no ` +
-          `api_secret configured; webhook signatures cannot be verified. ` +
-          `Set the provider's signature secret to enforce verification.`,
+          `signature_secret (or api_secret) configured; webhook signatures ` +
+          `cannot be verified. Set the provider's signature secret (Dashboard ` +
+          `> Settings) to enforce verification.`,
         );
       }
     }

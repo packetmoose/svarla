@@ -90,7 +90,7 @@ function providerStatusFields(p: ProviderRegistryEntry): {
  * These fields are masked when returning provider details.
  */
 const SECRET_FIELDS: Record<string, string[]> = {
-  vonage: ['api_secret', 'private_key', 'private_key_path'],
+  vonage: ['api_secret', 'signature_secret', 'private_key', 'private_key_path'],
   '46elks': ['api_password'],
   dummy: [],
   'modem-gateway': [],

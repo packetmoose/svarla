@@ -80,6 +80,14 @@ const CONFIG_FIELDS: Record<string, ConfigFieldDef[]> = {
   vonage: [
     { name: "api_key", label: "API Key", type: "text", required: true },
     { name: "api_secret", label: "API Secret", type: "password", required: true },
+    {
+      name: "signature_secret",
+      label: "Signature Secret",
+      type: "password",
+      required: false,
+      hint:
+        "Vonage account-level signature secret used to verify inbound webhook signatures. This is different from the API Secret and is found under Dashboard > Settings (not the Application). Leave empty to fall back to the API Secret.",
+    },
     { name: "application_id", label: "Application ID", type: "text", required: true },
     { name: "private_key", label: "Private Key (PEM)", type: "textarea", required: true },
     {
@@ -185,6 +193,7 @@ function webhookEndpointLabel(url: string): string {
 const CONFIG_KEY_LABELS: Record<string, string> = {
   api_key: "API Key",
   api_secret: "API Secret",
+  signature_secret: "Signature Secret",
   application_id: "Application ID",
   private_key: "Private Key",
   private_key_path: "Private Key Path",

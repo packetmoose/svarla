@@ -24,7 +24,7 @@ export function maskSecret(value: string): string {
  * Map of provider type to the set of field names considered secret.
  */
 export const SECRET_FIELDS: Record<string, Set<string>> = {
-  vonage: new Set(['api_secret', 'private_key', 'private_key_path']),
+  vonage: new Set(['api_secret', 'signature_secret', 'private_key', 'private_key_path']),
   dummy: new Set(),
 };
 
