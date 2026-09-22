@@ -13,6 +13,13 @@ type RTPWriter interface {
 	WriteRTP(pkt *rtp.Packet) error
 }
 
+// RTPWriterFunc adapts a function to the RTPWriter interface.
+type RTPWriterFunc func(pkt *rtp.Packet) error
+
+func (f RTPWriterFunc) WriteRTP(pkt *rtp.Packet) error {
+	return f(pkt)
+}
+
 // PCMWriter is an interface for sending raw PCM bytes to a WebSocket provider.
 type PCMWriter interface {
 	WritePCM(sessionID string, data []byte) error

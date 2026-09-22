@@ -25,6 +25,9 @@ IMAGE_TAG="${IMAGE_TAG:-dev}"
 REGISTRY="${REGISTRY:-}"
 PUSH="${PUSH:-false}"
 PLATFORM="${PLATFORM:-}"
+# Docker invocation. Override with DOCKER="sudo docker" on hosts where the
+# docker daemon requires root.
+DOCKER="${DOCKER:-docker}"
 
 # Build the full image reference
 if [ -n "$REGISTRY" ]; then
@@ -41,7 +44,7 @@ echo ""
 cd "$REPO_ROOT/mediabridge"
 
 # Build command
-DOCKER_CMD="docker build"
+DOCKER_CMD="$DOCKER build"
 DOCKER_ARGS="-t $FULL_IMAGE -f Dockerfile ."
 
 if [ -n "$PLATFORM" ]; then
@@ -49,7 +52,7 @@ if [ -n "$PLATFORM" ]; then
 fi
 
 if [ "$PUSH" = "true" ]; then
-    DOCKER_CMD="docker buildx build"
+    DOCKER_CMD="$DOCKER buildx build"
     DOCKER_ARGS="--push $DOCKER_ARGS"
 
     # Also tag as latest if this looks like a version tag

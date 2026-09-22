@@ -31,9 +31,18 @@ async function request<T>(
   path: string,
   body?: unknown
 ): Promise<ApiResponse<T> | ApiError> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-  };
+  const headers: Record<string, string> = {};
+
+  // Only advertise a JSON body when there actually is one. Sending
+  // `Content-Type: application/json` on a bodyless request (e.g. the bodyless
+  // POSTs used by decline/hangup/answer) makes Fastify's content-type parser
+  // reject it with FST_ERR_CTP_EMPTY_JSON_BODY (400) before the route runs —
+  // which previously caused declines to silently fail server-side, leaving the
+  // call ringing on other devices.
+  const hasBody = body !== undefined;
+  if (hasBody) {
+    headers["Content-Type"] = "application/json";
+  }
 
   const token = getSessionToken();
   if (token) {
@@ -43,13 +52,27 @@ async function request<T>(
   const res = await fetch(path, {
     method,
     headers,
-    body: body !== undefined ? JSON.stringify(body) : undefined,
+    body: hasBody ? JSON.stringify(body) : undefined,
   });
 
-  // Handle 401 by dispatching session-expired event
-  if (res.status === 401 && path !== '/api/auth/login') {
-    clearSession();
-    window.dispatchEvent(new Event("session-expired"));
+  // Handle 401 by clearing the session and signalling session-expiry.
+  //
+  // The auth endpoints are exempt: a 401 from /api/auth/login is a wrong
+  // password (handled by the login form), and a 401 from /api/auth/logout means
+  // the session was already gone — treating it as a fresh expiry would re-fire
+  // logout, which 401s again, spinning an infinite loop.
+  //
+  // We also only dispatch when a token is actually present. `clearSession()`
+  // removes it, so the first 401 tears down the session and any concurrent or
+  // subsequent 401s (e.g. the ws-triggered device reconcile) find no token and
+  // stay quiet. A later successful login re-adds the token and re-arms this.
+  const isAuthEndpoint =
+    path === "/api/auth/login" || path === "/api/auth/logout";
+  if (res.status === 401 && !isAuthEndpoint) {
+    if (getSessionToken()) {
+      clearSession();
+      window.dispatchEvent(new Event("session-expired"));
+    }
     return {
       ok: false,
       status: 401,

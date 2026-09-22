@@ -27,7 +27,16 @@ const (
 	ProviderLegSIP       ProviderLegType = "sip"
 	ProviderLegWebSocket ProviderLegType = "websocket"
 	ProviderLegPending   ProviderLegType = "pending"
+	// ProviderLegEcho is a test-only provider leg that loops the client's own
+	// audio back after a delay. It has no external provider connection; the
+	// media session starts as soon as the WebRTC client connects. Used by the
+	// dummy provider to exercise the full call + media path without a carrier.
+	ProviderLegEcho ProviderLegType = "echo"
 )
+
+// DefaultEchoDelayMs is the loopback delay applied to echo provider legs when
+// no explicit delay is configured.
+const DefaultEchoDelayMs = 1500
 
 // ProviderLeg describes the provider-side audio connection.
 type ProviderLeg struct {
@@ -47,6 +56,9 @@ type AudioTapConfig struct {
 type Options struct {
 	Ringback bool            `json:"ringback"`
 	AudioTap *AudioTapConfig `json:"audioTap,omitempty"`
+	// EchoDelayMs is the loopback delay (in milliseconds) for echo provider
+	// legs. Ignored for non-echo legs. Zero means DefaultEchoDelayMs.
+	EchoDelayMs int `json:"echoDelayMs,omitempty"`
 }
 
 // ProviderRTPInfo holds the provider's RTP endpoint info from the SIP INVITE.
@@ -127,6 +139,18 @@ func (s *Session) GetProviderLegType() ProviderLegType {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.ProviderLeg.Type
+}
+
+// EchoDelay returns the effective loopback delay for an echo provider leg,
+// falling back to DefaultEchoDelayMs when none is configured.
+func (s *Session) EchoDelay() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	ms := s.Options.EchoDelayMs
+	if ms <= 0 {
+		ms = DefaultEchoDelayMs
+	}
+	return time.Duration(ms) * time.Millisecond
 }
 
 // SetRingback updates the ringback option.

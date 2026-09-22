@@ -23,7 +23,7 @@ const ENCRYPTED_PREFIX = 'enc:v1:';
  * Only these fields will be encrypted/decrypted.
  */
 const SENSITIVE_FIELDS: Record<string, string[]> = {
-  vonage: ['api_secret', 'private_key'],
+  vonage: ['api_secret', 'signature_secret', 'private_key'],
   '46elks': ['api_password'],
   dummy: [],
   'modem-gateway': [],

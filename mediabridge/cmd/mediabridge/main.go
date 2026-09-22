@@ -553,6 +553,200 @@ func main() {
 		eventServer.EmitSessionEvent(sessionID, "bridging_active", "")
 	}
 
+	// echoRingDuration is the simulated "ringing" period for an outbound echo
+	// (dummy provider) call before the loopback bridge goes active. Fixed value
+	// so the flow mirrors a real call answer without extra configuration.
+	const echoRingDuration = 2 * time.Second
+
+	// tryStartEchoMediaSession starts a delayed-loopback media session for the
+	// echo provider leg (dummy provider). Unlike SIP/WS paths there is no
+	// external provider connection — the client's own audio is looped back after
+	// the session's echo delay. For sessions with ringback enabled (outbound
+	// dummy calls) a ringback tone is played to the caller for echoRingDuration
+	// before bridging goes active, mirroring a real "ringing → answered" flow.
+	tryStartEchoMediaSession := func(sessionID string) {
+		sess := store.Get(sessionID)
+		if sess == nil || !sess.ClientConnected {
+			logger.Info("echo start skipped — session missing or client not connected",
+				slog.String("sessionId", sessionID),
+				slog.Bool("sessionExists", sess != nil),
+				slog.Bool("clientConnected", sess != nil && sess.ClientConnected),
+			)
+			return
+		}
+		logger.Info("echo start requested",
+			slog.String("sessionId", sessionID),
+			slog.Bool("ringback", sess.Options.Ringback),
+		)
+
+		// Reserve the media session slot to prevent double creation.
+		mediaSessions.mu.Lock()
+		if _, exists := mediaSessions.sessions[sessionID]; exists {
+			mediaSessions.mu.Unlock()
+			return
+		}
+		mediaSessions.sessions[sessionID] = nil
+		mediaSessions.mu.Unlock()
+
+		peerSession, ok := webrtcEngine.GetSession(sessionID)
+		if !ok {
+			logger.Warn("peer session not found for echo media session start",
+				slog.String("sessionId", sessionID))
+			mediaSessions.mu.Lock()
+			delete(mediaSessions.sessions, sessionID)
+			mediaSessions.mu.Unlock()
+			return
+		}
+
+		playRingback := sess.Options.Ringback
+
+		// startBridge wires the echo bridge and marks the call active. Called
+		// after the simulated ring period (or immediately when no ringback).
+		startBridge := func() {
+			ringbackSenders.stopRingback(sessionID)
+
+			ms, err := mediasession.New(mediasession.Config{
+				SessionID:      sessionID,
+				SIPCodec:       "PCMU",
+				SIPClockRate:   8000,
+				SIPPayloadType: 0,
+				RemoteIP:       "127.0.0.1", // unused for echo
+				RemotePort:     0,           // unused for echo
+				RTPListener:    rtpListener,
+				Logger:         logger,
+				EchoDelay:      sess.EchoDelay(),
+			})
+			if err != nil {
+				logger.Error("failed to create echo media session",
+					slog.String("sessionId", sessionID),
+					slog.String("error", err.Error()),
+				)
+				mediaSessions.mu.Lock()
+				delete(mediaSessions.sessions, sessionID)
+				mediaSessions.mu.Unlock()
+				return
+			}
+
+			// Wire the WebRTC local audio track (bridge → client).
+			ms.SetLocalTrack(peerSession.AudioTrack())
+
+			// Wire Bridge → WebRTC output. The echo playout loop writes here.
+			ms.Bridge().SetWebRTCWriter(bridge.RTPWriterFunc(func(pkt *rtp.Packet) error {
+				track := peerSession.AudioTrack()
+				if track != nil {
+					return track.WriteRTP(pkt)
+				}
+				return nil
+			}))
+
+			// Start the bridge (starts the delayed-loopback playout loop).
+			ms.Bridge().Start()
+
+			// Wire the WebRTC OnTrack handler (client → echo queue).
+			peerSession.SetOnTrackHandler(func(track *webrtcPkg.TrackRemote, receiver *webrtcPkg.RTPReceiver) {
+				logger.Info("wiring client audio track to echo bridge",
+					slog.String("sessionId", sessionID),
+					slog.String("codec", track.Codec().MimeType),
+				)
+				go func() {
+					buf := make([]byte, 1500)
+					for {
+						n, _, readErr := track.Read(buf)
+						if readErr != nil {
+							return
+						}
+						pkt := &rtp.Packet{}
+						if err := pkt.Unmarshal(buf[:n]); err != nil {
+							continue
+						}
+						ms.Bridge().HandleClientRTP(pkt)
+					}
+				}()
+			})
+
+			mediaSessions.mu.Lock()
+			mediaSessions.sessions[sessionID] = ms
+			mediaSessions.mu.Unlock()
+
+			sess.SetProviderRTP(&session.ProviderRTPInfo{
+				RemoteIP:       "127.0.0.1",
+				RemotePort:     0,
+				Codec:          "PCMU",
+				CodecClockRate: 8000,
+				PayloadType:    0,
+			})
+			sess.SetStatus(session.StatusActive)
+
+			logger.Info("echo media session started — delayed loopback active",
+				slog.String("sessionId", sessionID),
+				slog.Duration("echoDelay", sess.EchoDelay()),
+			)
+
+			eventServer.EmitSessionEvent(sessionID, "provider_connected", "")
+			eventServer.EmitSessionEvent(sessionID, "bridging_active", "")
+		}
+
+		if playRingback {
+			// Play ringback to the WebRTC caller, then bridge after the ring period.
+			track := peerSession.AudioTrack()
+			var seqNum uint16
+			var timestamp uint32
+			sender := ringback.NewSender(ringback.SenderConfig{
+				Cadence:     ringback.CadenceType(cfg.Audio.RingbackCadence),
+				SessionID:   sessionID,
+				PayloadType: 0,
+				SSRC:        0x87654321,
+				Writer: ringback.RTPWriterFunc(func(pkt *rtp.Packet) error {
+					if track == nil {
+						return nil
+					}
+					// Re-stamp with the WebRTC output SSRC/seq so the browser
+					// accepts the packets as part of the same stream.
+					seqNum++
+					timestamp += uint32(len(pkt.Payload))
+					out := &rtp.Packet{
+						Header: rtp.Header{
+							Version:        2,
+							PayloadType:    0, // PCMU
+							SequenceNumber: seqNum,
+							Timestamp:      timestamp,
+							SSRC:           0x87654321,
+						},
+						Payload: pkt.Payload,
+					}
+					return track.WriteRTP(out)
+				}),
+				Logger: logger,
+			})
+
+			ringbackSenders.mu.Lock()
+			ringbackSenders.senders[sessionID] = sender
+			ringbackSenders.mu.Unlock()
+
+			sender.Start()
+			logger.Info("ringback tone started for echo (dummy) caller",
+				slog.String("sessionId", sessionID),
+				slog.String("cadence", cfg.Audio.RingbackCadence),
+			)
+
+			// After the simulated ring period, start the loopback bridge.
+			timer := time.NewTimer(echoRingDuration)
+			go func() {
+				select {
+				case <-timer.C:
+					// Only proceed if the session still exists (not torn down).
+					if store.Get(sessionID) != nil {
+						startBridge()
+					} else {
+						ringbackSenders.stopRingback(sessionID)
+					}
+				}
+			}()
+		} else {
+			startBridge()
+		}
+	}
+
 	// Now that tryStartWsMediaSession is defined, wire the onConnect callback.
 	audioWsHandler.SetOnConnect(func(sessionID string) {
 		sess := store.Get(sessionID)
@@ -676,6 +870,11 @@ func main() {
 			if sess != nil {
 				sess.SetClientConnected(true)
 			}
+			// Echo (dummy provider) leg: no external provider connects, so start
+			// the delayed-loopback media session as soon as the client is up.
+			if sess != nil && sess.GetProviderLegType() == session.ProviderLegEcho {
+				tryStartEchoMediaSession(event.SessionID)
+			}
 			// Try to start media session if both legs are ready (SIP path).
 			tryStartMediaSession(event.SessionID)
 			// Also try WS media session if audio WS provider is connected.
@@ -684,6 +883,10 @@ func main() {
 			}
 
 		case webrtc.EventClientDisconnected:
+			logger.Info("client disconnected — stopping media session",
+				slog.String("sessionId", event.SessionID),
+				slog.String("reason", event.Reason),
+			)
 			stopMediaSession(event.SessionID)
 		}
 	})

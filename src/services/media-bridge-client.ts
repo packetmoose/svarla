@@ -12,7 +12,10 @@
 export type ProviderLegConfig =
   | { type: 'sip'; uri: string }
   | { type: 'websocket'; url?: string; protocol?: string; expectedCallId?: string }
-  | { type: 'pending' };
+  | { type: 'pending' }
+  // Test-only leg used by the dummy provider: MediaBridge loops the client's
+  // own audio back after a delay, with no external provider connection.
+  | { type: 'echo' };
 
 export interface AudioTapConfig {
   enabled: boolean;
@@ -25,6 +28,8 @@ export interface SessionConfig {
   options?: {
     ringback?: boolean;
     audioTap?: AudioTapConfig;
+    /** Loopback delay (ms) for echo provider legs. Ignored otherwise. */
+    echoDelayMs?: number;
   };
 }
 

@@ -10,7 +10,11 @@ import type { NumberManagementService } from '../services/number-management-serv
 import type { WebSocketBroadcaster } from '../websocket/broadcaster.js';
 import type { CallOrchestrator } from '../services/call-orchestrator.js';
 import type { NotificationService } from '../services/notification-service.js';
-import { verifyVonageWebhookJwt } from '../middleware/webhook-auth-middleware.js';
+import {
+  verifyVonageWebhookJwtDetailed,
+  verifyElks46WebhookOrigin,
+  parseElks46IpAllowlist,
+} from '../middleware/webhook-auth-middleware.js';
 import { buildOutboundCallNcco } from '../providers/ncco-builder.js';
 import type { NccoAction } from '../providers/ncco-builder.js';
 
@@ -226,26 +230,92 @@ export function registerWebhookRouter(
     // For Vonage providers, verify the JWT in the Authorization header against
     // the provider's own API secret and application ID from its config.
     if (entry.type === 'vonage') {
-      const providerConfig = entry.config as Record<string, string>;
-      const apiSecret = providerConfig.api_secret ?? '';
-      const applicationId = providerConfig.application_id ?? '';
+      const providerConfig = entry.config as Record<string, unknown>;
+      const applicationId = (providerConfig.application_id as string) ?? '';
 
-      if (apiSecret || applicationId) {
-        const verified = verifyVonageWebhookJwt(request, {
-          vonageApiSecret: apiSecret,
+      // Vonage signs inbound webhooks with the account "signature secret",
+      // which is DIFFERENT from api_secret (the API secret used for outbound
+      // API auth). Prefer signature_secret; fall back to api_secret only for
+      // backward compatibility with configs created before signature_secret
+      // existed. Verifying with the wrong secret makes every check fail.
+      const signingSecret =
+        (providerConfig.signature_secret as string) ||
+        (providerConfig.api_secret as string) ||
+        '';
+
+      // Webhook validation is on by default; only skip when explicitly disabled.
+      const validationEnabled = providerConfig.webhook_validation !== false;
+
+      // Real verification requires the signing secret — it's the only value
+      // that lets us cryptographically confirm the request came from Vonage.
+      // `application_id` alone is a public identifier and cannot authenticate a
+      // request, so it does not enable enforcement on its own.
+      if (validationEnabled && signingSecret) {
+        const result = verifyVonageWebhookJwtDetailed(request, {
+          vonageApiSecret: signingSecret,
           vonageApplicationId: applicationId,
         });
 
-        if (!verified) {
+        if (!result.ok) {
           // Vonage GET requests (answer webhook) often don't carry a JWT,
           // so only enforce on POST/PUT requests that should be signed.
           if (request.method !== 'GET') {
-            log.warn(`Webhook signature verification failed for provider ${providerId}, endpoint: ${endpoint}`);
+            log.warn(
+              {
+                providerId,
+                endpoint,
+                reason: result.reason,
+                tokenAlg: result.alg,
+                tokenApiKey: result.tokenApiKey,
+                hasAppIdClaim: result.hasAppIdClaim,
+                usingSecret: providerConfig.signature_secret ? 'signature_secret' : 'api_secret',
+              },
+              'Vonage webhook signature verification failed',
+            );
             return reply.status(401).send({
               error: 'Webhook signature verification failed',
               statusCode: 401,
             });
           }
+        }
+      } else if (validationEnabled && applicationId) {
+        // Validation is requested but no signing secret is configured, so
+        // webhooks cannot be cryptographically verified. Warn loudly rather
+        // than silently accepting unverifiable traffic.
+        log.warn(
+          `Vonage provider ${providerId} has webhook validation enabled but no ` +
+          `signature_secret (or api_secret) configured; webhook signatures ` +
+          `cannot be verified. Set the provider's signature secret (Dashboard ` +
+          `> Settings) to enforce verification.`,
+        );
+      }
+    }
+
+    // For 46elks providers, verify the request originates from an allowlisted
+    // 46elks IP address. 46elks does not sign its webhooks, so IP allowlisting
+    // (their documented recommendation) is the only origin check available.
+    // Requires `trustProxy` on the Fastify server so `request.ip` reflects the
+    // real client behind the reverse proxy / tunnel rather than the proxy hop.
+    if (entry.type === '46elks') {
+      const providerConfig = entry.config as Record<string, unknown>;
+
+      // On by default; only skip when explicitly disabled.
+      const validationEnabled = providerConfig.webhook_validation !== false;
+
+      if (validationEnabled) {
+        // An empty override list falls back to the documented 46elks defaults.
+        const allowlist = parseElks46IpAllowlist(providerConfig.webhook_ip_allowlist);
+        const allowed = verifyElks46WebhookOrigin(request.ip, allowlist);
+
+        if (!allowed) {
+          log.warn(
+            `Webhook origin verification failed for 46elks provider ${providerId} ` +
+            `(ip=${request.ip ?? 'unknown'}), endpoint: ${endpoint}`,
+          );
+          return reply.status(403).send({
+            error: 'Webhook origin not allowed',
+            statusCode: 403,
+          });
         }
       }
     }

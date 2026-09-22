@@ -477,6 +477,24 @@ textarea {
   flex-shrink: 0;
 }
 
+/* Unread indicator on the Conversations nav item. Reuses the primary-colored
+   dot from the conversation list (.conversation-unread-dot) and pushes it to
+   the trailing edge of the nav link. */
+.nav-unread-dot {
+  margin-left: auto;
+  width: 8px;
+  height: 8px;
+}
+
+/* Footer nav group (utility links like Download). On mobile it's just the tail
+   of the dropdown, set off from the view links by a thin divider. */
+.nav-divider {
+  display: block;
+  height: 1px;
+  margin: var(--md-space-sm) var(--md-space-md);
+  background: var(--md-outline-variant);
+}
+
 /* Theme toggle */
 .nav-header-actions {
   display: flex;
@@ -538,8 +556,13 @@ textarea {
     min-height: 100vh;
     max-height: 100vh;
     overflow-y: auto;
+    scrollbar-gutter: stable;
     padding: var(--md-space-md);
     background: var(--md-surface);
+    /* Column layout so the link list can grow and push the footer group
+       (Download) to the very bottom of the sidebar. */
+    display: flex;
+    flex-direction: column;
   }
 
   .nav-header {
@@ -571,11 +594,24 @@ textarea {
     border-bottom: none;
     box-shadow: none;
     padding: 0;
+    /* Fill the remaining sidebar height so margin-top:auto on the footer
+       divider can push the utility links to the bottom. */
+    flex: 1;
   }
 
   .nav-links a {
     margin: 0;
     padding: 0 var(--md-space-md);
+  }
+
+  /* Pin the utility group (divider + Download) to the bottom of the sidebar. */
+  .nav-footer {
+    margin-top: auto;
+  }
+
+  .nav-divider {
+    margin-left: 0;
+    margin-right: 0;
   }
 
   .main-content {
@@ -584,6 +620,10 @@ textarea {
     max-width: calc(100% - var(--nav-width));
     overflow-y: auto;
     max-height: 100vh;
+    /* Reserve a real gutter for the scrollbar so the custom bar occupies layout
+       space and is hit-testable/draggable, rather than drawing as a
+       pass-through overlay on top of the content. */
+    scrollbar-gutter: stable;
   }
 }
 
@@ -1152,6 +1192,41 @@ textarea {
   margin-bottom: var(--md-space-lg);
 }
 
+/* Warning variant of a form hint — used for the "webhook validation off" notice. */
+.form-warning {
+  color: var(--md-on-warning-container);
+  background: var(--md-warning-container);
+  border-radius: var(--md-radius-sm);
+  padding: var(--md-space-sm) var(--md-space-md);
+  font-weight: 500;
+}
+
+/* Inline checkbox + label row for boolean provider settings.
+   Mirrors the .block-inbound-toggle pattern so toggles look consistent.
+   The `.form-group` prefix raises specificity above `.form-group label`
+   (which is display:block) so the box and label share one row. */
+.form-group label.checkbox-field {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-sm);
+  margin-bottom: 0;
+  cursor: pointer;
+  font-size: 0.8125rem;
+  color: var(--md-on-surface-variant);
+}
+
+.checkbox-field input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--md-primary);
+}
+
+.checkbox-field .toggle-label {
+  user-select: none;
+}
+
 .monospace {
   font-family: 'JetBrains Mono', 'Fira Code', 'SF Mono', monospace;
   font-size: 0.8125rem;
@@ -1303,6 +1378,24 @@ textarea {
   border-top: 1px solid var(--md-outline-variant);
 }
 
+/* ===== Dummy provider testing ===== */
+
+.dummy-testing .dummy-test-form {
+  margin-top: var(--md-space-md);
+  padding: var(--md-space-md);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-radius-sm, 8px);
+}
+
+.dummy-testing .dummy-test-form h5 {
+  margin: 0 0 var(--md-space-sm);
+}
+
+.dummy-testing textarea {
+  width: 100%;
+  resize: vertical;
+}
+
 /* ===== Modem Status ===== */
 
 .modem-status-section {
@@ -1450,79 +1543,298 @@ textarea {
   max-width: 900px;
 }
 
-.dashboard h1 {
-  font-size: 2rem;
-  margin-bottom: var(--md-space-xs);
-}
-
-.dashboard-subtitle {
-  color: var(--md-on-surface-variant);
-  font-size: 0.9375rem;
+/* Lighter header: a modest title alongside the quick-action buttons, rather
+   than a large welcome hero. */
+.dashboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--md-space-md);
   margin-bottom: var(--md-space-xl);
 }
 
-.dashboard-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: var(--md-space-md);
+.dashboard-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin: 0;
 }
 
-@media (min-width: 480px) {
-  .dashboard-grid {
+.dashboard-quick-actions {
+  display: flex;
+  gap: var(--md-space-sm);
+  flex-wrap: wrap;
+}
+
+.dashboard-action {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--md-space-xs);
+}
+
+.dashboard-action-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Two activity columns on wide screens, stacked on narrow ones. */
+.dashboard-sections {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--md-space-xl);
+}
+
+@media (min-width: 900px) {
+  .dashboard-sections {
     grid-template-columns: repeat(2, 1fr);
   }
 }
 
-@media (min-width: 1024px) {
-  .dashboard-grid {
-    grid-template-columns: repeat(3, 1fr);
-  }
+.dashboard-section-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: var(--md-space-sm);
 }
 
-.dashboard-card {
+.dashboard-section-title {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--md-on-surface);
+  margin: 0;
+}
+
+.dashboard-view-all {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--md-primary);
+  text-decoration: none;
+}
+
+.dashboard-view-all:hover {
+  text-decoration: underline;
+}
+
+.dashboard-section-loading,
+.dashboard-section-empty {
+  color: var(--md-on-surface-variant);
+  font-size: 0.875rem;
+  padding: var(--md-space-md) 0;
+  margin: 0;
+}
+
+.dashboard-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: var(--md-space-sm);
-  padding: var(--md-space-lg);
-  background: var(--md-surface);
-  border: 1px solid var(--md-outline-variant);
+  gap: 2px;
+}
+
+.dashboard-list-item {
+  list-style: none;
+}
+
+/* A single activity row — used as both a link (conversations) and a button
+   (calls). Shared shape so both lists read identically. */
+.dashboard-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-md);
+  width: 100%;
+  padding: var(--md-space-sm) var(--md-space-md);
   border-radius: var(--md-radius-md);
   text-decoration: none;
   color: var(--md-on-surface);
-  transition: box-shadow var(--md-motion-duration-short) var(--md-motion-ease),
-              border-color var(--md-motion-duration-short) var(--md-motion-ease),
-              transform var(--md-motion-duration-short) var(--md-motion-ease);
+  background: none;
+  border: none;
+  text-align: left;
   cursor: pointer;
+  transition: background var(--md-motion-duration-short) var(--md-motion-ease);
+}
+
+.dashboard-row:hover {
+  background: var(--md-surface-container);
+}
+
+.dashboard-row-button {
+  font: inherit;
   min-height: auto;
 }
 
-.dashboard-card:hover {
-  box-shadow: var(--md-elevation-2);
-  border-color: var(--md-primary-container);
-  transform: translateY(-2px);
-  background: var(--md-surface);
+.dashboard-row-button:hover {
+  background: var(--md-surface-container);
+  box-shadow: none;
 }
 
-.dashboard-card-icon {
-  font-size: 1.75rem;
-  width: 48px;
-  height: 48px;
-  display: flex;
+.dashboard-row:focus-visible {
+  outline: 2px solid var(--md-primary);
+  outline-offset: -2px;
+}
+
+.dashboard-row-icon {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  background: var(--md-primary-container);
-  border-radius: var(--md-radius-md);
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--md-surface-variant);
+  color: var(--md-on-surface-variant);
 }
 
-.dashboard-card-title {
-  font-weight: 600;
-  font-size: 0.9375rem;
+.dashboard-row-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
 }
 
-.dashboard-card-description {
+.dashboard-row-title {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--md-on-surface);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dashboard-row-subtitle {
   font-size: 0.8125rem;
   color: var(--md-on-surface-variant);
-  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dashboard-row-time {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  color: var(--md-on-surface-variant);
+  /* Right-align the time in a fixed slot so the trailing provider dot lines up
+     vertically across rows regardless of how long each time string is. */
+  min-width: 44px;
+  justify-content: flex-end;
+  text-align: right;
+}
+
+/* The trailing cluster (time, unread flag, provider dot) sits tight together on
+   the right, so pull the flag and dot in from the wider inter-element row gap. */
+.dashboard-row-flag,
+.dashboard-provider-dot {
+  margin-left: calc(-1 * var(--md-space-sm));
+}
+
+.dashboard-row-duration {
+  color: var(--md-on-surface-variant);
+}
+
+/* Fixed-width slot for the unread dot (or empty on calls) so the trailing
+   provider dot stays vertically aligned across every row. */
+.dashboard-row-flag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 10px;
+}
+
+/* Unread thread: bolder title and the shared primary dot. */
+.dashboard-row-unread .dashboard-row-title {
+  font-weight: 700;
+}
+
+.dashboard-row-unread .dashboard-row-subtitle {
+  color: var(--md-on-surface);
+}
+
+.dashboard-unread-dot {
+  width: 8px;
+  height: 8px;
+}
+
+/* Provider-number marker: a small colored dot matching the number's color,
+   pinned to the far-right of the row so the dots line up vertically. The
+   number details are surfaced through the row's own hover tooltip. Mirrors the
+   8px dots used on the Calls and Conversations rows. */
+.dashboard-provider-dot {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+/* No provider number: keep the column's width so rows with and without a dot
+   stay aligned. */
+.dashboard-provider-dot-empty {
+  background: none;
+}
+
+/* Custom hover/focus tooltip. Styled as a small surface panel (matching the
+   page's cards and overlays) rather than the browser's native title bubble, so
+   it carries the app's tokens: surface, outline, elevation, radius. Shown on
+   row hover or keyboard focus; positioned above the row and centered. */
+.dashboard-tooltip {
+  position: absolute;
+  bottom: calc(100% + var(--md-space-xs));
+  left: var(--md-space-md);
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 200px;
+  max-width: 320px;
+  padding: var(--md-space-sm) var(--md-space-md);
+  background: var(--md-surface);
+  color: var(--md-on-surface);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-radius-md);
+  box-shadow: var(--md-elevation-3);
+  /* Hidden until the row is hovered/focused. Kept in the DOM (not display:none)
+     so the fade transition can run. */
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(4px);
+  transition: opacity var(--md-motion-duration-short) var(--md-motion-ease),
+              transform var(--md-motion-duration-short) var(--md-motion-ease),
+              visibility var(--md-motion-duration-short) var(--md-motion-ease);
+  pointer-events: none;
+}
+
+.dashboard-row:hover .dashboard-tooltip,
+.dashboard-row:focus-visible .dashboard-tooltip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0);
+}
+
+.dashboard-tooltip-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--md-space-md);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+}
+
+.dashboard-tooltip-label {
+  flex-shrink: 0;
+  min-width: 68px;
+  color: var(--md-on-surface-variant);
+  font-weight: 500;
+}
+
+.dashboard-tooltip-value {
+  flex: 1;
+  min-width: 0;
+  color: var(--md-on-surface);
+  word-break: break-word;
 }
 
 /* ===== Numbers Page ===== */
@@ -2070,11 +2382,37 @@ textarea {
 /* ===== Call History Page ===== */
 
 .call-history-container {
-  max-width: 800px;
+  max-width: 900px;
+}
+
+/* Header row: page title on the left, the "Dial" action pinned to the right. */
+.call-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--md-space-md);
+  margin-bottom: var(--md-space-lg);
 }
 
 .call-history-page-title {
-  margin-bottom: var(--md-space-lg);
+  margin: 0;
+}
+
+.call-history-dial {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--md-space-sm);
+  flex-shrink: 0;
+}
+
+.call-history-dial-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.call-history-dial:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Lighter, inline filter — no boxed surface, aligned to the muted-label
@@ -2205,6 +2543,10 @@ textarea {
   gap: var(--md-space-xs);
   flex-shrink: 0;
   text-align: right;
+  /* Reserve enough room for the longest status label ("Unanswered") so the
+     column width is constant across rows and the trailing action buttons line
+     up vertically regardless of which status a given call has. */
+  min-width: 96px;
 }
 
 .call-type-badge {
@@ -2386,17 +2728,34 @@ textarea {
 @media (max-width: 640px) {
   .call-history-entry {
     display: grid;
-    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    /* The inline action buttons are dropped on mobile (a tap opens an action
+       sheet instead), so the row is just icon + content + trailing metadata. */
+    grid-template-columns: auto minmax(0, 1fr) auto;
     grid-template-areas:
-      "icon number   number   action"
-      "icon time     badge    action"
-      "icon duration provider action";
+      "icon number   number"
+      "icon time     badge"
+      "icon duration provider";
     align-items: center;
     /* Tighter side padding pulls both icons toward the card edges; the wider
        column gaps below then give them more breathing room from the content. */
     padding: var(--md-space-md) var(--md-space-sm);
     column-gap: var(--md-space-md);
     row-gap: 2px;
+  }
+
+  /* The whole card is the tap target on mobile. */
+  .call-history-entry-tappable {
+    cursor: pointer;
+  }
+
+  .call-history-entry-tappable:active {
+    background: var(--md-surface-container-high);
+  }
+
+  /* The per-row action buttons are not rendered on mobile; hide defensively in
+     case any variant still emits them. */
+  .call-history-entry .call-entry-actions {
+    display: none;
   }
 
   .call-direction-icon {
@@ -2443,12 +2802,133 @@ textarea {
     align-self: center;
     max-width: 100%;
   }
+}
 
-  .call-entry-actions {
-    grid-area: action;
-    /* Push the action button toward the right edge and away from the content. */
-    margin-left: var(--md-space-xs);
-  }
+/* ---------------------------------------------------------------------
+   Call-entry action sheet — a bottom-sheet overlay opened by tapping a call
+   card on mobile. Offers Call / Send message for that entry, replacing the
+   inline per-row buttons the desktop layout keeps.
+   --------------------------------------------------------------------- */
+
+.call-action-sheet-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1060;
+  background: var(--md-scrim);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  animation: overlay-in var(--md-motion-duration-medium) var(--md-motion-ease);
+}
+
+.call-action-sheet {
+  width: 100%;
+  max-width: 480px;
+  background: var(--md-surface);
+  border: 1px solid var(--md-outline-variant);
+  border-bottom: none;
+  border-radius: var(--md-radius-lg) var(--md-radius-lg) 0 0;
+  box-shadow: var(--md-elevation-4);
+  padding: var(--md-space-md) var(--md-space-md)
+    calc(var(--md-space-md) + env(safe-area-inset-bottom, 0px));
+  display: flex;
+  flex-direction: column;
+  gap: var(--md-space-xs);
+  animation: modal-in var(--md-motion-duration-medium) var(--md-motion-ease);
+}
+
+.call-action-sheet-header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--md-space-sm) var(--md-space-sm) var(--md-space-md);
+  border-bottom: 1px solid var(--md-outline-variant);
+  margin-bottom: var(--md-space-xs);
+}
+
+.call-action-sheet-number {
+  font-weight: 600;
+  font-size: 1.0625rem;
+  color: var(--md-on-surface);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  overflow-wrap: anywhere;
+}
+
+.call-action-sheet-provider {
+  font-size: 0.8125rem;
+  color: var(--md-on-surface-variant);
+}
+
+.call-action-sheet-btn {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-md);
+  width: 100%;
+  padding: var(--md-space-md);
+  background: transparent;
+  border: none;
+  border-radius: var(--md-radius-md);
+  color: var(--md-on-surface);
+  font-size: 1rem;
+  cursor: pointer;
+  transition: background var(--md-motion-duration-short) var(--md-motion-ease);
+  /* Center the icon+label pair as a group so both rows share one baseline: the
+     icon badges line up vertically and the labels start at the same x. */
+  justify-content: center;
+  text-align: center;
+}
+
+.call-action-sheet-btn:active {
+  background: var(--md-surface-container-high);
+}
+
+.call-action-sheet-btn:disabled {
+  color: var(--md-outline);
+  cursor: not-allowed;
+}
+
+.call-action-sheet-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  flex-shrink: 0;
+  border-radius: var(--md-radius-full);
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+}
+
+.call-action-sheet-btn:disabled .call-action-sheet-icon {
+  background: var(--md-surface-container-high);
+  color: var(--md-outline);
+}
+
+.call-action-sheet-icon .icon {
+  width: 22px;
+  height: 22px;
+}
+
+.call-action-sheet-label {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  text-align: left;
+  /* A shared label width keeps the leading icon badges vertically aligned
+     across both rows even though "Call" and "Send message" differ in length,
+     while the icon+label group as a whole stays centered in the sheet. */
+  min-width: 8.5rem;
+}
+
+.call-action-sheet-hint {
+  font-size: 0.75rem;
+  color: var(--md-on-surface-variant);
+}
+
+.call-action-sheet-cancel {
+  margin-top: var(--md-space-sm);
+  width: 100%;
+  justify-content: center;
 }
 
 .call-history-pagination {
@@ -2488,6 +2968,61 @@ textarea {
   font-weight: 500;
 }
 
+/* ---- Infinite scroll ---- */
+
+/* Zero-height marker at the bottom of the list; the IntersectionObserver
+   watches it to prefetch the next page before the user reaches the end. */
+.call-history-sentinel {
+  height: 1px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  background: none;
+  list-style: none;
+}
+
+/* Footer status row: spinner text, "Load more" fallback, or end-of-list count. */
+.call-history-footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  margin-top: var(--md-space-md);
+  padding: var(--md-space-sm) 0;
+}
+
+.call-history-loading-more,
+.call-history-end {
+  font-size: 0.8125rem;
+  color: var(--md-on-surface-variant);
+}
+
+.call-history-loading-more {
+  position: relative;
+  padding-left: 22px;
+}
+
+/* A small spinning ring before the "Loading more…" text. */
+.call-history-loading-more::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin-top: -7px;
+  border: 2px solid var(--md-outline-variant);
+  border-top-color: var(--md-primary);
+  border-radius: var(--md-radius-full);
+  animation: call-history-spin 0.7s linear infinite;
+}
+
+@keyframes call-history-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 /* Shared filter dropdown, used by Call History and Conversations. */
 .filter-select {
   flex: 1;
@@ -2511,7 +3046,7 @@ textarea {
 /* ===== Conversations Page ===== */
 
 .conversations-container {
-  max-width: 700px;
+  max-width: 900px;
 }
 
 .conversations-header {
@@ -2799,7 +3334,7 @@ textarea {
 .message-thread-container {
   display: flex;
   flex-direction: column;
-  max-width: 800px;
+  max-width: 900px;
   height: calc(100vh - 80px);
 }
 
@@ -2836,11 +3371,22 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-width: 0;
+}
+
+/* Trailing action cluster in the thread header (call + delete). */
+.thread-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-xs);
+  flex-shrink: 0;
 }
 
 .messages-list {
   flex: 1;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   padding: var(--md-space-md) 0;
   display: flex;
   flex-direction: column;
@@ -3238,10 +3784,22 @@ textarea {
   text-align: center;
 }
 
-/* ===== Scrollbar ===== */
+/* ===== Scrollbar =====
+   Overlay-style, auto-hiding scrollbars: the thumb is transparent at rest and
+   only appears while the scroll container is hovered or actively scrolling
+   (the `data-scrolling` attribute is toggled by scroll-activity.ts). The thumb
+   insets with a padding-box border so there's a real grab area, and it widens
+   on hover for easier dragging. */
 
+/* WebKit / Blink (Chrome, Safari, Edge). A 14px track gives the pointer a
+   generous target to grab and drag. The scroll containers reserve a stable
+   gutter (`scrollbar-gutter: stable` on .main-content / .nav / .messages-list)
+   so this bar occupies real layout instead of drawing as a non-interactive
+   overlay — that reserved gutter is what makes the thumb hit-testable and
+   draggable. */
 ::-webkit-scrollbar {
-  width: 8px;
+  width: 14px;
+  height: 14px;
 }
 
 ::-webkit-scrollbar-track {
@@ -3249,12 +3807,43 @@ textarea {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--md-outline);
+  /* Transparent by default = hidden. A 4px transparent border with a
+     padding-box clip insets the visible thumb to ~6px at rest; the whole 14px
+     track still belongs to the thumb for hit-testing, so it's easy to grab. */
+  background-color: transparent;
+  border: 4px solid transparent;
+  background-clip: padding-box;
   border-radius: var(--md-radius-full);
+  min-height: 40px;
+  transition: background-color var(--md-motion-duration-short) var(--md-motion-ease),
+              border-width var(--md-motion-duration-short) var(--md-motion-ease);
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: var(--md-on-surface-variant);
+/* Reveal the thumb while hovering the scroll area or actively scrolling. */
+:hover::-webkit-scrollbar-thumb,
+[data-scrolling="true"]::-webkit-scrollbar-thumb {
+  background-color: var(--md-outline);
+}
+
+/* Hovering (or grabbing) the thumb itself widens it — the border shrinks so the
+   visible thumb grows toward the full track width — and darkens it, making it
+   easier to grab and drag. */
+::-webkit-scrollbar-thumb:hover,
+::-webkit-scrollbar-thumb:active {
+  background-color: var(--md-on-surface-variant);
+  border-width: 2px;
+}
+
+/* Firefox: thin overlay bar. Firefox has no "actively scrolling" hook, so the
+   thumb shows on hover; the color still fades to the subtle outline tone. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+*:hover,
+[data-scrolling="true"] {
+  scrollbar-color: var(--md-outline) transparent;
 }
 
 /* ===== Focus visible ===== */
@@ -3343,9 +3932,12 @@ textarea {
   }
 }
 
-/* ===== New Device Login Banner ===== */
+/* ===== Notification Overlay =====
+   App-wide toast stack: up to 3 visible notifications, each auto-dismissing on
+   a timeout, driving all types (device login, incoming SMS, missed/blocked
+   call). Anchored top-right, stacking downward. */
 
-.new-device-banner-container {
+.notification-overlay {
   position: fixed;
   top: var(--md-space-md);
   right: var(--md-space-md);
@@ -3357,44 +3949,81 @@ textarea {
   width: calc(100% - 2 * var(--md-space-md));
 }
 
-.new-device-banner {
+.app-notification {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--md-space-sm);
   padding: var(--md-space-md) var(--md-space-lg);
-  background: var(--md-warning-container);
-  border: 1px solid var(--md-warning);
+  background: var(--md-surface-container-high);
+  border: 1px solid var(--md-outline-variant);
   border-radius: var(--md-radius-md);
   box-shadow: var(--md-elevation-3);
-  cursor: pointer;
   transition: box-shadow var(--md-motion-duration-short) var(--md-motion-ease),
               transform var(--md-motion-duration-short) var(--md-motion-ease);
   animation: banner-slide-in var(--md-motion-duration-medium) var(--md-motion-ease);
 }
 
-.new-device-banner:hover {
+/* Only clickable (deep-linking) notifications get the interactive affordance. */
+.app-notification[role="button"] {
+  cursor: pointer;
+}
+
+.app-notification[role="button"]:hover {
   box-shadow: var(--md-elevation-4);
   transform: translateY(-1px);
 }
 
-.new-device-banner:focus-visible {
+.app-notification:focus-visible {
   outline: 2px solid var(--md-primary);
   outline-offset: 2px;
 }
 
-.new-device-banner-icon {
+/* Per-kind accent on the leading edge. */
+.app-notification-message {
+  border-left: 3px solid var(--md-primary);
+}
+
+.app-notification-device {
+  border-left: 3px solid var(--md-warning, var(--md-primary));
+}
+
+.app-notification-call {
+  border-left: 3px solid var(--md-primary);
+}
+
+.app-notification-icon {
   font-size: 1.25rem;
+  line-height: 1.4;
   flex-shrink: 0;
 }
 
-.new-device-banner-text {
+.app-notification-text {
   flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.app-notification-title {
   font-size: 0.875rem;
+  font-weight: 600;
   color: var(--md-on-surface);
   line-height: 1.4;
 }
 
-.new-device-banner-dismiss {
+.app-notification-body {
+  font-size: 0.8125rem;
+  font-weight: 400;
+  color: var(--md-on-surface-variant);
+  line-height: 1.4;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.app-notification-dismiss {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -3413,8 +4042,8 @@ textarea {
   transition: background var(--md-motion-duration-short) var(--md-motion-ease);
 }
 
-.new-device-banner-dismiss:hover {
-  background: var(--md-surface-container-high);
+.app-notification-dismiss:hover {
+  background: var(--md-surface-container-highest, var(--md-surface-container-high));
   box-shadow: none;
 }
 
@@ -3430,7 +4059,7 @@ textarea {
 }
 
 @media (min-width: 768px) {
-  .new-device-banner-container {
+  .notification-overlay {
     top: var(--md-space-lg);
     right: var(--md-space-lg);
   }
@@ -3635,4 +4264,645 @@ textarea {
 
 .android-banner-btn-dismiss:hover {
   background: var(--md-surface-container);
+}
+
+/* =====================================================================
+   Call surfaces (web-calling-voice)
+   Token-first styles for the three call surfaces rendered from
+   CallController state: the Dialer popover/sheet, the IncomingCallSurface
+   modal, and the InCallSurface compact overlay (the upgraded call-banner).
+
+   Every color, radius, space, shadow, and motion value below references a
+   design token from :root — no hardcoded hex. Phone numbers and the
+   duration timer use the monospace treatment; touch targets grow to
+   --min-touch-target on touch/small screens; ringing/attention motion is
+   gated by @media (prefers-reduced-motion: reduce). See web/DESIGN.md and
+   the "UI Design System Integration" section of the design doc.
+   ===================================================================== */
+
+/* Shared monospace treatment for dialed/caller numbers and durations. */
+.call-number,
+.call-duration {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.01em;
+}
+
+/* ---------------------------------------------------------------------
+   Dialer — nav-launched popover/modal on desktop, full sheet on mobile
+   --------------------------------------------------------------------- */
+
+.dialer-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1050;
+  background: var(--md-scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--md-space-md);
+  animation: overlay-in var(--md-motion-duration-medium) var(--md-motion-ease);
+}
+
+.dialer-panel {
+  width: 100%;
+  max-width: 400px;
+  background: var(--md-surface);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-radius-lg);
+  box-shadow: var(--md-elevation-4);
+  padding: var(--md-space-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--md-space-md);
+  animation: modal-in var(--md-motion-duration-medium) var(--md-motion-ease);
+}
+
+.dialer-panel h3 {
+  margin: 0;
+}
+
+/* The compose form owns its own vertical rhythm so the To field, From
+   selector, and the Call action are evenly spaced — without this the actions
+   row collapsed right up against the From field. */
+.dialer-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--md-space-md);
+}
+
+.dialer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--md-space-md);
+}
+
+/* The composed destination reads back in monospace like a phone number. */
+.dialer-input {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+
+.dialer-from {
+  display: flex;
+  flex-direction: column;
+  gap: var(--md-space-xs);
+}
+
+.dialer-from-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--md-on-surface-variant);
+}
+
+.dialer-empty {
+  color: var(--md-on-surface-variant);
+  font-size: 0.8125rem;
+}
+
+.dialer-error {
+  color: var(--md-error);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.dialer-actions {
+  display: flex;
+  gap: var(--md-space-sm);
+  justify-content: flex-end;
+}
+
+/* The place-call affordance is the primary (filled) action. */
+.dialer-call-btn {
+  background: var(--md-primary);
+  color: var(--md-on-primary);
+}
+
+/* ---------------------------------------------------------------------
+   Mobile keypad dial pad — the web counterpart of the Android DialPadScreen.
+   Rendered instead of the compose form on phones / touch devices.
+   --------------------------------------------------------------------- */
+
+.dialpad {
+  display: flex;
+  flex-direction: column;
+  gap: var(--md-space-md);
+}
+
+/* "From" number chooser sits at the top, like the Android provider chip. */
+.dialpad-from {
+  display: flex;
+  flex-direction: column;
+  gap: var(--md-space-xs);
+}
+
+/* Large, centered read-only number readout driven by the keypad. */
+.dialpad-display {
+  min-height: 3.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--md-space-sm) var(--md-space-md);
+  text-align: center;
+}
+
+.dialpad-number {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-variant-numeric: tabular-nums;
+  font-size: 1.75rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--md-on-surface);
+  word-break: break-all;
+}
+
+.dialpad-placeholder {
+  font-size: 1.5rem;
+  color: var(--md-on-surface-variant);
+  opacity: 0.6;
+}
+
+/* 3x4 telephone grid. */
+.dialpad-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--md-space-sm) var(--md-space-md);
+  justify-items: center;
+  max-width: 320px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.dialpad-key {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  width: 68px;
+  height: 68px;
+  border: none;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--md-surface-variant) 40%, transparent);
+  color: var(--md-on-surface);
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+  transition: background var(--md-motion-duration-short) var(--md-motion-ease);
+}
+
+.dialpad-key:active {
+  background: var(--md-surface-variant);
+}
+
+.dialpad-key:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.dialpad-key-digit {
+  font-size: 1.6rem;
+  font-weight: 500;
+  line-height: 1;
+}
+
+.dialpad-key-letters {
+  font-size: 0.625rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  color: var(--md-on-surface-variant);
+}
+
+/* Backspace flanks the call button; a spacer balances the row so the green
+   call button stays centered like the Android layout. */
+.dialpad-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--md-space-md);
+  max-width: 320px;
+  width: 100%;
+  margin: var(--md-space-xs) auto 0;
+}
+
+.dialpad-actions-spacer,
+.dialpad-backspace {
+  width: 56px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.dialpad-call {
+  width: 64px;
+  height: 64px;
+  border: none;
+  border-radius: 50%;
+  background: var(--md-success, #2e7d32);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  box-shadow: var(--md-elevation-2);
+  transition: transform var(--md-motion-duration-short) var(--md-motion-ease);
+}
+
+.dialpad-call:active {
+  transform: scale(0.94);
+}
+
+.dialpad-call:disabled {
+  opacity: 0.4;
+  cursor: default;
+  box-shadow: none;
+}
+
+.dialpad-backspace {
+  height: 56px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--md-on-surface-variant);
+  cursor: pointer;
+}
+
+.dialpad-backspace:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Mobile: the Dialer becomes a full-width bottom sheet. */
+@media (max-width: 640px), (pointer: coarse) {
+  .dialer-overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .dialer-panel {
+    max-width: 100%;
+    border-radius: var(--md-radius-lg) var(--md-radius-lg) 0 0;
+    border-bottom: none;
+    padding: var(--md-space-lg) var(--md-space-md)
+      calc(var(--md-space-lg) + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* ---------------------------------------------------------------------
+   IncomingCallSurface — centered modal + scrim, full sheet on mobile
+   --------------------------------------------------------------------- */
+
+.incoming-call-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1080;
+  background: var(--md-scrim);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--md-space-md);
+  animation: overlay-in var(--md-motion-duration-medium) var(--md-motion-ease);
+}
+
+.incoming-call-surface {
+  width: 100%;
+  max-width: 360px;
+  background: var(--md-surface);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-radius-lg);
+  box-shadow: var(--md-elevation-4);
+  padding: var(--md-space-xl) var(--md-space-lg);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--md-space-md);
+  text-align: center;
+  animation: modal-in var(--md-motion-duration-medium) var(--md-motion-ease);
+}
+
+.incoming-call-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--md-on-surface-variant);
+}
+
+.incoming-call-surface .call-number {
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--md-on-surface);
+  word-break: break-all;
+}
+
+/* The pulsing avatar/glyph is decorative attention motion — see the
+   reduced-motion block below where the pulse is disabled. */
+.incoming-call-avatar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 64px;
+  height: 64px;
+  border-radius: var(--md-radius-full);
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+  animation: call-ring-pulse 1.4s var(--md-motion-ease) infinite;
+}
+
+.incoming-call-actions {
+  display: flex;
+  gap: var(--md-space-md);
+  width: 100%;
+  margin-top: var(--md-space-sm);
+}
+
+.incoming-call-actions button {
+  flex: 1;
+}
+
+/* Answer uses the success role; Decline uses the destructive role. Both
+   variants (.btn-success-outline / .btn-danger) are defined above. */
+.incoming-call-answer {
+  color: var(--md-success);
+}
+
+/* Mobile: full-width sheet. */
+@media (max-width: 640px), (pointer: coarse) {
+  .incoming-call-overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .incoming-call-surface {
+    max-width: 100%;
+    border-radius: var(--md-radius-lg) var(--md-radius-lg) 0 0;
+    border-bottom: none;
+    padding: var(--md-space-xl) var(--md-space-md)
+      calc(var(--md-space-xl) + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* ---------------------------------------------------------------------
+   InCallSurface — compact anchored overlay, expandable DTMF keypad
+   (upgrades the passive .call-banner into the active in-call surface)
+   --------------------------------------------------------------------- */
+
+/* Non-fatal diagnostic warning (e.g. loopback ICE candidate). Anchored above
+   the in-call surface so it is visible while connecting and remains after the
+   call tears down, until the next call attempt clears it. */
+.call-warning {
+  position: fixed;
+  right: var(--md-space-lg);
+  bottom: calc(var(--md-space-lg) + 340px);
+  z-index: 1001;
+  width: 320px;
+  max-width: calc(100vw - 2 * var(--md-space-md));
+  background: var(--md-error-container, #ffdad6);
+  color: var(--md-on-error-container, #410002);
+  border: 1px solid var(--md-error, #ba1a1a);
+  border-radius: var(--md-radius-md);
+  box-shadow: var(--md-elevation-3);
+  padding: var(--md-space-md);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  animation: modal-in var(--md-motion-duration-medium) var(--md-motion-ease);
+}
+
+@media (max-width: 640px), (pointer: coarse) {
+  .call-warning {
+    left: 0;
+    right: 0;
+    bottom: auto;
+    top: 0;
+    width: auto;
+    max-width: none;
+    border-radius: 0;
+  }
+}
+
+.in-call-surface {
+  position: fixed;
+  right: var(--md-space-lg);
+  bottom: var(--md-space-lg);
+  z-index: 1000;
+  width: 320px;
+  max-width: calc(100vw - 2 * var(--md-space-md));
+  background: var(--md-surface);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-radius-md);
+  box-shadow: var(--md-elevation-3);
+  padding: var(--md-space-md);
+  display: flex;
+  flex-direction: column;
+  gap: var(--md-space-sm);
+  animation: modal-in var(--md-motion-duration-medium) var(--md-motion-ease);
+}
+
+.in-call-info {
+  display: flex;
+  flex-direction: column;
+  gap: var(--md-space-xs);
+  min-width: 0;
+}
+
+.in-call-surface .call-number {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: var(--md-on-surface);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.in-call-status {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-xs);
+  font-size: 0.8125rem;
+  color: var(--md-on-surface-variant);
+}
+
+.in-call-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--md-radius-full);
+  flex-shrink: 0;
+  background: var(--md-on-surface-variant);
+}
+
+/* Connecting/Ringing progress — the dot pulses (attention motion, gated
+   by reduced-motion below). Connected is a steady success dot. */
+.in-call-status.connecting .in-call-status-dot,
+.in-call-status.ringing .in-call-status-dot {
+  background: var(--md-primary);
+  animation: call-ring-pulse 1.4s var(--md-motion-ease) infinite;
+}
+
+.in-call-status.connected {
+  color: var(--md-success);
+}
+
+.in-call-status.connected .in-call-status-dot {
+  background: var(--md-success);
+  box-shadow: 0 0 4px var(--md-success);
+}
+
+.in-call-status.failed {
+  color: var(--md-error);
+}
+
+.in-call-status.failed .in-call-status-dot {
+  background: var(--md-error);
+}
+
+.in-call-surface .call-duration {
+  font-size: 0.8125rem;
+  color: var(--md-on-surface-variant);
+}
+
+/* At-rest controls row: mute, keypad toggle, volume, hang up. */
+.in-call-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-sm);
+}
+
+.in-call-controls .in-call-spacer {
+  flex: 1;
+}
+
+/* Hang up is the destructive affordance (uses .btn-danger / .btn-icon-danger
+   from the button system). Kept here for the filled hang-up variant. */
+.in-call-hangup {
+  background: var(--md-error);
+  color: var(--md-on-error);
+}
+
+.in-call-hangup:hover {
+  background: var(--md-on-error-container);
+}
+
+/* A control reflecting an active/engaged toggle (mute on, keypad open). */
+.in-call-controls .btn-icon.active {
+  background: var(--md-primary-container);
+  color: var(--md-on-primary-container);
+}
+
+/* "Could not apply" mute indicator (Req 6.7) and autoplay resume prompt. */
+.in-call-notice {
+  font-size: 0.75rem;
+  color: var(--md-error);
+  font-weight: 500;
+}
+
+.in-call-resume {
+  align-self: flex-start;
+  background: var(--md-primary);
+  color: var(--md-on-primary);
+}
+
+/* Expandable region: the 12-key DTMF grid + volume slider. Toggled open. */
+.in-call-keypad {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--md-space-sm);
+  padding-top: var(--md-space-sm);
+  border-top: 1px solid var(--md-outline-variant);
+}
+
+.in-call-key {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--control-height);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 1.125rem;
+  font-weight: 600;
+  background: var(--md-surface-container);
+  color: var(--md-on-surface);
+  border: 1px solid var(--md-outline-variant);
+  border-radius: var(--md-radius-button);
+}
+
+.in-call-key:hover {
+  background: var(--md-surface-container-high);
+}
+
+.in-call-key:disabled {
+  background: var(--md-surface-container);
+  color: var(--md-on-surface-variant);
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.in-call-volume {
+  display: flex;
+  align-items: center;
+  gap: var(--md-space-sm);
+  padding-top: var(--md-space-sm);
+}
+
+.in-call-volume input[type="range"] {
+  flex: 1;
+  min-height: auto;
+  padding: 0;
+  accent-color: var(--md-primary);
+}
+
+/* Mobile: the in-call surface spans the full width at the bottom edge. */
+@media (max-width: 640px), (pointer: coarse) {
+  .in-call-surface {
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    max-width: 100%;
+    border-radius: var(--md-radius-lg) var(--md-radius-lg) 0 0;
+    border-bottom: none;
+    padding: var(--md-space-md) var(--md-space-md)
+      calc(var(--md-space-md) + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Touch/small screens: keypad keys and call controls reach 48px. */
+  .in-call-key {
+    min-height: var(--min-touch-target);
+  }
+}
+
+/* Answer/Decline and DTMF keys grow to the touch target on touch/small
+   screens (the global button rule covers <button>; these cover the grid
+   keys and any anchored controls explicitly). */
+@media (max-width: 640px), (pointer: coarse) {
+  .incoming-call-actions button,
+  .in-call-key,
+  .in-call-controls .btn-icon {
+    min-height: var(--min-touch-target);
+    min-width: var(--min-touch-target);
+  }
+}
+
+/* ---------------------------------------------------------------------
+   Ringing pulse / attention motion — non-essential, disabled under
+   reduced-motion (the global reduced-motion block already neutralizes
+   animations, but keypad/pulse motion is called out explicitly here so
+   the intent is unambiguous per Requirement 19.5).
+   --------------------------------------------------------------------- */
+
+@keyframes call-ring-pulse {
+  0%   { transform: scale(1);    opacity: 1; }
+  50%  { transform: scale(1.08); opacity: 0.7; }
+  100% { transform: scale(1);    opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .incoming-call-avatar,
+  .in-call-status.connecting .in-call-status-dot,
+  .in-call-status.ringing .in-call-status-dot {
+    animation: none !important;
+  }
 }

@@ -73,6 +73,15 @@ export function initWebSocket(): WebSocketClient {
 
     ws.onclose = (event) => {
       if (closed) return;
+      // Notify subscribers that the connection was lost so they can react
+      // (e.g. the call controller keeps established audio playing but marks
+      // signaling as disconnected, or terminates a not-yet-connected attempt).
+      const handlers = subscribers.get("ws_disconnected");
+      if (handlers) {
+        for (const handler of handlers) {
+          handler(null);
+        }
+      }
       scheduleReconnect();
     };
 

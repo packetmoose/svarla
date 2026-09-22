@@ -240,12 +240,18 @@ export class CallOrchestrator {
     const callId = randomUUID();
     const sessionId = callId;
 
+    // The dummy provider is a test provider with no real carrier: its calls are
+    // routed to the MediaBridge echo leg (delayed loopback) so the entire
+    // call/media/signaling path can be exercised without an actual call. It
+    // still gets ringback so the flow mirrors a real "ringing → answered" call.
+    const isEchoProvider = providerEntry.type === 'dummy';
+
     let sessionInfo: SessionInfo;
     try {
       sessionInfo = await this.mediaBridge.createSession({
         sessionId,
-        providerLeg: { type: 'pending' },
-        options: { ringback: !provider.usesWebSocketAudio },
+        providerLeg: isEchoProvider ? { type: 'echo' } : { type: 'pending' },
+        options: { ringback: isEchoProvider ? true : !provider.usesWebSocketAudio },
       });
     } catch (err) {
       if (err instanceof MediaBridgeUnavailableError) {
@@ -272,22 +278,26 @@ export class CallOrchestrator {
     // For providers using WebSocket audio, tell the MediaBridge to expect
     // a WebSocket connection identified by the provider's callId.
     // For SIP-based providers, set the SIP URI.
-    try {
-      const isWebsocketProvider = provider.usesWebSocketAudio || providerEntry.type === '46elks';
-      if (isWebsocketProvider) {
-        await this.mediaBridge.updateSession(sessionId, {
-          providerLeg: { type: 'websocket', protocol: provider.providerId, expectedCallId: makeCallResult.callId },
-        });
-      } else {
-        await this.mediaBridge.updateSession(sessionId, {
-          providerLeg: { type: 'sip', uri: selectedSipUri },
-        });
+    // The echo (dummy) leg is fully configured at create time and has no
+    // external provider connection, so no patch is needed.
+    if (!isEchoProvider) {
+      try {
+        const isWebsocketProvider = provider.usesWebSocketAudio || providerEntry.type === '46elks';
+        if (isWebsocketProvider) {
+          await this.mediaBridge.updateSession(sessionId, {
+            providerLeg: { type: 'websocket', protocol: provider.providerId, expectedCallId: makeCallResult.callId },
+          });
+        } else {
+          await this.mediaBridge.updateSession(sessionId, {
+            providerLeg: { type: 'sip', uri: selectedSipUri },
+          });
+        }
+      } catch (err) {
+        this.logger.warn(
+          { err, sessionId } as Record<string, unknown>,
+          'Failed to patch MediaBridge session with provider leg',
+        );
       }
-    } catch (err) {
-      this.logger.warn(
-        { err, sessionId } as Record<string, unknown>,
-        'Failed to patch MediaBridge session with provider leg',
-      );
     }
 
     // 5. Track the active call
@@ -376,12 +386,18 @@ export class CallOrchestrator {
     // Ringback is only played by MediaBridge for SIP providers. WebSocket audio
     // providers (modem-gateway) get ringing from the carrier/modem directly, so
     // MediaBridge must not inject its own ringback tone.
+    // The dummy provider is a test provider: inbound calls use the MediaBridge
+    // echo leg so that, once a client answers and its WebRTC leg connects, the
+    // caller's audio is echoed back — exercising inbound signaling end-to-end.
+    // No ringback here: the callee sees the incoming-call UI, not a ring tone.
+    const isEchoProvider = providerEntry.type === 'dummy';
+
     let sessionInfo: SessionInfo;
     try {
       sessionInfo = await this.mediaBridge.createSession({
         sessionId,
-        providerLeg: { type: 'pending' },
-        options: { ringback: !provider.usesWebSocketAudio },
+        providerLeg: isEchoProvider ? { type: 'echo' } : { type: 'pending' },
+        options: { ringback: isEchoProvider ? false : !provider.usesWebSocketAudio },
       });
     } catch (err) {
       // Clean up the early mapping on failure
@@ -468,6 +484,35 @@ export class CallOrchestrator {
           'Failed to create incoming call notification',
         );
       });
+
+    // 5. Broadcast a `call_event` so connected clients present the incoming
+    // call over their live WebSocket. Native apps are also woken via the
+    // UnifiedPush wake signal in createNotification above, but the browser has
+    // no push channel — it relies on this real-time event.
+    //
+    // The status is `ringing` — the canonical unanswered-inbound status, shared
+    // with the `GET /api/calls/active` reconcile contract (getAllActiveCalls
+    // reports unanswered calls as `ringing`). Using `ringing` (rather than
+    // `connected`) is important for BOTH clients:
+    //   - Web: onCallEvent presents the Incoming_Call_Surface for a ringing
+    //     inbound offer.
+    //   - Android: the `ringing` branch routes to handleIncomingCall, which
+    //     ENRICHES the ringing call's temporary (notification-id) callId with
+    //     this server-internal `callId`. That reconciliation is what lets a
+    //     later teardown (see endCall's `call_cancelled` broadcast) match the
+    //     call on-device and stop the ring. A `connected` event, by contrast,
+    //     is ignored by the Android inbound path, so the ids would never align
+    //     and a decline elsewhere could never dismiss the Android ring.
+    // The caller number is passed as `from` so the surface shows the number.
+    this.wsBroadcaster.broadcast({
+      type: 'call_event',
+      data: {
+        callId,
+        status: 'ringing',
+        direction: 'inbound',
+        from,
+      },
+    });
 
     this.logger.info(
       { callId, from, to, providerCallId, providerId } as Record<string, unknown>,
@@ -821,6 +866,31 @@ export class CallOrchestrator {
       },
     });
 
+    // 1b. Also broadcast a `call_cancelled` so that endpoints which are still
+    // RINGING this call tear their incoming-call UI down. This is required in
+    // addition to the `call_event: disconnected` above because a ringing
+    // endpoint deliberately IGNORES a non-matching `disconnected` event (to
+    // avoid stray internal-leg events killing a live ring) — the Android client
+    // only tears a ringing call down on a `call_cancelled`. Without this, a
+    // decline (or caller hang-up before answer) on one device left every OTHER
+    // device ringing indefinitely. The web client dismisses its
+    // Incoming_Call_Surface on this event too. This mirrors the
+    // `answered_elsewhere` cancellation that answerCall already fans out.
+    //
+    // Reason mapping: an explicit user decline is `declined`; any other end of
+    // an as-yet-unanswered call (caller hung up, timeout, watchdog) is a
+    // caller-side disconnect. Answered calls that later end do not need the
+    // ringing-teardown semantics, but broadcasting the cancel is harmless
+    // there (no endpoint is ringing) and keeps a single teardown path.
+    const cancelReason = trigger === 'declined' ? 'declined' : 'caller_disconnect';
+    this.wsBroadcaster.broadcast({
+      type: 'call_cancelled',
+      data: {
+        callId,
+        reason: cancelReason,
+      },
+    });
+
     // 2. Destroy MediaBridge session (best-effort).
     // When triggered by provider disconnect, add a short delay so the signaling
     // message arrives at the client before the WebRTC connection is torn down.
@@ -1113,6 +1183,26 @@ export class CallOrchestrator {
       });
     }
     return calls;
+  }
+
+  /**
+   * Get the set of device IDs that are currently associated with an active
+   * (non-ended) call via its `answeredByDevice` field. Null values (calls with
+   * no owning device yet) are excluded.
+   *
+   * Read-only view over `activeCalls`; adds no new state. Used by the stale
+   * Web_Device reaper's in-call guard so a device on a live call is never
+   * reaped (Requirement 13.7).
+   */
+  getActiveDeviceIds(): Set<string> {
+    const deviceIds = new Set<string>();
+    for (const call of this.activeCalls.values()) {
+      if (call.ended) continue;
+      if (call.answeredByDevice != null) {
+        deviceIds.add(call.answeredByDevice);
+      }
+    }
+    return deviceIds;
   }
 
   /**

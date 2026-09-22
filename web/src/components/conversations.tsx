@@ -1,8 +1,10 @@
 import { h, Component } from "preact";
 import { api } from "../api";
 import { initWebSocket, getWebSocket } from "../ws";
+import { backIcon, trashIcon, phoneIcon } from "./icons";
+import { openDialer, isDialerAvailable } from "../call/dialer-bridge";
 
-interface Conversation {
+export interface Conversation {
   phoneNumber: string;
   providerNumber: string | null;
   lastMessagePreview: string | null;
@@ -84,6 +86,10 @@ interface ConversationsState {
   numberLabels: Record<string, string>;
   numberColors: Record<string, string>;
   allNumbers: NumberEntry[];
+  /** True while the delete-conversation confirmation dialog is shown. */
+  confirmDelete: boolean;
+  /** True while a delete request is in flight. */
+  deleting: boolean;
 }
 
 function truncatePreview(text: string | null, maxLen: number): string {
@@ -145,7 +151,7 @@ function isNumericNumber(number: string): boolean {
  * A thread is unread when a message was received after it was last read (or it
  * has never been read). Mirrors the Android list's timestamp-based detection.
  */
-function isConversationUnread(conv: Conversation): boolean {
+export function isConversationUnread(conv: Conversation): boolean {
   if (!conv.lastReceivedAt) return false;
   if (!conv.lastReadAt) return true;
   return new Date(conv.lastReceivedAt).getTime() > new Date(conv.lastReadAt).getTime();
@@ -297,6 +303,8 @@ export class Conversations extends Component<Record<string, never>, Conversation
     numberLabels: {},
     numberColors: {},
     allNumbers: [],
+    confirmDelete: false,
+    deleting: false,
   };
 
   private unsubNewMessage: (() => void) | null = null;
@@ -386,10 +394,7 @@ export class Conversations extends Component<Record<string, never>, Conversation
         direction: string;
       };
 
-      // Refresh the full conversation list (previews, timestamps, ordering).
-      this.fetchConversations();
-
-      // Only refresh the open thread when BOTH numbers match — a message to the
+      // Only touch the open thread when BOTH numbers match — a message to the
       // same peer on a different own-number is a different conversation and must
       // not disturb the thread currently on screen.
       const sameThread =
@@ -398,9 +403,25 @@ export class Conversations extends Component<Record<string, never>, Conversation
         threadKey(notification.providerNumber ?? null, notification.conversationNumber) ===
           threadKey(this.state.selectedProviderNumber, this.state.selectedNumber);
 
-      if (sameThread) {
-        this.refreshMessages(this.state.selectedNumber as string);
-      }
+      // The thread is open on screen, so an inbound message here is effectively
+      // already seen — mark it read immediately instead of waiting for the user
+      // to re-enter the thread. (Outbound echoes carry direction SENT and never
+      // affect unread state.) We AWAIT the read before re-fetching the list so
+      // the fetched rows reflect the new lastReadAt and don't momentarily
+      // re-show the unread dot (avoids a read/fetch race).
+      void (async () => {
+        if (sameThread) {
+          this.refreshMessages(this.state.selectedNumber as string);
+          if (notification.direction === "RECEIVED") {
+            await this.markThreadRead(
+              this.state.selectedNumber as string,
+              this.state.selectedProviderNumber,
+            );
+          }
+        }
+        // Refresh the full conversation list (previews, timestamps, ordering).
+        void this.fetchConversations();
+      })();
     });
 
     this.unsubMessageStatus = ws.subscribe("message_status", (data: unknown) => {
@@ -503,7 +524,7 @@ export class Conversations extends Component<Record<string, never>, Conversation
 
     // Opening a thread clears its unread indicator (locally now, and on the
     // server so other devices and the badge counts stay in sync).
-    this.markThreadRead(phoneNumber, providerNumber);
+    void this.markThreadRead(phoneNumber, providerNumber);
 
     // A thread is keyed by (provider number, caller number). Pass `from` so a
     // recipient reached from two different own-numbers stays in separate threads.
@@ -557,7 +578,7 @@ export class Conversations extends Component<Record<string, never>, Conversation
    * then tell the server (which broadcasts to other devices). The server keys
    * read state by the (provider, peer) pair, so `from` is required.
    */
-  private markThreadRead(phoneNumber: string, providerNumber: string | null) {
+  private async markThreadRead(phoneNumber: string, providerNumber: string | null) {
     // Only numeric providers form a real thread key the server accepts; skip
     // when we don't have a provider number (nothing to mark against).
     if (!providerNumber) return;
@@ -573,9 +594,14 @@ export class Conversations extends Component<Record<string, never>, Conversation
     }));
 
     const url = `/api/read-state/messages/${encodeURIComponent(phoneNumber)}?from=${encodeURIComponent(providerNumber)}`;
-    // Fire-and-forget; a failure just leaves the server-side state to be
-    // reconciled on the next list fetch.
-    void api.post(url, {});
+    // A failure just leaves the server-side state to be reconciled on the next
+    // list fetch. Awaited by callers that re-fetch the list right after, so the
+    // fetched rows reflect the new read state (avoids a read/fetch race).
+    try {
+      await api.post(url, {});
+    } catch {
+      /* best-effort; reconciled on next fetch */
+    }
   }
 
   /**
@@ -620,7 +646,78 @@ export class Conversations extends Component<Record<string, never>, Conversation
       messages: [],
       composeBody: "",
       sendError: "",
+      confirmDelete: false,
     });
+  };
+
+  /** Call the peer of the open thread via the shared Dialer (pre-filled). */
+  private handleCallPeer = () => {
+    const { selectedNumber } = this.state;
+    if (selectedNumber) openDialer(selectedNumber);
+  };
+
+  private handleDeleteClick = () => {
+    this.setState({ confirmDelete: true });
+  };
+
+  private handleDeleteCancel = () => {
+    this.setState({ confirmDelete: false });
+  };
+
+  /**
+   * Remove the open conversation thread (server-side soft delete via
+   * DELETE /api/conversations/:number?from=<provider>), then drop it from the
+   * list and return to the conversation list.
+   */
+  private handleDeleteConfirm = async () => {
+    const { selectedNumber, selectedProviderNumber } = this.state;
+    if (!selectedNumber) return;
+
+    // The delete endpoint keys a thread by (provider number, peer) and requires
+    // a provider number. Legacy threads with no provider number (only seen in
+    // old dev data) can't be targeted, so surface a clear message instead of
+    // firing a request the server will reject.
+    if (!selectedProviderNumber) {
+      this.setState({
+        confirmDelete: false,
+        sendError:
+          "This conversation has no provider number and can't be removed from here.",
+      });
+      return;
+    }
+
+    this.setState({ deleting: true });
+
+    const url = `/api/conversations/${encodeURIComponent(selectedNumber)}?from=${encodeURIComponent(selectedProviderNumber)}`;
+    const result = await api.delete(url);
+
+    if (!result.ok) {
+      const errorData = result.data as { error?: string };
+      this.setState({
+        deleting: false,
+        confirmDelete: false,
+        sendError: errorData.error || "Failed to delete conversation",
+      });
+      return;
+    }
+
+    // Drop the removed thread from the list and return to the list view.
+    this.setState((prev) => ({
+      conversations: prev.conversations.filter(
+        (c) =>
+          !(
+            c.phoneNumber === selectedNumber &&
+            c.providerNumber === selectedProviderNumber
+          )
+      ),
+      deleting: false,
+      confirmDelete: false,
+      selectedNumber: null,
+      selectedProviderNumber: null,
+      messages: [],
+      composeBody: "",
+      sendError: "",
+    }));
   };
 
   private handleComposeInput = (e: Event) => {
@@ -987,11 +1084,11 @@ export class Conversations extends Component<Record<string, never>, Conversation
         <div class="thread-header">
           <button
             type="button"
-            class="btn btn-back"
+            class="btn-icon thread-back"
             onClick={this.handleBackToList}
             aria-label="Back to conversations"
           >
-            ← Back
+            {backIcon(22)}
           </button>
           <div class="thread-title-group">
             <h2 class="thread-title">{selectedNumber}</h2>
@@ -1014,7 +1111,66 @@ export class Conversations extends Component<Record<string, never>, Conversation
               ) : null;
             })()}
           </div>
+          <div class="thread-actions">
+            {selectedNumber && isNumericNumber(selectedNumber) && isDialerAvailable() && (
+              <button
+                type="button"
+                class="btn-icon thread-action"
+                onClick={this.handleCallPeer}
+                aria-label={`Call ${selectedNumber}`}
+                title="Call"
+              >
+                {phoneIcon(20)}
+              </button>
+            )}
+            <button
+              type="button"
+              class="btn-icon btn-icon-danger thread-action"
+              onClick={this.handleDeleteClick}
+              aria-label="Delete conversation"
+              title="Delete conversation"
+            >
+              {trashIcon(20)}
+            </button>
+          </div>
         </div>
+
+        {this.state.confirmDelete && (
+          <div
+            class="modal-overlay"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Confirm conversation removal"
+            onClick={this.handleDeleteCancel}
+          >
+            <div class="modal-content card" onClick={(e) => e.stopPropagation()}>
+              <h3>Delete Conversation</h3>
+              <p>
+                Delete this conversation with <strong>{selectedNumber}</strong>?
+                It will be removed from your list.
+              </p>
+              <div class="modal-actions">
+                <button
+                  type="button"
+                  class="btn-secondary"
+                  onClick={this.handleDeleteCancel}
+                  disabled={this.state.deleting}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  class="btn-danger"
+                  onClick={this.handleDeleteConfirm}
+                  disabled={this.state.deleting}
+                  aria-busy={this.state.deleting ? "true" : undefined}
+                >
+                  {this.state.deleting ? "Deleting..." : "Delete"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {messagesLoading ? (
           <p class="loading-text" aria-live="polite">
