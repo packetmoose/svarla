@@ -1,6 +1,4 @@
-import type { DeviceInfo, DeviceRegistryManager } from './device-registry-manager.js';
-import type { WebSocketBroadcaster } from '../websocket/broadcaster.js';
-import type { CallOrchestrator } from './call-orchestrator.js';
+import type { DeviceInfo } from './device-registry-manager.js';
 
 /**
  * The device name assigned to browser sessions at login (see auth-routes.ts).
