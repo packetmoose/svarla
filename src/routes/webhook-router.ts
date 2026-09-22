@@ -235,10 +235,13 @@ export function registerWebhookRouter(
       const applicationId = (providerConfig.application_id as string) ?? '';
 
       // Webhook validation is on by default; only skip when explicitly disabled.
-      // Providers without the key set (i.e. all existing ones) keep validating.
       const validationEnabled = providerConfig.webhook_validation !== false;
 
-      if (validationEnabled && (apiSecret || applicationId)) {
+      // Real verification requires the signature secret — it's the only value
+      // that lets us cryptographically confirm the request came from Vonage.
+      // `application_id` alone is a public identifier and cannot authenticate a
+      // request, so it does not enable enforcement on its own.
+      if (validationEnabled && apiSecret) {
         const verified = verifyVonageWebhookJwt(request, {
           vonageApiSecret: apiSecret,
           vonageApplicationId: applicationId,
@@ -255,6 +258,16 @@ export function registerWebhookRouter(
             });
           }
         }
+      } else if (validationEnabled && applicationId) {
+        // Validation is requested but no signature secret is configured, so
+        // webhooks cannot be cryptographically verified. Warn loudly rather
+        // than silently accepting unverifiable traffic — the operator should
+        // set a signature secret to enable enforcement.
+        log.warn(
+          `Vonage provider ${providerId} has webhook validation enabled but no ` +
+          `api_secret configured; webhook signatures cannot be verified. ` +
+          `Set the provider's signature secret to enforce verification.`,
+        );
       }
     }
 

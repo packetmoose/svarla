@@ -13,13 +13,20 @@ export interface WebhookAuthConfig {
 }
 
 /**
- * Verify Vonage JWT signature on a webhook request.
- * Returns true if the request is authenticated, false otherwise.
+ * Verify the Vonage JWT on a webhook request.
+ * Returns true only if the JWT's signature is cryptographically valid.
  *
- * Vonage sends a JWT in the Authorization header for signed webhooks.
- * Verification strategy:
- * 1. Try HS256 verification with the provider's API secret
- * 2. Fallback: decode JWT and verify application_id claim matches
+ * Vonage signs webhook JWTs (HS256) with the account "signature secret". We
+ * verify that signature with the provider's configured secret. The
+ * `application_id` claim, when configured, is checked as an additional guard —
+ * but it is NOT a substitute for signature verification: `application_id` is a
+ * public, non-secret value (it appears in webhook URLs and the Vonage
+ * dashboard), so an attacker who knows it could forge a token with that claim.
+ * Trusting the claim alone would let any such token through.
+ *
+ * This function fails closed: if the signing secret is not configured there is
+ * no way to verify authenticity, so the request is rejected. There is
+ * deliberately no unverified-decode fallback.
  */
 export function verifyVonageWebhookJwt(
   request: FastifyRequest,
@@ -33,39 +40,28 @@ export function verifyVonageWebhookJwt(
 
   const token = authHeader.slice(7);
 
-  // Try HS256 verification with API secret (Vonage Messages API signed webhooks)
-  if (config.vonageApiSecret) {
-    try {
-      const decoded = jwt.verify(token, config.vonageApiSecret, {
-        algorithms: ['HS256'],
-      }) as Record<string, unknown>;
-
-      // Verify application_id if configured
-      if (config.vonageApplicationId && decoded.application_id !== config.vonageApplicationId) {
-        return false;
-      }
-
-      return true;
-    } catch {
-      // HS256 verification failed, try claim-based validation below
-    }
+  // A cryptographic signature check requires the signing secret. Without it we
+  // cannot establish authenticity, so reject rather than trust unsigned claims.
+  if (!config.vonageApiSecret) {
+    return false;
   }
 
-  // Fallback: decode without full cryptographic verification but validate claims.
-  // This handles cases where Vonage uses a different signing method.
-  // At minimum, the JWT must contain an application_id that matches ours.
   try {
-    const decoded = jwt.decode(token) as Record<string, unknown> | null;
-    if (!decoded) return false;
+    const decoded = jwt.verify(token, config.vonageApiSecret, {
+      algorithms: ['HS256'],
+    }) as Record<string, unknown>;
 
-    if (config.vonageApplicationId && decoded.application_id === config.vonageApplicationId) {
-      return true;
+    // Optional additional guard: if an application_id is configured, the
+    // (now signature-verified) token must carry a matching claim.
+    if (config.vonageApplicationId && decoded.application_id !== config.vonageApplicationId) {
+      return false;
     }
-  } catch {
-    // Invalid JWT structure
-  }
 
-  return false;
+    return true;
+  } catch {
+    // Signature invalid, token expired/malformed, or wrong algorithm.
+    return false;
+  }
 }
 
 /**
