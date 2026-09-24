@@ -17,6 +17,7 @@ import {
 } from '../middleware/webhook-auth-middleware.js';
 import { buildOutboundCallNcco } from '../providers/ncco-builder.js';
 import type { NccoAction } from '../providers/ncco-builder.js';
+import { resolveWebhookEndpoint, getAcceptedEndpoints } from './webhook-endpoint-aliases.js';
 
 /**
  * Logger interface compatible with Fastify/Pino logger.
@@ -320,11 +321,37 @@ export function registerWebhookRouter(
       }
     }
 
+    // Normalize the requested endpoint to the suffix this provider actually
+    // implements. This lets a webhook be configured with either the provider's
+    // native name or an equivalent name used by another provider (e.g. Vonage's
+    // `inbound-sms` and 46elks' `sms_incoming` both resolve to the correct
+    // handler), while native names continue to match exactly (no behavior
+    // change for existing configs).
+    const acceptedEndpoints = getAcceptedEndpoints(entry.type, entry.instance.getWebhookEndpoints());
+    const resolvedEndpoint = resolveWebhookEndpoint(endpoint, acceptedEndpoints);
+
+    // Reject endpoints that do not exist for this provider. Previously these
+    // fell through to the generic handler and returned HTTP 200 with `{}`,
+    // silently discarding the callback — the upstream provider then treated the
+    // misconfigured webhook as delivered. Return 404 so configuration mistakes
+    // are visible. See https://github.com/packetmoose/svarla/issues/31
+    if (resolvedEndpoint === undefined) {
+      log.warn(
+        `Webhook received for unknown endpoint '${endpoint}' on provider ` +
+        `${providerId} (${entry.displayName}); supported: ${acceptedEndpoints.join(', ') || 'none'}`,
+      );
+      return reply.status(404).send({
+        error: 'Webhook endpoint not found',
+        endpoint,
+        providerId,
+      });
+    }
+
     // Route to endpoint-specific handlers for Vonage providers
     // to replicate full legacy webhook behavior
     if (entry.type === 'vonage') {
       const provider = entry.instance as VonageTelephonyProvider;
-      switch (endpoint) {
+      switch (resolvedEndpoint) {
         case 'answer':
           return handleAnswer(request, reply, provider, log);
         case 'event':
@@ -341,7 +368,7 @@ export function registerWebhookRouter(
     // Handle 46elks voice_start webhook with CallOrchestrator integration
     // For inbound calls, we need to create a MediaBridge session and return the WebSocket number
     // so 46elks routes audio via the Realtime Voice API.
-    if (entry.type === '46elks' && endpoint === 'voice_start' && callOrchestrator) {
+    if (entry.type === '46elks' && resolvedEndpoint === 'voice_start' && callOrchestrator) {
       const body = request.body as Record<string, unknown>;
       const direction = body.direction as string ?? '';
       const callId = body.callid as string ?? '';
@@ -405,18 +432,20 @@ export function registerWebhookRouter(
       }
     }
 
-    // Fallback: delegate to the provider's generic webhook handler
+    // Fallback: delegate to the provider's generic webhook handler.
+    // Pass the resolved endpoint so the provider's own switch matches even when
+    // the request used an alias (e.g. `voice-event` → `voice_event`).
     try {
-      const result = await entry.instance.handleWebhook(endpoint, request.body, request);
+      const result = await entry.instance.handleWebhook(resolvedEndpoint, request.body, request);
       if (entry.type === '46elks') {
         server.log.info(
-          { providerId, endpoint, requestBody: request.body, response: result },
+          { providerId, endpoint, resolvedEndpoint, requestBody: request.body, response: result },
           '46elks webhook handled',
         );
       }
       return reply.status(200).send(result);
     } catch (err) {
-      log.error(err, `Webhook handler error for provider ${providerId}, endpoint: ${endpoint}`);
+      log.error(err, `Webhook handler error for provider ${providerId}, endpoint: ${resolvedEndpoint}`);
       return reply.status(500).send({
         error: 'Internal webhook handler error',
       });

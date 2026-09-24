@@ -22,6 +22,7 @@ describe('webhook-router — Vonage /event terminal teardown', () => {
     // which we don't rely on here (the terminal-teardown path runs before it).
     const providerInstance = {
       processCallEvent: vi.fn(),
+      getWebhookEndpoints: vi.fn().mockReturnValue(['answer', 'event', 'inbound-sms', 'sms-status']),
     } as unknown as VonageTelephonyProvider;
 
     const entry: ProviderRegistryEntry = {
@@ -120,5 +121,139 @@ describe('webhook-router — Vonage /event terminal teardown', () => {
 
     expect(response.statusCode).toBe(200);
     expect(mockOrchestrator.endCall).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Regression tests for issue #31: unknown webhook endpoints must NOT return 2xx
+ * (they previously fell through to a silent HTTP 200), and cross-provider
+ * endpoint aliases must route to the correct handler.
+ */
+describe('webhook-router — endpoint validation & aliasing (issue #31)', () => {
+  interface HarnessOptions {
+    type?: string;
+    endpoints?: string[];
+    conversationService?: unknown;
+  }
+
+  async function makeServer(opts: HarnessOptions = {}): Promise<{
+    server: FastifyInstance;
+    handleWebhook: ReturnType<typeof vi.fn>;
+  }> {
+    const handleWebhook = vi.fn().mockResolvedValue({});
+    const providerInstance = {
+      processCallEvent: vi.fn(),
+      processSmsEvent: vi.fn(),
+      getWebhookEndpoints: vi
+        .fn()
+        .mockReturnValue(opts.endpoints ?? ['answer', 'event', 'inbound-sms', 'sms-status']),
+      handleWebhook,
+    } as unknown as VonageTelephonyProvider;
+
+    const entry: ProviderRegistryEntry = {
+      id: 'prov',
+      type: opts.type ?? 'vonage',
+      displayName: 'Test Provider',
+      // Disable webhook validation so tests exercise endpoint resolution rather
+      // than the provider-specific auth (Vonage JWT / 46elks IP allowlist).
+      config: { webhook_validation: false },
+      enabled: true,
+      instance: providerInstance,
+      status: 'active',
+    } as ProviderRegistryEntry;
+
+    const registry = {
+      getProvider: vi.fn().mockReturnValue(entry),
+    } as unknown as ProviderRegistry;
+
+    const server = Fastify({ logger: false });
+    registerWebhookRouter(server, registry, {
+      conversationService: opts.conversationService as never,
+    });
+    await server.ready();
+    return { server, handleWebhook };
+  }
+
+  it('returns 404 (never 2xx) for an unknown endpoint on a Vonage provider', async () => {
+    const { server } = await makeServer();
+    const response = await server.inject({
+      method: 'POST',
+      url: '/webhooks/prov/sms_incoming_typo',
+      payload: { from: '+1', to: '+2', text: 'hi' },
+    });
+
+    expect(response.statusCode).toBe(404);
+    const body = response.json();
+    expect(body.error).toBe('Webhook endpoint not found');
+    expect(body.endpoint).toBe('sms_incoming_typo');
+    await server.close();
+  });
+
+  it('routes 46elks alias sms_incoming to the Vonage inbound-sms handler', async () => {
+    const receiveMessage = vi.fn().mockResolvedValue(undefined);
+    const { server } = await makeServer({
+      conversationService: { receiveMessage },
+    });
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/webhooks/prov/sms_incoming',
+      payload: {
+        message_uuid: 'msg-1',
+        from: '+14155551234',
+        to: '+14155550000',
+        text: 'hello',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(receiveMessage).toHaveBeenCalledWith(
+      'msg-1',
+      '+14155551234',
+      '+14155550000',
+      'hello',
+      expect.any(Date),
+    );
+    await server.close();
+  });
+
+  it('accepts the native inbound-sms endpoint unchanged', async () => {
+    const receiveMessage = vi.fn().mockResolvedValue(undefined);
+    const { server } = await makeServer({
+      conversationService: { receiveMessage },
+    });
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/webhooks/prov/inbound-sms',
+      payload: {
+        message_uuid: 'msg-2',
+        from: '+14155551234',
+        to: '+14155550000',
+        text: 'hi again',
+      },
+    });
+
+    expect(response.statusCode).toBe(200);
+    expect(receiveMessage).toHaveBeenCalledTimes(1);
+    await server.close();
+  });
+
+  it('accepts 46elks voice_event alias (voice-event) via the generic handler', async () => {
+    const { server, handleWebhook } = await makeServer({
+      type: '46elks',
+      endpoints: ['voice_start', 'sms_incoming'],
+    });
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/webhooks/prov/voice-event',
+      payload: { callid: 'c-1', status: 'success' },
+    });
+
+    expect(response.statusCode).toBe(200);
+    // Resolved to the provider's native suffix before delegating.
+    expect(handleWebhook).toHaveBeenCalledWith('voice_event', expect.anything(), expect.anything());
+    await server.close();
   });
 });
