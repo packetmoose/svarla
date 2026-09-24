@@ -151,14 +151,24 @@ export class AuthService {
   }
 
   /**
-   * Logout: invalidate the session token by deactivating the device.
+   * Logout: permanently invalidate the session token and deactivate the device.
+   *
+   * Unlike the reaper (which only marks a device dormant and leaves its token
+   * intact so it can reactivate), logout must ensure the token can NEVER
+   * validate again. We therefore rotate `session_token` to an unusable sentinel
+   * in addition to deactivating the device. Matching is by token alone — a
+   * dormant (reaper-deactivated) device still holds a valid token and must be
+   * logoutable, so we do not filter on `is_active` here.
    */
   async logout(sessionToken: string): Promise<boolean> {
+    // `session_token` is NOT NULL, so we replace it with a random, namespaced
+    // value that no client holds and that can never collide with a real token.
+    const invalidatedToken = `logged-out:${crypto.randomBytes(32).toString('hex')}`;
+
     const result = await this.db
       .updateTable('device_registry')
-      .set({ is_active: false })
+      .set({ is_active: false, session_token: invalidatedToken })
       .where('session_token', '=', sessionToken)
-      .where('is_active', '=', true)
       .executeTakeFirst();
 
     return (result?.numUpdatedRows ?? 0n) > 0n;
@@ -166,10 +176,18 @@ export class AuthService {
 
   /**
    * Validate a session token. Returns the device info if valid.
+   *
    * A session is valid if:
    * - The token exists in device_registry
-   * - The device is active
    * - The session hasn't expired (registered_at + sessionExpiryDays > now)
+   *
+   * Note: validity is deliberately NOT gated on `is_active`. The WebDeviceReaper
+   * marks orphaned browser devices inactive ("dormant") after their socket goes
+   * away, but that must not invalidate an otherwise-valid session token. A
+   * returning holder of a still-valid token reactivates its own device here,
+   * so a dropped WebSocket (sleep, wifi blip, backgrounded tab) no longer forces
+   * a re-login. Only true 30-day expiry — or an explicit logout, which rotates
+   * the token to an unusable value — ends the session.
    */
   async validateSession(sessionToken: string): Promise<{
     valid: boolean;
@@ -180,7 +198,6 @@ export class AuthService {
       .selectFrom('device_registry')
       .selectAll()
       .where('session_token', '=', sessionToken)
-      .where('is_active', '=', true)
       .executeTakeFirst();
 
     if (!device) {
@@ -201,10 +218,12 @@ export class AuthService {
       return { valid: false };
     }
 
-    // Update last_seen_at
+    // Token is within its validity window. Refresh last_seen and reactivate the
+    // device if the reaper had marked it dormant (is_active = false). Both are
+    // applied in a single update.
     await this.db
       .updateTable('device_registry')
-      .set({ last_seen_at: new Date() })
+      .set({ last_seen_at: new Date(), is_active: true })
       .where('device_id', '=', device.device_id)
       .execute();
 

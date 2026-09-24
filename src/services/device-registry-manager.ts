@@ -1,4 +1,5 @@
 import type { Kysely } from 'kysely';
+import crypto from 'node:crypto';
 import type { Database } from '../database.js';
 
 export interface DeviceInfo {
@@ -103,15 +104,50 @@ export class DeviceRegistryManager {
   }
 
   /**
-   * Deactivate (deregister) a device by its ID. Returns true if the device was found and deactivated.
+   * Deactivate a device by its ID. Returns true if a row was updated.
+   *
+   * Two distinct callers with opposite intent share this method:
+   *
+   * - The WebDeviceReaper marks orphaned browser devices *dormant*. Their
+   *   session token must survive so the holder can reactivate on return
+   *   (see AuthService.validateSession). This is the default: `is_active`
+   *   flips to false, the token is left intact, and only currently-active
+   *   rows are touched.
+   *
+   * - Intentional deregistration (the DELETE /api/devices/:id endpoint) must
+   *   *permanently* end the session: its token has to be rejected on all
+   *   subsequent requests (design Property 15). Pass `invalidateToken: true`
+   *   to also rotate `session_token` to an unusable sentinel. In that mode we
+   *   match regardless of `is_active`, so a device the reaper already marked
+   *   dormant can still be fully removed.
    */
-  async deactivateDevice(deviceId: string): Promise<boolean> {
-    const result = await this.db
+  async deactivateDevice(
+    deviceId: string,
+    options?: { invalidateToken?: boolean }
+  ): Promise<boolean> {
+    const invalidateToken = options?.invalidateToken ?? false;
+
+    let query = this.db
       .updateTable('device_registry')
-      .set({ is_active: false })
-      .where('device_id', '=', deviceId)
-      .where('is_active', '=', true)
-      .executeTakeFirst();
+      .set(
+        invalidateToken
+          ? {
+              is_active: false,
+              // `session_token` is NOT NULL UNIQUE — use a random, namespaced
+              // value that no client holds and cannot collide with a real token.
+              session_token: `removed:${crypto.randomBytes(32).toString('hex')}`,
+            }
+          : { is_active: false }
+      )
+      .where('device_id', '=', deviceId);
+
+    // Dormancy toggles only currently-active rows; token invalidation must also
+    // reach already-dormant rows to guarantee Property 15.
+    if (!invalidateToken) {
+      query = query.where('is_active', '=', true);
+    }
+
+    const result = await query.executeTakeFirst();
 
     return (result?.numUpdatedRows ?? 0n) > 0n;
   }

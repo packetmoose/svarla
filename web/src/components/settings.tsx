@@ -5,6 +5,7 @@ import { navigate } from "../router";
 import { Providers } from "./providers";
 import { Numbers } from "./numbers";
 import { Devices } from "./devices";
+import { handleSessionExpiry } from "./login";
 
 /* ---------- Tab definitions ---------- */
 
@@ -110,6 +111,8 @@ interface SettingsState {
   error: string;
   success: string;
   loading: boolean;
+  /** Whether a logout request is in flight (disables the button). */
+  loggingOut: boolean;
   versionInfo: VersionInfo | null;
 }
 
@@ -128,6 +131,7 @@ export class Settings extends Component<Record<string, never>, SettingsState> {
     error: "",
     success: "",
     loading: false,
+    loggingOut: false,
     versionInfo: null,
   };
 
@@ -248,8 +252,30 @@ export class Settings extends Component<Record<string, never>, SettingsState> {
     this.setState({ error: "An unexpected error occurred" });
   };
 
+  private handleLogout = async () => {
+    if (this.state.loggingOut) return;
+    this.setState({ loggingOut: true });
+
+    // Invalidate the session server-side first. This works regardless of
+    // whether the browser supports the calling stack (the calling stack's own
+    // logout only fires when a stack exists). A failure here is non-fatal — the
+    // local teardown below still returns the user to the login screen, and the
+    // reaper eventually cleans up the dormant device.
+    try {
+      await api.post("/api/auth/logout");
+    } catch {
+      /* best-effort; proceed with local teardown regardless */
+    }
+
+    // Clear persisted credentials and dispatch `session-expired`, which the App
+    // shell handles by tearing down the calling stack + notifications and
+    // rendering the login screen.
+    handleSessionExpiry();
+  };
+
   private renderAccountTab() {
-    const { currentPassword, newPassword, confirmPassword, error, success, loading } = this.state;
+    const { currentPassword, newPassword, confirmPassword, error, success, loading, loggingOut } =
+      this.state;
 
     return (
       <div class="settings-account">
@@ -337,6 +363,29 @@ export class Settings extends Component<Record<string, never>, SettingsState> {
             {loading ? "Changing Password..." : "Change Password"}
           </button>
         </form>
+
+        <div class="settings-logout">
+          <h2 class="settings-section-title">Session</h2>
+          <p class="settings-logout-description">
+            Sign out of this browser. You'll need your password to sign back in.
+          </p>
+          <button
+            type="button"
+            class="btn-secondary settings-button"
+            onClick={this.handleLogout}
+            disabled={loggingOut}
+            aria-busy={loggingOut ? "true" : undefined}
+          >
+            {iconSvg(
+              <Fragment>
+                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                <path d="M16 17l5-5-5-5" />
+                <path d="M21 12H9" />
+              </Fragment>
+            )}
+            {loggingOut ? "Signing out..." : "Sign Out"}
+          </button>
+        </div>
       </div>
     );
   }

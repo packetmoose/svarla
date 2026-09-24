@@ -3747,6 +3747,22 @@ textarea {
   margin-top: var(--md-space-sm);
 }
 
+/* Sign-out lives below the change-password form, separated by a hairline
+   divider. The button itself is a standard secondary (outline) control — a
+   deliberate but non-destructive action, so it uses the primary/outline role
+   rather than the danger role reserved for data loss. */
+.settings-logout {
+  margin-top: var(--md-space-xl);
+  padding-top: var(--md-space-xl);
+  border-top: 1px solid var(--md-outline-variant);
+}
+
+.settings-logout-description {
+  margin-bottom: var(--md-space-md);
+  font-size: 0.8125rem;
+  color: var(--md-on-surface-variant);
+}
+
 .settings-version {
   margin-top: var(--md-space-xl);
   font-size: 0.75rem;
