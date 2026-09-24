@@ -258,24 +258,21 @@ describe('Elks46TelephonyProvider', () => {
       });
     });
 
-    // TODO: listNumbers throws on API error instead of returning []. See #18
-    it.skip('should return empty array on API error', async () => {
+    it('should throw on API error', async () => {
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
         ok: false,
         status: 500,
+        statusText: 'Internal Server Error',
         text: async () => 'Internal server error',
       }));
 
-      const numbers = await provider.listNumbers();
-      expect(numbers).toEqual([]);
+      await expect(provider.listNumbers()).rejects.toThrow('Failed to list numbers');
     });
 
-    // TODO: listNumbers throws on network error instead of returning []. See #18
-    it.skip('should return empty array on network error', async () => {
+    it('should propagate network errors', async () => {
       vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Network error')));
 
-      const numbers = await provider.listNumbers();
-      expect(numbers).toEqual([]);
+      await expect(provider.listNumbers()).rejects.toThrow('Network error');
     });
   });
 
