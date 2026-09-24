@@ -1,6 +1,15 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { VonageTelephonyProvider } from './vonage-telephony-provider.js';
 import type { TelephonyProvider, TelephonyEvent } from './telephony-provider.js';
+
+// Mock the Vonage SDK so listNumbers() does not make a real HTTP request to
+// rest.nexmo.com. getOwnedNumbers rejects to simulate an API failure.
+const getOwnedNumbersMock = vi.fn();
+vi.mock('@vonage/server-sdk', () => ({
+  Vonage: vi.fn().mockImplementation(() => ({
+    numbers: { getOwnedNumbers: getOwnedNumbersMock },
+  })),
+}));
 
 describe('VonageTelephonyProvider', () => {
   const config = {
@@ -51,11 +60,10 @@ describe('VonageTelephonyProvider', () => {
     await expect(provider.sendSms('+15551234567', '+15559876543', 'Hello')).rejects.toThrow('not started');
   });
 
-  // TODO: listNumbers throws on API error instead of returning []. See #18
-  it.skip('should return empty array for listNumbers when API fails', async () => {
+  it('should throw for listNumbers when the API fails', async () => {
+    getOwnedNumbersMock.mockRejectedValueOnce(new Error('401 Unauthorized'));
     const provider = new VonageTelephonyProvider(config);
-    const result = await provider.listNumbers();
-    expect(result).toEqual([]);
+    await expect(provider.listNumbers()).rejects.toThrow('401 Unauthorized');
   });
 
   it('should throw when private key file not found for start', async () => {

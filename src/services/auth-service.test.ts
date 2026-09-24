@@ -390,6 +390,66 @@ describe('AuthService', () => {
       const session = await authService.validateSession(loginResult.sessionToken!);
       expect(session.valid).toBe(false);
     });
+
+    it('should reactivate a reaped (dormant) device when the token is still valid', async () => {
+      // Simulate the WebDeviceReaper marking the device dormant: is_active=false
+      // while the token remains intact and within its validity window.
+      const loginResult = await authService.login(
+        testHelper.mockPassword,
+        'Web Browser',
+        'topic-123'
+      );
+
+      const devices = testHelper.getDevices();
+      devices[0].is_active = false;
+
+      const session = await authService.validateSession(loginResult.sessionToken!);
+
+      expect(session.valid).toBe(true);
+      expect(session.deviceName).toBe('Web Browser');
+      // The dormant device is reactivated in place.
+      expect(devices[0].is_active).toBe(true);
+    });
+
+    it('should NOT reactivate a device that expired while dormant', async () => {
+      const loginResult = await authService.login(
+        testHelper.mockPassword,
+        'Web Browser',
+        'topic-123'
+      );
+
+      const devices = testHelper.getDevices();
+      devices[0].is_active = false;
+      // Backdate registration past the 30-day window.
+      devices[0].registered_at = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000);
+
+      const session = await authService.validateSession(loginResult.sessionToken!);
+
+      expect(session.valid).toBe(false);
+      expect(devices[0].is_active).toBe(false);
+    });
+
+    it('should not let a logged-out token reactivate the device', async () => {
+      // Logout rotates the token to an unusable sentinel, so the original token
+      // can never validate or reactivate again (approach a).
+      const loginResult = await authService.login(
+        testHelper.mockPassword,
+        'Web Browser',
+        'topic-123'
+      );
+
+      await authService.logout(loginResult.sessionToken!);
+
+      const devices = testHelper.getDevices();
+      // The stored token was rotated away from the client's original token.
+      expect(devices[0].session_token).not.toBe(loginResult.sessionToken);
+      expect(devices[0].is_active).toBe(false);
+
+      const session = await authService.validateSession(loginResult.sessionToken!);
+      expect(session.valid).toBe(false);
+      // Still dormant — no reactivation occurred.
+      expect(devices[0].is_active).toBe(false);
+    });
   });
 
   describe('hashPassword', () => {

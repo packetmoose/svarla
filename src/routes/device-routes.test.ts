@@ -97,7 +97,12 @@ describe('Device Routes', () => {
       expect(response.statusCode).toBe(200);
       const body = response.json();
       expect(body.message).toBe('Device deregistered successfully');
-      expect(mockManager.deactivateDevice).toHaveBeenCalledWith('11111111-1111-1111-1111-111111111111');
+      // Intentional deregistration must invalidate the session token, not just
+      // mark the device dormant (design Property 15).
+      expect(mockManager.deactivateDevice).toHaveBeenCalledWith(
+        '11111111-1111-1111-1111-111111111111',
+        { invalidateToken: true }
+      );
     });
 
     it('should return 404 for non-existent device', async () => {

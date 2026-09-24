@@ -163,7 +163,12 @@ export function registerDeviceRoutes(
     }
 
     const { deviceId } = parseResult.data;
-    const success = await deviceRegistryManager.deactivateDevice(deviceId);
+    // Intentional deregistration must permanently invalidate the session token
+    // so it is rejected on all subsequent requests (design Property 15), not
+    // merely mark the device dormant (which the reaper can reverse).
+    const success = await deviceRegistryManager.deactivateDevice(deviceId, {
+      invalidateToken: true,
+    });
 
     if (!success) {
       return reply.status(404).send({

@@ -109,6 +109,19 @@ function createMockDb() {
                   return { numUpdatedRows: 0n };
                 },
               }),
+              // Single-where terminal: used by the token-invalidation path of
+              // deactivateDevice, which matches by device_id alone (regardless
+              // of is_active) so it can reach already-dormant rows.
+              executeTakeFirst: async () => {
+                const device = devices.find(
+                  (d) => (col === 'device_id' ? d.device_id === val : true)
+                );
+                if (device) {
+                  Object.assign(device, values);
+                  return { numUpdatedRows: 1n };
+                }
+                return { numUpdatedRows: 0n };
+              },
               execute: async () => {
                 const device = devices.find(
                   (d) =>
@@ -288,6 +301,59 @@ describe('DeviceRegistryManager', () => {
       await manager.deactivateDevice(registered.deviceId);
       const secondAttempt = await manager.deactivateDevice(registered.deviceId);
       expect(secondAttempt).toBe(false);
+    });
+
+    it('should preserve the session token by default (dormancy, for the reaper)', async () => {
+      const registered = await manager.registerDevice({
+        deviceName: 'Web Browser',
+        pushTopicId: 'topic-1',
+        sessionToken: 'token-1',
+      });
+
+      await manager.deactivateDevice(registered.deviceId);
+
+      const devices = mockDbHelper.getDevices();
+      expect(devices[0].is_active).toBe(false);
+      // Token intact so a returning holder can reactivate via validateSession.
+      expect(devices[0].session_token).toBe('token-1');
+    });
+
+    it('should invalidate the session token when invalidateToken is set', async () => {
+      const registered = await manager.registerDevice({
+        deviceName: 'Web Browser',
+        pushTopicId: 'topic-1',
+        sessionToken: 'token-1',
+      });
+
+      const result = await manager.deactivateDevice(registered.deviceId, {
+        invalidateToken: true,
+      });
+
+      expect(result).toBe(true);
+      const devices = mockDbHelper.getDevices();
+      expect(devices[0].is_active).toBe(false);
+      // Token rotated to an unusable sentinel (design Property 15).
+      expect(devices[0].session_token).not.toBe('token-1');
+    });
+
+    it('should invalidate the token of an already-dormant device (Property 15)', async () => {
+      const registered = await manager.registerDevice({
+        deviceName: 'Web Browser',
+        pushTopicId: 'topic-1',
+        sessionToken: 'token-1',
+      });
+
+      // Simulate the reaper having already marked it dormant.
+      const devices = mockDbHelper.getDevices();
+      devices[0].is_active = false;
+
+      // Intentional removal must still reach the dormant row and kill the token.
+      const result = await manager.deactivateDevice(registered.deviceId, {
+        invalidateToken: true,
+      });
+
+      expect(result).toBe(true);
+      expect(devices[0].session_token).not.toBe('token-1');
     });
   });
 

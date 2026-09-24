@@ -201,8 +201,9 @@ function createMockDb(initialNumbers: MockNumberRow[] = [], providers: MockProvi
         };
       }
       return {
-        values: (values: Record<string, unknown>) => ({
-          execute: async () => {
+        values: (values: Record<string, unknown>) => {
+          // Insert a brand-new numbers row from the provided values.
+          const insertRow = () => {
             numbers.push({
               number: values.number as string,
               provider_id: values.provider_id as string,
@@ -212,8 +213,48 @@ function createMockDb(initialNumbers: MockNumberRow[] = [], providers: MockProvi
               is_active: values.is_active as boolean,
               last_used_at: (values.last_used_at as Date | null) ?? null,
             });
-          },
-        }),
+          };
+          return {
+            execute: async () => {
+              insertRow();
+            },
+            // Mirror Kysely's upsert: `.onConflict(oc => oc.column('number').doUpdateSet({...}))`.
+            // On conflict with an existing row (matched on the conflict column),
+            // apply the update set to that row; otherwise perform a normal insert.
+            onConflict: (
+              ocBuilder: (oc: {
+                column: (col: string) => { doUpdateSet: (vals: Record<string, unknown>) => unknown };
+              }) => unknown
+            ) => {
+              let conflictColumn = 'number';
+              let updateSet: Record<string, unknown> = {};
+              ocBuilder({
+                column: (col: string) => {
+                  conflictColumn = col;
+                  return {
+                    doUpdateSet: (vals: Record<string, unknown>) => {
+                      updateSet = vals;
+                      return {};
+                    },
+                  };
+                },
+              });
+              return {
+                execute: async () => {
+                  const conflictVal = values[conflictColumn];
+                  const existing = numbers.find(
+                    (n) => (n as unknown as Record<string, unknown>)[conflictColumn] === conflictVal
+                  );
+                  if (existing) {
+                    Object.assign(existing, updateSet);
+                  } else {
+                    insertRow();
+                  }
+                },
+              };
+            },
+          };
+        },
       };
     }),
     updateTable: vi.fn().mockImplementation((_table: string) => {
@@ -296,8 +337,7 @@ describe('NumberManagementService', () => {
   });
 
   describe('syncNumbers', () => {
-    // TODO: DB mock missing onConflict method. See #18
-    it.skip('should add new numbers from provider with provider_id', async () => {
+    it('should add new numbers from provider with provider_id', async () => {
       (mockProviderInstance.listNumbers as ReturnType<typeof vi.fn>).mockResolvedValue([
         { number: '+14155551234', capabilities: new Set(['VOICE', 'SMS']) },
         { number: '+14155555678', capabilities: new Set(['VOICE']) },
@@ -349,8 +389,7 @@ describe('NumberManagementService', () => {
       expect(dbHelper.getNumbers()[0].is_active).toBe(true);
     });
 
-    // TODO: DB mock missing onConflict method. See #18
-    it.skip('should broadcast numbers_changed event when changes occur', async () => {
+    it('should broadcast numbers_changed event when changes occur', async () => {
       (mockProviderInstance.listNumbers as ReturnType<typeof vi.fn>).mockResolvedValue([
         { number: '+14155551234', capabilities: new Set(['VOICE', 'SMS']) },
       ]);
