@@ -73,8 +73,20 @@ sealed class Screen(val route: String) {
 
         fun createRoute(providerNumber: String, phoneNumber: String): String {
             val provider = providerNumber.ifEmpty { NO_PROVIDER }
-            return "conversation_detail/${java.net.URLEncoder.encode(provider, "UTF-8")}/${java.net.URLEncoder.encode(phoneNumber, "UTF-8")}"
+            return "conversation_detail/${encodeArg(provider)}/${encodeArg(phoneNumber)}"
         }
+
+        /**
+         * Percent-encode a nav path argument. java.net.URLEncoder form-encodes a
+         * space as '+', but Compose Navigation decodes path args with Uri.decode,
+         * which does NOT turn '+' back into a space. For alphanumeric sender IDs
+         * that contain spaces (e.g. "MY BANK") that mismatch left a literal '+' in
+         * the decoded argument — showing up as "MY+BANK" in the header and, once
+         * forwarded to the server, breaking the thread lookup. Emitting %20 for
+         * spaces round-trips correctly through Uri.decode.
+         */
+        private fun encodeArg(value: String): String =
+            java.net.URLEncoder.encode(value, "UTF-8").replace("+", "%20")
     }
     data object DialPad : Screen("dial_pad")
     data object Settings : Screen("settings")

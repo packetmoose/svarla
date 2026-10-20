@@ -1428,15 +1428,28 @@ class NotificationHandler @Inject constructor(
     }
 
     /**
-     * Produces a stable match key for comparing two phone numbers that may differ
-     * in formatting (e.g. "+46701234567" vs "0701234567" vs "070-123 45 67").
+     * Produces a stable match key for comparing two sender addresses that may
+     * differ in formatting.
      *
-     * Strategy: strip to digits only, then use the last [NUMBER_MATCH_DIGITS]
-     * significant digits. This tolerates country-code / leading-zero differences
-     * between the pushed sender number and the locally stored conversation number,
-     * which the previous exact-normalized comparison did not.
+     * Two kinds of senders exist:
+     * - Phone numbers (e.g. "+46701234567" vs "0701234567" vs "070-123 45 67"):
+     *   keyed by their last [NUMBER_MATCH_DIGITS] digits, which tolerates
+     *   country-code / leading-zero differences between the pushed sender number
+     *   and the locally stored conversation number.
+     * - Alphanumeric sender IDs (e.g. "MY BANK", "BANK24"): these are NOT phone
+     *   numbers. Keying them by stripped digits collapses them to an empty or
+     *   ambiguous key (e.g. "MY BANK" -> "", "BANK24" -> "24"), so notifications
+     *   for one alphanumeric sender were matched/cleared against another — or not
+     *   cleared at all. Key them by their case- and whitespace-normalized text so
+     *   each keeps a distinct, stable identity.
+     *
+     * An address is treated as a phone number only when it contains no letters.
      */
     private fun numberMatchKey(number: String): String {
+        val hasLetters = number.any { it.isLetter() }
+        if (hasLetters) {
+            return alphanumericKey(number)
+        }
         val digits = number.filter { it.isDigit() }
         if (digits.isEmpty()) return normalizePhoneNumber(number)
         return if (digits.length <= NUMBER_MATCH_DIGITS) {
@@ -1444,5 +1457,14 @@ class NotificationHandler @Inject constructor(
         } else {
             digits.takeLast(NUMBER_MATCH_DIGITS)
         }
+    }
+
+    /**
+     * Normalizes an alphanumeric sender ID for comparison: trim, collapse internal
+     * whitespace runs to a single space, and uppercase. This makes "MY  BANK",
+     * "my bank" and "MY BANK" compare equal while keeping distinct senders apart.
+     */
+    private fun alphanumericKey(number: String): String {
+        return number.trim().replace(Regex("\\s+"), " ").uppercase()
     }
 }
