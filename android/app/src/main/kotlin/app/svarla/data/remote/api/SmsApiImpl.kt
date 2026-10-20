@@ -4,6 +4,7 @@ import app.svarla.data.remote.dto.ConversationListResponse
 import app.svarla.data.remote.dto.MessageListResponse
 import app.svarla.data.remote.dto.SendSmsRequest
 import app.svarla.data.remote.dto.SendSmsResponse
+import io.ktor.http.encodeURLPathPart
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -28,15 +29,21 @@ class SmsApiImpl @Inject constructor(
         if (providerNumber != null) {
             params["from"] = providerNumber
         }
+        // Percent-encode the address as a URL path segment. Alphanumeric sender
+        // IDs can contain spaces (e.g. "MY BANK"); encodeURLPathPart turns a
+        // space into %20 and a leading '+' of E.164 numbers into %2B, both of
+        // which the server's decodeURIComponent round-trips correctly. (A plain
+        // string interpolation would let Ktor emit '+' for spaces, which
+        // decodeURIComponent keeps literal, so the thread lookup never matched.)
         return apiClient.get(
-            "/api/conversations/$phoneNumber",
+            "/api/conversations/${phoneNumber.encodeURLPathPart()}",
             params
         )
     }
 
     override suspend fun removeConversation(providerNumber: String, phoneNumber: String) {
         val encodedFrom = providerNumber.replace("+", "%2B")
-        apiClient.delete("/api/conversations/$phoneNumber?from=$encodedFrom")
+        apiClient.delete("/api/conversations/${phoneNumber.encodeURLPathPart()}?from=$encodedFrom")
     }
 
     override suspend fun removeMessage(messageId: String) {
